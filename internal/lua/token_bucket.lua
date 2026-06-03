@@ -27,6 +27,7 @@ local new_tokens = tokens + (elapsed * refill_rate)
 if new_tokens > capacity then
     new_tokens = capacity
 end
+new_tokens = math.floor(new_tokens)
 
 -- Check if allowed
 local allowed = 0

@@ -4,6 +4,7 @@ import (
     "context"
     _ "embed"
     "fmt"
+    "log"
     "time"
 
     "github.com/redis/go-redis/v9"
@@ -41,12 +42,35 @@ func (tb *RedisAtomicTokenBucket) Allow(userID string) (bool, int) {
     ).Result()
 
     if err != nil {
+        log.Printf("token bucket lua error for %s: %v", userID, err)
         return false, 0
     }
 
-    values := result.([]interface{})
-    allowed := values[0].(int64) == 1
-    remaining := int(values[1].(int64))
+    values, ok := result.([]interface{})
+    if !ok || len(values) < 2 {
+        log.Printf("token bucket lua unexpected result for %s: %#v", userID, result)
+        return false, 0
+    }
+
+    allowed := luaInt(values[0]) == 1
+    remaining := int(luaInt(values[1]))
 
     return allowed, remaining
+}
+
+func luaInt(v interface{}) int64 {
+    switch n := v.(type) {
+    case int64:
+        return n
+    case int:
+        return int64(n)
+    case float64:
+        return int64(n)
+    case string:
+        var parsed int64
+        fmt.Sscan(n, &parsed)
+        return parsed
+    default:
+        return 0
+    }
 }

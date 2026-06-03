@@ -47,7 +47,10 @@ func main() {
             json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests"})
             return
         }
-        json.NewEncoder(w).Encode(map[string]bool{"allowed": true})
+        json.NewEncoder(w).Encode(map[string]interface{}{
+            "allowed":   true,
+            "remaining": remaining,
+        })
     })
 
     srv := &http.Server{
