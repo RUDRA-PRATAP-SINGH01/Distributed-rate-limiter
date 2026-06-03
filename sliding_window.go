@@ -20,7 +20,7 @@ func NewSlidingWindow(limit int, window time.Duration) *SlidingWindow {
     }
 }
 
-func (sw *SlidingWindow) Allow(userID string) bool {
+func (sw *SlidingWindow) Allow(userID string) (bool, int) {
     sw.mu.Lock()
     defer sw.mu.Unlock()
 
@@ -36,8 +36,8 @@ func (sw *SlidingWindow) Allow(userID string) bool {
     if len(valid) < sw.limit {
         valid = append(valid, now)
         sw.requests[userID] = valid
-        return true
+        return true, sw.limit - len(valid)
     }
     sw.requests[userID] = valid
-    return false
+    return false, 0
 }

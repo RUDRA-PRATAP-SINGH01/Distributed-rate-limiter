@@ -33,13 +33,13 @@ func (tb *TokenBucket) refill() {
     tb.lastRefill = now
 }
 
-func (tb *TokenBucket) Allow(userID string) bool {
+func (tb *TokenBucket) Allow(userID string) (bool, int) {
     tb.mu.Lock()
     defer tb.mu.Unlock()
     tb.refill()
     if tb.tokens >= 1.0 {
         tb.tokens -= 1.0
-        return true
+        return true, int(tb.tokens)
     }
-    return false
+    return false, 0
 }

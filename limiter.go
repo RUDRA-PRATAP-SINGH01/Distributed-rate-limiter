@@ -1,5 +1,5 @@
 package main
 
 type RateLimiter interface {
-    Allow(userID string) bool
+    Allow(userID string) (allowed bool, remaining int)
 }
