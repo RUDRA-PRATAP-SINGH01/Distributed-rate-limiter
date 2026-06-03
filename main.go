@@ -10,21 +10,23 @@ import (
     "os/signal"
     "syscall"
     "time"
+
+    "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/limiter"
+    redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 )
 
-var limiter RateLimiter
+var limiterInstance RateLimiter
 
 func main() {
     cfg := LoadConfig()
 
-    // Initialize limiter based on config
-    if cfg.Algorithm == "sliding" {
-        limiter = NewSlidingWindow(cfg.Capacity, time.Duration(cfg.WindowSec)*time.Second)
-        log.Println("Using sliding window algorithm")
-    } else {
-        limiter = NewTokenBucket(cfg.Capacity, cfg.RefillRate)
-        log.Println("Using token bucket algorithm")
-    }
+    // Connect to Redis
+    rdb := redisclient.NewClient("localhost:6379")
+    log.Println("Connected to Redis")
+
+    // Use atomic Redis-backed token bucket with Lua script (NO race condition)
+    limiterInstance = limiter.NewRedisAtomicTokenBucket(rdb, cfg.Capacity, cfg.RefillRate)
+    log.Println("Using Redis-backed token bucket (ATOMIC with Lua)")
 
     mux := http.NewServeMux()
     mux.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
@@ -33,7 +35,7 @@ func main() {
             userID = "anonymous"
         }
 
-        allowed, remaining := limiter.Allow(userID)
+        allowed, remaining := limiterInstance.Allow(userID)
 
         w.Header().Set("Content-Type", "application/json")
         w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", cfg.Capacity))
