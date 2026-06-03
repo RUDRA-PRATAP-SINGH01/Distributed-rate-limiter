@@ -7,6 +7,7 @@ import (
     "log"
     "time"
 
+    "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
     "github.com/redis/go-redis/v9"
 )
 
@@ -34,12 +35,14 @@ func (tb *RedisAtomicTokenBucket) Allow(userID string) (bool, int) {
     key := fmt.Sprintf("rate:%s", userID)
     now := time.Now().Unix()
 
+    start := time.Now()
     result, err := tb.script.Run(ctx, tb.rdb, []string{key},
         tb.capacity,
         tb.refillRate,
         now,
         1, // requested tokens
     ).Result()
+    metrics.RecordRedisDuration(time.Since(start).Seconds())
 
     if err != nil {
         log.Printf("token bucket lua error for %s: %v", userID, err)

@@ -12,7 +12,9 @@ import (
     "time"
 
     "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/limiter"
+    "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
     redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var limiterInstance RateLimiter
@@ -29,13 +31,38 @@ func main() {
     log.Println("Using Redis-backed token bucket (ATOMIC with Lua)")
 
     mux := http.NewServeMux()
+
+    // /metrics endpoint for Prometheus
+    mux.Handle("/metrics", promhttp.Handler())
+
+    // /health endpoint – checks Redis connectivity
+    mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        if err := rdb.Ping(context.Background()).Err(); err != nil {
+            w.WriteHeader(http.StatusServiceUnavailable)
+            json.NewEncoder(w).Encode(map[string]string{
+                "status": "unhealthy",
+                "reason": "Redis unreachable",
+            })
+            return
+        }
+        w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+    })
+
+    // /check endpoint – rate limiting logic with metrics
     mux.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
         userID := r.URL.Query().Get("user_id")
         if userID == "" {
             userID = "anonymous"
         }
 
         allowed, remaining := limiterInstance.Allow(userID)
+
+        // Record Prometheus metrics
+        metrics.RecordRequest(userID, allowed)
+        metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
 
         w.Header().Set("Content-Type", "application/json")
         w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", cfg.Capacity))
