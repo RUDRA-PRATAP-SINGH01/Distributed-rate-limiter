@@ -8,11 +8,11 @@ import (
 func TestTokenBucket_AllowWithinCapacity(t *testing.T) {
     tb := NewTokenBucket(3, 1.0)
     for i := 0; i < 3; i++ {
-        if !tb.Allow("test") {
+        if allowed, _, _ := tb.Allow("test"); !allowed {
             t.Errorf("request %d should be allowed", i)
         }
     }
-    if tb.Allow("test") {
+    if allowed, _, _ := tb.Allow("test"); allowed {
         t.Error("4th request should be denied")
     }
 }

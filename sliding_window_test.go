@@ -10,11 +10,11 @@ func TestSlidingWindow_Allow(t *testing.T) {
     user := "alice"
 
     for i := 0; i < 3; i++ {
-        if !sw.Allow(user) {
+        if allowed, _, _ := sw.Allow(user); !allowed {
             t.Errorf("request %d should be allowed", i)
         }
     }
-    if sw.Allow(user) {
+    if allowed, _, _ := sw.Allow(user); allowed {
         t.Error("4th request should be denied")
     }
     time.Sleep(2 * time.Second)

@@ -1,124 +1,98 @@
 <#
 .SYNOPSIS
-Chaos test for the distributed rate limiter – kills Redis and checks fail‑closed behaviour.
-
-.DESCRIPTION
-This script simulates a Redis outage while the sidecar is in fail‑closed mode (default).
-It expects:
-- Redis running on localhost:6379
-- Central rate limiter running on port 8080
-- Sidecar running on port 9090 (with FAIL_OPEN=false)
-
-The test:
-1. Sends a request to a fresh user (should succeed – 200)
-2. Stops the Redis container
-3. Sends another request to the same user (should get 503 – rate limiter unavailable)
-4. Restarts Redis
-5. Sends a request to another fresh user (should succeed again)
-
-If all steps match expected results, the test passes.
+Chaos test for the distributed rate limiter - kills Redis and checks fail-closed behaviour.
 #>
 
-Write-Host @"
-╔══════════════════════════════════════════════════════════════╗
-║     🔥 Chaos Test: Redis Failure & Sidecar Fail‑Closed      ║
-║     Your rate limiter should gracefully handle Redis going  ║
-║     down without corrupting state or returning wrong codes. ║
-╚══════════════════════════════════════════════════════════════╝
-"@ -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Chaos Test: Redis Failure and Sidecar Fail-Closed" -ForegroundColor Cyan
+Write-Host ""
 
-
-# Helper to check if a service is responsive
 function Test-Service {
     param($Url, $Name)
     try {
         $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
         return $response.StatusCode -eq 200
     } catch {
-        Write-Host "⚠️  $Name is not responding (maybe it's on a coffee break?)" -ForegroundColor Yellow
+        Write-Host "WARNING: $Name is not responding." -ForegroundColor Yellow
         return $false
     }
 }
 
-# Step 0: Pre‑flight checks
-Write-Host "`n🔍 Pre‑flight checks..." -ForegroundColor Magenta
-$redisOk = (docker ps --filter "name=rate-redis" --format "table {{.Names}}" | Select-String "rate-redis") -ne $null
+Write-Host "Pre-flight checks..." -ForegroundColor Magenta
+$redisOk = (docker ps --filter "name=rate-redis" --format "{{.Names}}" 2>$null | Select-String "rate-redis") -ne $null
 if (-not $redisOk) {
-    Write-Host "   ❌ Redis container 'rate-redis' not running. Wake it up with: docker start rate-redis" -ForegroundColor Red
+    Write-Host "FAIL: Redis container rate-redis not running. Start with: docker start rate-redis" -ForegroundColor Red
     exit 1
-} else {
-    Write-Host "   ✅ Redis is alive and kicking (for now)." -ForegroundColor Green
 }
+Write-Host "OK: Redis is running." -ForegroundColor Green
 
 $limiterOk = Test-Service "http://localhost:8080/health" "Central limiter"
 if (-not $limiterOk) {
-    Write-Host "   ❌ Central limiter not reachable on port 8080. Start it with: go run . (you know the drill)" -ForegroundColor Red
+    Write-Host "FAIL: Central limiter not reachable on port 8080. Start with: go run ." -ForegroundColor Red
     exit 1
-} else {
-    Write-Host "   ✅ Central limiter looks healthy (probably lying)." -ForegroundColor Green
 }
+Write-Host "OK: Central limiter is healthy." -ForegroundColor Green
 
 $sidecarOk = Test-Service "http://localhost:9090/health" "Sidecar"
 if (-not $sidecarOk) {
-    Write-Host "   ❌ Sidecar not reachable on port 9090. Did you set the env vars? Try: go run cmd/sidecar/main.go" -ForegroundColor Red
+    Write-Host "FAIL: Sidecar not reachable on port 9090." -ForegroundColor Red
     exit 1
-} else {
-    Write-Host "   ✅ Sidecar is ready to catch the falling sky." -ForegroundColor Green
 }
+Write-Host "OK: Sidecar is healthy." -ForegroundColor Green
 
-# Generate a fresh user ID (millisecond precision ensures uniqueness)
-$freshUser = "chaos_$(Get-Date -Format 'yyyyMMddHHmmssfff')"
+$freshUser = "chaos_{0}" -f (Get-Date -Format "yyyyMMddHHmmssfff")
 
-Write-Host "`n🧪 Step 1: Sending first request to a brand new user: $freshUser" -ForegroundColor Magenta
-Write-Host "   (This user has never seen a rate limit. Innocent, like a newborn.)" -ForegroundColor Gray
+Write-Host ""
+Write-Host "Step 1: First request for new user: $freshUser" -ForegroundColor Magenta
 $firstResponse = curl.exe -s -i "http://localhost:9090/check?user_id=$freshUser"
 if ($firstResponse -match "200 OK") {
-    Write-Host "   ✅ Got 200 OK – the limiter smiles upon you." -ForegroundColor Green
+    Write-Host "OK: Got 200 OK." -ForegroundColor Green
 } else {
-    Write-Host "   ❌ Unexpected response: $firstResponse – something's fishy." -ForegroundColor Red
+    Write-Host "FAIL: Unexpected response:" -ForegroundColor Red
+    Write-Host $firstResponse
     exit 1
 }
 
-Write-Host "`n💥 Step 2: Killing Redis container... (cue dramatic music)" -ForegroundColor Magenta
+Write-Host ""
+Write-Host "Step 2: Stopping Redis container..." -ForegroundColor Magenta
 docker stop rate-redis | Out-Null
 Start-Sleep -Seconds 1
 
-Write-Host "`n⏳ Step 3: Sending SECOND request to the same user (Redis is now a ghost)" -ForegroundColor Magenta
+Write-Host ""
+Write-Host "Step 3: Second request while Redis is down..." -ForegroundColor Magenta
 $secondResponse = curl.exe -s -i "http://localhost:9090/check?user_id=$freshUser"
 
 if ($secondResponse -match "503 Service Unavailable") {
-    Write-Host "   ✅ Got 503 Service Unavailable – sidecar fails closed like a boss." -ForegroundColor Green
-    Write-Host "   (Because if the limiter is broken, better to say 'no' than to lie.)" -ForegroundColor Gray
+    Write-Host "OK: Got 503 - sidecar fails closed." -ForegroundColor Green
 } elseif ($secondResponse -match "200 OK") {
-    Write-Host "   ❌ Got 200 OK – sidecar is being too optimistic. Check FAIL_OPEN env var." -ForegroundColor Red
+    Write-Host "FAIL: Got 200 - check FAIL_OPEN env var." -ForegroundColor Red
     exit 1
 } elseif ($secondResponse -match "429 Too Many Requests") {
-    Write-Host "   ❌ Got 429 – sidecar is holding a grudge. It remembered a denial that shouldn't exist." -ForegroundColor Red
+    Write-Host "FAIL: Got 429 - cached denial should not apply to fresh user." -ForegroundColor Red
     exit 1
 } else {
-    Write-Host "   ❓ Unexpected response: $secondResponse – the matrix is glitching." -ForegroundColor Yellow
+    Write-Host "FAIL: Unexpected response:" -ForegroundColor Yellow
+    Write-Host $secondResponse
+    exit 1
 }
 
-Write-Host "`n🛠️ Step 4: Restarting Redis (like waking a bear from hibernation)" -ForegroundColor Magenta
+Write-Host ""
+Write-Host "Step 4: Restarting Redis..." -ForegroundColor Magenta
 docker start rate-redis | Out-Null
 Start-Sleep -Seconds 2
 
-Write-Host "`n🌈 Step 5: Verifying recovery – sending request to another fresh user" -ForegroundColor Magenta
-$recoveryUser = "recover_$(Get-Date -Format 'yyyyMMddHHmmssfff')"
+Write-Host ""
+Write-Host "Step 5: Recovery check with new user..." -ForegroundColor Magenta
+$recoveryUser = "recover_{0}" -f (Get-Date -Format "yyyyMMddHHmmssfff")
 $thirdResponse = curl.exe -s -i "http://localhost:9090/check?user_id=$recoveryUser"
 if ($thirdResponse -match "200 OK") {
-    Write-Host "   ✅ Service recovered! Rate limiting is back, like nothing happened." -ForegroundColor Green
-    Write-Host "   (Redis has amnesia, but that's okay.)" -ForegroundColor Gray
+    Write-Host "OK: Service recovered - got 200 OK." -ForegroundColor Green
 } else {
-    Write-Host "   ❌ Recovery failed. Response: $thirdResponse – maybe Redis is still grumpy." -ForegroundColor Red
+    Write-Host "FAIL: Recovery failed. Response:" -ForegroundColor Red
+    Write-Host $thirdResponse
     exit 1
 }
 
-Write-Host @"
-
-╔══════════════════════════════════════════════════════════════╗
-║                    CHAOS TEST PASSED                         ║
-║  Your rate limiter survived a Redis apocalypse. You may now  ║
-║  pat yourself on the back (or treat yourself to a cookie).   ║
-╚══════════════════════════════════════════════════════════════╝
-"@ -ForegroundColor Green
+Write-Host ""
+Write-Host "CHAOS TEST PASSED" -ForegroundColor Green
+Write-Host "Your rate limiter survived a Redis outage." -ForegroundColor Green

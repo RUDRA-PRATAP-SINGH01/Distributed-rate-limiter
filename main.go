@@ -58,7 +58,16 @@ func main() {
             userID = "anonymous"
         }
 
-        allowed, remaining := limiterInstance.Allow(userID)
+        allowed, remaining, err := limiterInstance.Allow(userID)
+
+        if err != nil {
+            w.Header().Set("Content-Type", "application/json")
+            w.WriteHeader(http.StatusServiceUnavailable)
+            json.NewEncoder(w).Encode(map[string]string{
+                "error": "Rate limiter unavailable",
+            })
+            return
+        }
 
         // Record Prometheus metrics
         metrics.RecordRequest(userID, allowed)

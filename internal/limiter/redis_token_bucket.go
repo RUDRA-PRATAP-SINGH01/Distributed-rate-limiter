@@ -22,7 +22,7 @@ func NewRedisTokenBucket(rdb *redis.Client, capacity int, refillRate float64) *R
     }
 }
 
-func (tb *RedisTokenBucket) Allow(userID string) (bool, int) {
+func (tb *RedisTokenBucket) Allow(userID string) (bool, int, error) {
     ctx := context.Background()
     key := fmt.Sprintf("rate:%s", userID)
 
@@ -35,7 +35,7 @@ func (tb *RedisTokenBucket) Allow(userID string) (bool, int) {
         tokens = float64(tb.capacity)
         lastRefill = time.Now()
     } else if err != nil {
-        return false, 0
+        return false, 0, err
     } else {
         tokens, _ = strconv.ParseFloat(tokensStr, 64)
         lastRefillStr, _ := tb.rdb.HGet(ctx, key, "last_refill").Result()
@@ -61,5 +61,5 @@ func (tb *RedisTokenBucket) Allow(userID string) (bool, int) {
     tb.rdb.HSet(ctx, key, "tokens", newTokens, "last_refill", now.Unix())
     tb.rdb.Expire(ctx, key, 1*time.Hour)
 
-    return allowed, int(newTokens)
+    return allowed, int(newTokens), nil
 }

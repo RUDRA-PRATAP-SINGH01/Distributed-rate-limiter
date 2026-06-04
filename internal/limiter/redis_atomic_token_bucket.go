@@ -30,7 +30,7 @@ func NewRedisAtomicTokenBucket(rdb *redis.Client, capacity int, refillRate float
     }
 }
 
-func (tb *RedisAtomicTokenBucket) Allow(userID string) (bool, int) {
+func (tb *RedisAtomicTokenBucket) Allow(userID string) (bool, int, error) {
     ctx := context.Background()
     key := fmt.Sprintf("rate:%s", userID)
     now := time.Now().Unix()
@@ -46,19 +46,19 @@ func (tb *RedisAtomicTokenBucket) Allow(userID string) (bool, int) {
 
     if err != nil {
         log.Printf("token bucket lua error for %s: %v", userID, err)
-        return false, 0
+        return false, 0, err
     }
 
     values, ok := result.([]interface{})
     if !ok || len(values) < 2 {
         log.Printf("token bucket lua unexpected result for %s: %#v", userID, result)
-        return false, 0
+        return false, 0, fmt.Errorf("unexpected lua result")
     }
 
     allowed := luaInt(values[0]) == 1
     remaining := int(luaInt(values[1]))
 
-    return allowed, remaining
+    return allowed, remaining, nil
 }
 
 func luaInt(v interface{}) int64 {

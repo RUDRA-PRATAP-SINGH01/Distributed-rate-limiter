@@ -8,7 +8,6 @@ import (
     "net/http/httputil"
     "net/url"
     "os"
-    "strconv"
     "sync"
     "time"
 
@@ -52,29 +51,33 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         userID = "anonymous"
     }
 
-    // Check local cache – but only for denials (429)
+    log.Printf("[DEBUG] Request for user: %s", userID)
+
     if val, ok := s.cache.Load(userID); ok {
         entry := val.(CacheEntry)
+        log.Printf("[DEBUG] Cache entry found – allowed=%v, remaining=%d, expires=%v", entry.Allowed, entry.Remaining, entry.ExpiresAt)
         if time.Now().Before(entry.ExpiresAt) {
-            // Cache hit – only serve if it's a denial
             if !entry.Allowed {
+                log.Printf("[DEBUG] Serving cached DENIAL for %s", userID)
                 metrics.RecordCacheHit()
                 w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", s.limit))
                 w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", entry.Remaining))
                 http.Error(w, "Too many requests", http.StatusTooManyRequests)
                 return
             }
-            // If allowed, we ignore cache and continue to central limiter
-            // (do NOT return here)
+            log.Printf("[DEBUG] Cache entry is ALLOWED – ignoring cache, will call central limiter")
         } else {
+            log.Printf("[DEBUG] Cache entry expired, deleting")
             s.cache.Delete(userID)
         }
+    } else {
+        log.Printf("[DEBUG] Cache miss for user %s", userID)
     }
 
-    // If we reach here, we must call central limiter (for allowed requests or expired)
     metrics.RecordCacheMiss()
-    log.Printf("Cache miss or allowed – calling central limiter for user %s", userID)
+    log.Printf("[DEBUG] Calling central limiter for %s", userID)
     allowed, remaining, err := s.checkRateLimit(userID)
+    log.Printf("[DEBUG] checkRateLimit returned allowed=%v, remaining=%d, err=%v", allowed, remaining, err)
     if err != nil {
         log.Printf("Rate limiter error: %v", err)
         if s.failOpen {
@@ -85,7 +88,7 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    // Store in cache (only denials are served from cache; allowed entries are ignored on read)
+    // Store the result in cache (both allowed and denied)
     s.cache.Store(userID, CacheEntry{
         Allowed:   allowed,
         Remaining: remaining,
@@ -99,6 +102,7 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    // Allowed – forward to upstream
     w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", s.limit))
     w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
     s.forwardRequest(w, r)
@@ -136,18 +140,6 @@ func (s *Sidecar) checkRateLimit(userID string) (bool, int, error) {
     return result.Allowed, remaining, nil
 }
 
-func (s *Sidecar) healthCheck() error {
-    resp, err := s.httpClient.Get(s.limiterURL + "/health")
-    if err != nil {
-        return fmt.Errorf("rate limiter unreachable: %w", err)
-    }
-    defer resp.Body.Close()
-    if resp.StatusCode != http.StatusOK {
-        return fmt.Errorf("rate limiter unhealthy: status %d", resp.StatusCode)
-    }
-    return nil
-}
-
 func (s *Sidecar) forwardRequest(w http.ResponseWriter, r *http.Request) {
     target, _ := url.Parse(s.upstreamURL)
     proxy := httputil.NewSingleHostReverseProxy(target)
@@ -164,12 +156,9 @@ func main() {
 
     ttl := 30 * time.Millisecond
     failOpen := os.Getenv("FAIL_OPEN") == "true"
-
     limit := 10
-    if val := os.Getenv("RATE_LIMIT"); val != "" {
-        if parsed, err := strconv.Atoi(val); err == nil {
-            limit = parsed
-        }
+    if l := os.Getenv("RATE_LIMIT"); l != "" {
+        fmt.Sscanf(l, "%d", &limit)
     }
 
     sidecar := NewSidecar(upstream, limiter, ttl, failOpen, limit)
@@ -178,12 +167,11 @@ func main() {
     mux.Handle("/metrics", promhttp.Handler())
     mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Content-Type", "application/json")
-        if err := sidecar.healthCheck(); err != nil {
+        // Simplified health check – just try calling limiter's health
+        resp, err := sidecar.httpClient.Get(limiter + "/health")
+        if err != nil || resp.StatusCode != http.StatusOK {
             w.WriteHeader(http.StatusServiceUnavailable)
-            json.NewEncoder(w).Encode(map[string]string{
-                "status": "unhealthy",
-                "reason": err.Error(),
-            })
+            json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy"})
             return
         }
         w.WriteHeader(http.StatusOK)
@@ -199,3 +187,4 @@ func main() {
     log.Printf("Sidecar starting on :%s, forwarding to %s", port, upstream)
     log.Fatal(http.ListenAndServe(":"+port, mux))
 }
+
