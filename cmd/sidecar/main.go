@@ -73,6 +73,7 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
     // If we reach here, we must call central limiter (for allowed requests or expired)
     metrics.RecordCacheMiss()
+    log.Printf("Cache miss or allowed – calling central limiter for user %s", userID)
     allowed, remaining, err := s.checkRateLimit(userID)
     if err != nil {
         log.Printf("Rate limiter error: %v", err)
