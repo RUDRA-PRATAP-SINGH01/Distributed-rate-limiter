@@ -9,6 +9,8 @@ var Ctx = context.Background()
 
 func NewClient(addr string) *redis.Client {
     return redis.NewClient(&redis.Options{
-        Addr: addr,
+        Addr:         addr,
+        PoolSize:     100,
+        MinIdleConns: 10,
     })
 }

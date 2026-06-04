@@ -8,6 +8,7 @@ import (
     "net/http/httputil"
     "net/url"
     "os"
+    "strconv"
     "sync"
     "time"
 
@@ -27,16 +28,18 @@ type Sidecar struct {
     cache       sync.Map
     ttl         time.Duration
     failOpen    bool
+    limit       int
     httpClient  *http.Client
 }
 
-func NewSidecar(upstream, limiter string, ttl time.Duration, failOpen bool) *Sidecar {
+func NewSidecar(upstream, limiter string, ttl time.Duration, failOpen bool, limit int) *Sidecar {
     return &Sidecar{
         upstreamURL: upstream,
         limiterURL:  limiter,
         ttl:         ttl,
         failOpen:    failOpen,
-        httpClient:  &http.Client{Timeout: 2 * time.Second},
+        limit:       limit,
+        httpClient:  &http.Client{Timeout: 5 * time.Second},
     }
 }
 
@@ -56,6 +59,7 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
             // Cache hit – only serve if it's a denial
             if !entry.Allowed {
                 metrics.RecordCacheHit()
+                w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", s.limit))
                 w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", entry.Remaining))
                 http.Error(w, "Too many requests", http.StatusTooManyRequests)
                 return
@@ -88,10 +92,14 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     })
 
     if !allowed {
+        w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", s.limit))
         w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
         http.Error(w, "Too many requests", http.StatusTooManyRequests)
         return
     }
+
+    w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", s.limit))
+    w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
     s.forwardRequest(w, r)
 }
 
@@ -156,7 +164,14 @@ func main() {
     ttl := 30 * time.Millisecond
     failOpen := os.Getenv("FAIL_OPEN") == "true"
 
-    sidecar := NewSidecar(upstream, limiter, ttl, failOpen)
+    limit := 10
+    if val := os.Getenv("RATE_LIMIT"); val != "" {
+        if parsed, err := strconv.Atoi(val); err == nil {
+            limit = parsed
+        }
+    }
+
+    sidecar := NewSidecar(upstream, limiter, ttl, failOpen, limit)
 
     mux := http.NewServeMux()
     mux.Handle("/metrics", promhttp.Handler())
