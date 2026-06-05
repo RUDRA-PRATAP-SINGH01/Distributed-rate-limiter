@@ -7,6 +7,7 @@ import (
 
 type Config struct {
     Port       int
+    RedisAddr  string
     Algorithm  string
     Capacity   int
     RefillRate float64
@@ -21,6 +22,7 @@ func LoadConfig() Config {
 
     return Config{
         Port:       port,
+        RedisAddr:  getEnv("REDIS_ADDR", "localhost:6379"),
         Algorithm:  getEnv("ALGORITHM", "token"),
         Capacity:   capacity,
         RefillRate: refillRate,

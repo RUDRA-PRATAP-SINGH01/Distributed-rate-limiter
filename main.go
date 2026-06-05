@@ -23,8 +23,8 @@ func main() {
     cfg := LoadConfig()
 
     // Connect to Redis
-    rdb := redisclient.NewClient("localhost:6379")
-    log.Println("Connected to Redis")
+    rdb := redisclient.NewClient(cfg.RedisAddr)
+    log.Printf("Connected to Redis at %s", cfg.RedisAddr)
 
     // Use atomic Redis-backed token bucket with Lua script (NO race condition)
     limiterInstance = limiter.NewRedisAtomicTokenBucket(rdb, cfg.Capacity, cfg.RefillRate)

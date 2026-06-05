@@ -1,0 +1,57 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: rate-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - rate-net
+
+  limiter:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.limiter   # relative path
+    container_name: rate-limiter
+    environment:
+      - PORT=8080
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "8080:8080"
+    networks:
+      - rate-net
+    depends_on:
+      - redis
+
+  demo:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.demo
+    container_name: demo-backend
+    environment:
+      - PORT=8081
+    ports:
+      - "8081:8081"
+    networks:
+      - rate-net
+
+  sidecar:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.sidecar
+    container_name: rate-sidecar
+    environment:
+      - PORT=9090
+      - UPSTREAM_URL=http://demo:8081
+      - RATE_LIMITER_URL=http://limiter:8080
+      - FAIL_OPEN=false
+    ports:
+      - "9090:9090"
+    networks:
+      - rate-net
+    depends_on:
+      - limiter
+      - demo
+
+networks:
+  rate-net:
+    driver: bridge
