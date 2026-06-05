@@ -1,24 +1,24 @@
 package main
 
 import (
-    "testing"
-    "time"
+	"testing"
+	"time"
 )
 
 func TestSlidingWindow_Allow(t *testing.T) {
-    sw := NewSlidingWindow(3, 2*time.Second)
-    user := "alice"
+	sw := NewSlidingWindow(3, 2*time.Second)
+	user := "alice"
 
-    for i := 0; i < 3; i++ {
-        if allowed, _, _ := sw.Allow(user); !allowed {
-            t.Errorf("request %d should be allowed", i)
-        }
-    }
-    if allowed, _, _ := sw.Allow(user); allowed {
-        t.Error("4th request should be denied")
-    }
-    time.Sleep(2 * time.Second)
-    if !sw.Allow(user) {
-        t.Error("after window expiration, request should be allowed")
-    }
+	for i := 0; i < 3; i++ {
+		if allowed, _, _ := sw.Allow(user); !allowed {
+			t.Errorf("request %d should be allowed", i)
+		}
+	}
+	if allowed, _, _ := sw.Allow(user); allowed {
+		t.Error("4th request should be denied")
+	}
+	time.Sleep(2 * time.Second)
+	if !sw.Allow(user) {
+		t.Error("after window expiration, request should be allowed")
+	}
 }

@@ -1,79 +1,79 @@
 package limiter
 
 import (
-    "context"
-    _ "embed"
-    "fmt"
-    "log"
-    "time"
+	"context"
+	_ "embed"
+	"fmt"
+	"log"
+	"time"
 
-    "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
-    "github.com/redis/go-redis/v9"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/redis/go-redis/v9"
 )
 
 //go:embed lua/token_bucket.lua
 var luaScript string
 
 type RedisAtomicTokenBucket struct {
-    rdb        *redis.Client
-    capacity   int
-    refillRate float64
-    script     *redis.Script
+	rdb        *redis.Client
+	capacity   int
+	refillRate float64
+	script     *redis.Script
 }
 
 func NewRedisAtomicTokenBucket(rdb *redis.Client, capacity int, refillRate float64) *RedisAtomicTokenBucket {
-    return &RedisAtomicTokenBucket{
-        rdb:        rdb,
-        capacity:   capacity,
-        refillRate: refillRate,
-        script:     redis.NewScript(luaScript),
-    }
+	return &RedisAtomicTokenBucket{
+		rdb:        rdb,
+		capacity:   capacity,
+		refillRate: refillRate,
+		script:     redis.NewScript(luaScript),
+	}
 }
 
 func (tb *RedisAtomicTokenBucket) Allow(userID string) (bool, int, error) {
-    ctx := context.Background()
-    key := fmt.Sprintf("rate:%s", userID)
-    now := time.Now().Unix()
+	ctx := context.Background()
+	key := fmt.Sprintf("rate:%s", userID)
+	now := time.Now().Unix()
 
-    start := time.Now()
-    result, err := tb.script.Run(ctx, tb.rdb, []string{key},
-        tb.capacity,
-        tb.refillRate,
-        now,
-        1, // requested tokens
-    ).Result()
-    metrics.RecordRedisDuration(time.Since(start).Seconds())
+	start := time.Now()
+	result, err := tb.script.Run(ctx, tb.rdb, []string{key},
+		tb.capacity,
+		tb.refillRate,
+		now,
+		1, // requested tokens
+	).Result()
+	metrics.RecordRedisDuration(time.Since(start).Seconds())
 
-    if err != nil {
-        log.Printf("token bucket lua error for %s: %v", userID, err)
-        return false, 0, err
-    }
+	if err != nil {
+		log.Printf("token bucket lua error for %s: %v", userID, err)
+		return false, 0, err
+	}
 
-    values, ok := result.([]interface{})
-    if !ok || len(values) < 2 {
-        log.Printf("token bucket lua unexpected result for %s: %#v", userID, result)
-        return false, 0, fmt.Errorf("unexpected lua result")
-    }
+	values, ok := result.([]interface{})
+	if !ok || len(values) < 2 {
+		log.Printf("token bucket lua unexpected result for %s: %#v", userID, result)
+		return false, 0, fmt.Errorf("unexpected lua result")
+	}
 
-    allowed := luaInt(values[0]) == 1
-    remaining := int(luaInt(values[1]))
+	allowed := luaInt(values[0]) == 1
+	remaining := int(luaInt(values[1]))
 
-    return allowed, remaining, nil
+	return allowed, remaining, nil
 }
 
 func luaInt(v interface{}) int64 {
-    switch n := v.(type) {
-    case int64:
-        return n
-    case int:
-        return int64(n)
-    case float64:
-        return int64(n)
-    case string:
-        var parsed int64
-        fmt.Sscan(n, &parsed)
-        return parsed
-    default:
-        return 0
-    }
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	case string:
+		var parsed int64
+		fmt.Sscan(n, &parsed)
+		return parsed
+	default:
+		return 0
+	}
 }
