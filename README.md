@@ -14,7 +14,7 @@ A distributed rate limiter built in Go using Redis and atomic Lua scripts. The s
 
 ---
 
-# ✨ Features
+#  Features
 
 | Category       | Features                                                   |
 | -------------- | ---------------------------------------------------------- |
@@ -88,7 +88,7 @@ flowchart LR
 
 ---
 
-# 📁 Project Structure
+#  Project Structure
 
 ```text
 .
@@ -144,7 +144,7 @@ flowchart LR
 
 ---
 
-# 🚀 Quick Start
+#  Quick Start
 
 ## Prerequisites
 
@@ -275,7 +275,7 @@ curl "http://localhost:9090/check?user_id=alice"
 
 ---
 
-# ⚙️ Configuration
+#  Configuration
 
 ## Central Limiter
 
@@ -298,7 +298,7 @@ curl "http://localhost:9090/check?user_id=alice"
 
 ---
 
-# 📊 Observability
+#  Observability
 
 Metrics Endpoint:
 
@@ -324,7 +324,7 @@ Metrics collected:
 
 ---
 
-# 🧪 Testing
+#  Testing
 
 ## Unit Tests
 
