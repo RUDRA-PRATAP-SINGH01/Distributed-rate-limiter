@@ -8,5 +8,5 @@ RUN go build -o rate-limiter .
 FROM alpine:latest
 WORKDIR /root/
 COPY --from=builder /app/rate-limiter .
-EXPOSE 8080
+EXPOSE 8080 8082
 CMD ["./rate-limiter"]

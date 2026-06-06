@@ -47,15 +47,30 @@ func NewHierarchicalLimiter(
 func (hl *HierarchicalLimiter) Allow(
 	globalKey, tenantKey, userKey, endpointKey string,
 ) (allowed bool, remaining int, err error) {
+	return hl.AllowWithParams(
+		[]string{globalKey, tenantKey, userKey, endpointKey},
+		[]int{hl.globalCap, hl.tenantCap, hl.userCap, hl.endpointCap},
+		[]float64{hl.globalRate, hl.tenantRate, hl.userRate, hl.endpointRate},
+	)
+}
+
+func (hl *HierarchicalLimiter) AllowWithParams(
+	keys []string,
+	capacities []int,
+	refillRates []float64,
+) (allowed bool, remaining int, err error) {
+	if len(keys) != 4 || len(capacities) != 4 || len(refillRates) != 4 {
+		return false, 0, fmt.Errorf("expected 4 keys, capacities, and refill rates")
+	}
+
 	ctx := context.Background()
 	now := time.Now().Unix()
 
-	keys := []string{globalKey, tenantKey, userKey, endpointKey}
 	args := []interface{}{
-		hl.globalCap, hl.tenantCap, hl.userCap, hl.endpointCap,
-		hl.globalRate, hl.tenantRate, hl.userRate, hl.endpointRate,
+		capacities[0], capacities[1], capacities[2], capacities[3],
+		refillRates[0], refillRates[1], refillRates[2], refillRates[3],
 		now,
-		1, // requested tokens
+		1,
 	}
 
 	result, err := hl.script.Run(ctx, hl.rdb, keys, args...).Result()

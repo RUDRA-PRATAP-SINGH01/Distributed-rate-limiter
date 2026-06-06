@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -15,6 +16,10 @@ type Config struct {
 	WindowSec  int
 
 	EnableHierarchical bool
+	EnableAdminAPI     bool
+	AdminPort          int
+	AdminAPIKey        string
+	OverrideCacheTTLMs int
 
 	// Hierarchical limits
 	GlobalCapacity     int
@@ -27,6 +32,10 @@ type Config struct {
 	EndpointRefillRate float64
 }
 
+func (c Config) AdminAddr() string {
+	return fmt.Sprintf(":%d", c.AdminPort)
+}
+
 func LoadConfig() Config {
 	return Config{
 		Port:               parseIntEnv("PORT", "8080"),
@@ -36,6 +45,10 @@ func LoadConfig() Config {
 		RefillRate:         parseFloatEnv("REFILL_RATE", "1.0"),
 		WindowSec:          parseIntEnv("WINDOW_SEC", "60"),
 		EnableHierarchical: getEnv("ENABLE_HIERARCHICAL", "true") == "true",
+		EnableAdminAPI:     getEnv("ENABLE_ADMIN_API", "true") == "true",
+		AdminPort:          parseIntEnv("ADMIN_PORT", "8082"),
+		AdminAPIKey:        getEnv("ADMIN_API_KEY", "dev-key-change-in-prod"),
+		OverrideCacheTTLMs: parseIntEnv("OVERRIDE_CACHE_TTL_MS", "5000"),
 
 		GlobalCapacity:     parseIntEnv("GLOBAL_CAPACITY", "1000000"),
 		GlobalRefillRate:   parseFloatEnv("GLOBAL_REFILL_RATE", "10000.0"),

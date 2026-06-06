@@ -28,8 +28,13 @@ services:
       - USER_REFILL_RATE=1.0
       - ENDPOINT_CAPACITY=10
       - ENDPOINT_REFILL_RATE=0.5
+      - ENABLE_ADMIN_API=true
+      - ADMIN_PORT=8082
+      - ADMIN_API_KEY=dev-key-change-in-prod
+      - OVERRIDE_CACHE_TTL_MS=5000
     ports:
       - "8080:8080"
+      - "8082:8082"
     networks:
       - rate-net
     depends_on:

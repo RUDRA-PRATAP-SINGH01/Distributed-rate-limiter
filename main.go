@@ -13,18 +13,22 @@ import (
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/limiter"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
 	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var limiterInstance RateLimiter
 var hierarchicalLimiter *limiter.HierarchicalLimiter
+var overrideStore *override.Store
 
 func main() {
 	cfg := LoadConfig()
 
 	rdb := redisclient.NewClient(cfg.RedisAddr)
 	log.Printf("Connected to Redis at %s", cfg.RedisAddr)
+
+	overrideStore = override.NewStore(rdb, time.Duration(cfg.OverrideCacheTTLMs)*time.Millisecond)
 
 	switch cfg.Algorithm {
 	case "sliding":
@@ -123,7 +127,12 @@ func main() {
 			userKey := fmt.Sprintf("rate:user:%s", userID)
 			endpointKey := fmt.Sprintf("rate:endpoint:%s:%s", tenantID, endpoint)
 
-			allowed, remaining, err := hierarchicalLimiter.Allow(globalKey, tenantKey, userKey, endpointKey)
+			capacities, refillRates := effectiveHierarchicalLimits(cfg, overrideStore, tenantID, userID, endpoint)
+			allowed, remaining, err := hierarchicalLimiter.AllowWithParams(
+				[]string{globalKey, tenantKey, userKey, endpointKey},
+				capacities,
+				refillRates,
+			)
 			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -137,7 +146,7 @@ func main() {
 			metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
 
 			w.Header().Set("Content-Type", "application/json")
-			setRateLimitHeaders(w, hierarchicalRateLimitLimitHeader(cfg), remaining)
+			setRateLimitHeaders(w, effectiveHierarchicalLimitHeader(capacities), remaining)
 
 			if !allowed {
 				w.Header().Set("Retry-After", retryAfterForHierarchical(cfg))
@@ -161,6 +170,8 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
+	adminSrv := startAdminServer(cfg, overrideStore)
+
 	go func() {
 		log.Printf("Server starting on :%d", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -175,6 +186,11 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if adminSrv != nil {
+		if err := adminSrv.Shutdown(ctx); err != nil {
+			log.Printf("Admin server shutdown error: %v", err)
+		}
+	}
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("Server forced to shutdown:", err)
 	}
