@@ -23,11 +23,9 @@ var hierarchicalLimiter *limiter.HierarchicalLimiter
 func main() {
 	cfg := LoadConfig()
 
-	// Connect to Redis
 	rdb := redisclient.NewClient(cfg.RedisAddr)
 	log.Printf("Connected to Redis at %s", cfg.RedisAddr)
 
-	// Regular limiter (single level)
 	switch cfg.Algorithm {
 	case "sliding":
 		limiterInstance = limiter.NewRedisSlidingWindow(rdb, cfg.Capacity, time.Duration(cfg.WindowSec)*time.Second)
@@ -39,20 +37,18 @@ func main() {
 		log.Println("Using Redis token bucket (atomic Lua)")
 	}
 
-	// Hierarchical limiter (production‑grade atomic multi‑level)
-	hierarchicalLimiter = limiter.NewHierarchicalLimiter(
-		rdb,
-		cfg.GlobalCapacity, cfg.TenantCapacity, cfg.UserCapacity, cfg.EndpointCapacity,
-		cfg.GlobalRefillRate, cfg.TenantRefillRate, cfg.UserRefillRate, cfg.EndpointRefillRate,
-	)
-	log.Println("Hierarchical limiter enabled (global / tenant / user / endpoint)")
+	if cfg.EnableHierarchical {
+		hierarchicalLimiter = limiter.NewHierarchicalLimiter(
+			rdb,
+			cfg.GlobalCapacity, cfg.TenantCapacity, cfg.UserCapacity, cfg.EndpointCapacity,
+			cfg.GlobalRefillRate, cfg.TenantRefillRate, cfg.UserRefillRate, cfg.EndpointRefillRate,
+		)
+		log.Println("Hierarchical limiter enabled (global / tenant / user / endpoint)")
+	}
 
 	mux := http.NewServeMux()
-
-	// /metrics endpoint for Prometheus
 	mux.Handle("/metrics", promhttp.Handler())
 
-	// /health endpoint – checks Redis connectivity
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := rdb.Ping(context.Background()).Err(); err != nil {
@@ -67,7 +63,6 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
 	})
 
-	// Original /check endpoint (single user level)
 	mux.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		userID := r.URL.Query().Get("user_id")
@@ -76,7 +71,6 @@ func main() {
 		}
 
 		allowed, remaining, err := limiterInstance.Allow(userID)
-
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -90,11 +84,10 @@ func main() {
 		metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", cfg.Capacity))
-		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+		setRateLimitHeaders(w, rateLimitLimitHeader(cfg), remaining)
 
 		if !allowed {
-			w.Header().Set("Retry-After", "60")
+			w.Header().Set("Retry-After", retryAfterForCheck(cfg))
 			w.WriteHeader(http.StatusTooManyRequests)
 			json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests"})
 			return
@@ -105,62 +98,60 @@ func main() {
 		})
 	})
 
-	// Hierarchical check endpoint (global / tenant / user / endpoint)
-	mux.HandleFunc("/check_hierarchical", func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+	if cfg.EnableHierarchical {
+		mux.HandleFunc("/check_hierarchical", func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
 
-		// Extract identifiers
-		userID := r.URL.Query().Get("user_id")
-		if userID == "" {
-			userID = "anonymous"
-		}
-		tenantID := r.Header.Get("X-Tenant-ID")
-		if tenantID == "" {
-			tenantID = r.URL.Query().Get("tenant_id")
-		}
-		if tenantID == "" {
-			tenantID = "default"
-		}
-		endpoint := r.URL.Path // simple: use full path as endpoint (could be normalized)
-		// Optionally map to logical name: /api/login -> "login"
-		// For simplicity, we keep the raw path.
+			userID := r.URL.Query().Get("user_id")
+			if userID == "" {
+				userID = "anonymous"
+			}
+			tenantID := r.Header.Get("X-Tenant-ID")
+			if tenantID == "" {
+				tenantID = r.URL.Query().Get("tenant_id")
+			}
+			if tenantID == "" {
+				tenantID = "default"
+			}
+			endpoint := r.URL.Query().Get("endpoint")
+			if endpoint == "" {
+				endpoint = "default"
+			}
 
-		globalKey := "rate:global"
-		tenantKey := fmt.Sprintf("rate:tenant:%s", tenantID)
-		userKey := fmt.Sprintf("rate:user:%s", userID)
-		endpointKey := fmt.Sprintf("rate:endpoint:%s", endpoint)
+			globalKey := "rate:global"
+			tenantKey := fmt.Sprintf("rate:tenant:%s", tenantID)
+			userKey := fmt.Sprintf("rate:user:%s", userID)
+			endpointKey := fmt.Sprintf("rate:endpoint:%s:%s", tenantID, endpoint)
 
-		allowed, remaining, err := hierarchicalLimiter.Allow(globalKey, tenantKey, userKey, endpointKey)
-		if err != nil {
+			allowed, remaining, err := hierarchicalLimiter.Allow(globalKey, tenantKey, userKey, endpointKey)
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "Hierarchical rate limiter unavailable",
+				})
+				return
+			}
+
+			metrics.RecordRequest(userID, allowed)
+			metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
+
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error": "Hierarchical rate limiter unavailable",
+			setRateLimitHeaders(w, hierarchicalRateLimitLimitHeader(cfg), remaining)
+
+			if !allowed {
+				w.Header().Set("Retry-After", retryAfterForHierarchical(cfg))
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests (hierarchical limit)"})
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"allowed":   true,
+				"remaining": remaining,
+				"message":   "Request allowed by all levels",
 			})
-			return
-		}
-
-		// Record metrics (for separate metrics for hierarchical)
-		metrics.RecordRequest(userID, allowed)
-		metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
-
-		w.Header().Set("Content-Type", "application/json")
-		// Sends the minimum remaining (which is the bottleneck level's remaining)
-		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
-		// Optionally send limits per level (simplified)
-
-		if !allowed {
-			w.Header().Set("Retry-After", "60")
-			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests (hierarchical limit)"})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"allowed":   true,
-			"remaining": remaining,
-			"message":   "Request allowed by all levels",
 		})
-	})
+	}
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),

@@ -19,6 +19,15 @@ services:
       - CAPACITY=10
       - REFILL_RATE=1.0
       - WINDOW_SEC=60
+      - ENABLE_HIERARCHICAL=true
+      - GLOBAL_CAPACITY=1000000
+      - GLOBAL_REFILL_RATE=10000.0
+      - TENANT_CAPACITY=100000
+      - TENANT_REFILL_RATE=1000.0
+      - USER_CAPACITY=100
+      - USER_REFILL_RATE=1.0
+      - ENDPOINT_CAPACITY=10
+      - ENDPOINT_REFILL_RATE=0.5
     ports:
       - "8080:8080"
     networks:
@@ -48,6 +57,7 @@ services:
       - UPSTREAM_URL=http://demo:8081
       - RATE_LIMITER_URL=http://limiter:8080
       - RATE_LIMIT=10
+      - USE_HIERARCHICAL=false
       - FAIL_OPEN=false
     ports:
       - "9090:9090"

@@ -18,7 +18,7 @@ func TestSlidingWindow_Allow(t *testing.T) {
 		t.Error("4th request should be denied")
 	}
 	time.Sleep(2 * time.Second)
-	if !sw.Allow(user) {
+	if allowed, _, _ := sw.Allow(user); !allowed {
 		t.Error("after window expiration, request should be allowed")
 	}
 }

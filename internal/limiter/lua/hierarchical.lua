@@ -31,6 +31,7 @@ for i = 1, levels do
     if new_tokens > capacity then
         new_tokens = capacity
     end
+    new_tokens = math.floor(new_tokens)
 
     -- Check if this level can allow the request
     if new_tokens < 1 then

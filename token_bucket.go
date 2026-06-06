@@ -5,41 +5,58 @@ import (
 	"time"
 )
 
+type userBucket struct {
+	tokens     float64
+	lastRefill time.Time
+}
+
 type TokenBucket struct {
 	capacity   int
-	tokens     float64
 	refillRate float64
-	lastRefill time.Time
 	mu         sync.Mutex
+	users      map[string]*userBucket
 }
 
 func NewTokenBucket(capacity int, refillRate float64) *TokenBucket {
 	return &TokenBucket{
 		capacity:   capacity,
-		tokens:     float64(capacity),
 		refillRate: refillRate,
-		lastRefill: time.Now(),
+		users:      make(map[string]*userBucket),
 	}
 }
 
-func (tb *TokenBucket) refill() {
+func (tb *TokenBucket) bucketFor(userID string) *userBucket {
+	b, ok := tb.users[userID]
+	if !ok {
+		b = &userBucket{
+			tokens:     float64(tb.capacity),
+			lastRefill: time.Now(),
+		}
+		tb.users[userID] = b
+	}
+	return b
+}
+
+func (tb *TokenBucket) refill(b *userBucket) {
 	now := time.Now()
-	elapsed := now.Sub(tb.lastRefill).Seconds()
-	newTokens := tb.tokens + elapsed*tb.refillRate
+	elapsed := now.Sub(b.lastRefill).Seconds()
+	newTokens := b.tokens + elapsed*tb.refillRate
 	if newTokens > float64(tb.capacity) {
 		newTokens = float64(tb.capacity)
 	}
-	tb.tokens = newTokens
-	tb.lastRefill = now
+	b.tokens = newTokens
+	b.lastRefill = now
 }
 
 func (tb *TokenBucket) Allow(userID string) (bool, int, error) {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-	tb.refill()
-	if tb.tokens >= 1.0 {
-		tb.tokens -= 1.0
-		return true, int(tb.tokens), nil
+
+	b := tb.bucketFor(userID)
+	tb.refill(b)
+	if b.tokens >= 1.0 {
+		b.tokens -= 1.0
+		return true, int(b.tokens), nil
 	}
 	return false, 0, nil
 }

@@ -23,7 +23,7 @@ func TestTokenBucket_Refill(t *testing.T) {
 	tb.Allow("test")
 	tb.Allow("test")
 	time.Sleep(2 * time.Second)
-	if !tb.Allow("test") {
+	if allowed, _, _ := tb.Allow("test"); !allowed {
 		t.Error("after refill, request should be allowed")
 	}
 }

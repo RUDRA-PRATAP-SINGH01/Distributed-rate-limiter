@@ -36,13 +36,17 @@ func (rw *RedisSlidingWindow) Allow(userID string) (bool, int, error) {
 	now := time.Now().UnixMilli()
 	windowStart := now - rw.window.Milliseconds()
 	member := fmt.Sprintf("%d:%d", now, time.Now().UnixNano())
+	expireSec := int((rw.window.Milliseconds() + 999) / 1000)
+	if expireSec < 1 {
+		expireSec = 1
+	}
 
 	start := time.Now()
 	result, err := rw.script.Run(ctx, rw.rdb, []string{key},
 		now,
 		windowStart,
 		rw.limit,
-		int(rw.window.Seconds()),
+		expireSec,
 		member,
 	).Result()
 	metrics.RecordRedisDuration(time.Since(start).Seconds())

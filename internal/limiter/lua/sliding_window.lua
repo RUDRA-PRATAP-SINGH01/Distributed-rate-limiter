@@ -2,7 +2,7 @@
 -- ARGV[1] = current timestamp (milliseconds)
 -- ARGV[2] = window start (milliseconds)
 -- ARGV[3] = limit (max requests per window)
--- ARGV[4] = window length in seconds (for EXPIRE)
+-- ARGV[4] = key TTL in seconds (at least 1; derived from window duration)
 -- ARGV[5] = unique member id
 
 local key = KEYS[1]
@@ -21,7 +21,10 @@ if count < limit then
     allowed = 1
     remaining = limit - count - 1
     redis.call('ZADD', key, now, member)
-    redis.call('EXPIRE', key, windowSec + 1)
+    if windowSec < 1 then
+        windowSec = 1
+    end
+    redis.call('EXPIRE', key, windowSec)
 end
 
 return {allowed, remaining}
