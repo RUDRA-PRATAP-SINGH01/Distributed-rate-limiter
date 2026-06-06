@@ -15,6 +15,10 @@ services:
     environment:
       - PORT=8080
       - REDIS_ADDR=redis:6379
+      - ALGORITHM=sliding
+      - CAPACITY=10
+      - REFILL_RATE=1.0
+      - WINDOW_SEC=60
     ports:
       - "8080:8080"
     networks:
@@ -43,6 +47,7 @@ services:
       - PORT=9090
       - UPSTREAM_URL=http://demo:8081
       - RATE_LIMITER_URL=http://limiter:8080
+      - RATE_LIMIT=10
       - FAIL_OPEN=false
     ports:
       - "9090:9090"

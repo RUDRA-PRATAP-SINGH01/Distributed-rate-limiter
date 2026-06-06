@@ -18,6 +18,7 @@ import (
 )
 
 var limiterInstance RateLimiter
+var hierarchicalLimiter *limiter.HierarchicalLimiter
 
 func main() {
 	cfg := LoadConfig()
@@ -26,9 +27,25 @@ func main() {
 	rdb := redisclient.NewClient(cfg.RedisAddr)
 	log.Printf("Connected to Redis at %s", cfg.RedisAddr)
 
-	// Use atomic Redis-backed token bucket with Lua script (NO race condition)
-	limiterInstance = limiter.NewRedisAtomicTokenBucket(rdb, cfg.Capacity, cfg.RefillRate)
-	log.Println("Using Redis-backed token bucket (ATOMIC with Lua)")
+	// Regular limiter (single level)
+	switch cfg.Algorithm {
+	case "sliding":
+		limiterInstance = limiter.NewRedisSlidingWindow(rdb, cfg.Capacity, time.Duration(cfg.WindowSec)*time.Second)
+		log.Printf("Using Redis sliding window algorithm (limit=%d, window=%ds)", cfg.Capacity, cfg.WindowSec)
+	case "token":
+		fallthrough
+	default:
+		limiterInstance = limiter.NewRedisAtomicTokenBucket(rdb, cfg.Capacity, cfg.RefillRate)
+		log.Println("Using Redis token bucket (atomic Lua)")
+	}
+
+	// Hierarchical limiter (production‑grade atomic multi‑level)
+	hierarchicalLimiter = limiter.NewHierarchicalLimiter(
+		rdb,
+		cfg.GlobalCapacity, cfg.TenantCapacity, cfg.UserCapacity, cfg.EndpointCapacity,
+		cfg.GlobalRefillRate, cfg.TenantRefillRate, cfg.UserRefillRate, cfg.EndpointRefillRate,
+	)
+	log.Println("Hierarchical limiter enabled (global / tenant / user / endpoint)")
 
 	mux := http.NewServeMux()
 
@@ -50,7 +67,7 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
 	})
 
-	// /check endpoint – rate limiting logic with metrics
+	// Original /check endpoint (single user level)
 	mux.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		userID := r.URL.Query().Get("user_id")
@@ -69,7 +86,6 @@ func main() {
 			return
 		}
 
-		// Record Prometheus metrics
 		metrics.RecordRequest(userID, allowed)
 		metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
 
@@ -89,6 +105,63 @@ func main() {
 		})
 	})
 
+	// Hierarchical check endpoint (global / tenant / user / endpoint)
+	mux.HandleFunc("/check_hierarchical", func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Extract identifiers
+		userID := r.URL.Query().Get("user_id")
+		if userID == "" {
+			userID = "anonymous"
+		}
+		tenantID := r.Header.Get("X-Tenant-ID")
+		if tenantID == "" {
+			tenantID = r.URL.Query().Get("tenant_id")
+		}
+		if tenantID == "" {
+			tenantID = "default"
+		}
+		endpoint := r.URL.Path // simple: use full path as endpoint (could be normalized)
+		// Optionally map to logical name: /api/login -> "login"
+		// For simplicity, we keep the raw path.
+
+		globalKey := "rate:global"
+		tenantKey := fmt.Sprintf("rate:tenant:%s", tenantID)
+		userKey := fmt.Sprintf("rate:user:%s", userID)
+		endpointKey := fmt.Sprintf("rate:endpoint:%s", endpoint)
+
+		allowed, remaining, err := hierarchicalLimiter.Allow(globalKey, tenantKey, userKey, endpointKey)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "Hierarchical rate limiter unavailable",
+			})
+			return
+		}
+
+		// Record metrics (for separate metrics for hierarchical)
+		metrics.RecordRequest(userID, allowed)
+		metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
+
+		w.Header().Set("Content-Type", "application/json")
+		// Sends the minimum remaining (which is the bottleneck level's remaining)
+		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+		// Optionally send limits per level (simplified)
+
+		if !allowed {
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests (hierarchical limit)"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"allowed":   true,
+			"remaining": remaining,
+			"message":   "Request allowed by all levels",
+		})
+	})
+
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
 		Handler:      mux,
@@ -97,7 +170,6 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// Start server in a goroutine
 	go func() {
 		log.Printf("Server starting on :%d", cfg.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -105,7 +177,6 @@ func main() {
 		}
 	}()
 
-	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
