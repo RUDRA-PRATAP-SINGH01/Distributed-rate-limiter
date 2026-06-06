@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/limiter"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
@@ -25,8 +27,11 @@ var overrideStore *override.Store
 func main() {
 	cfg := LoadConfig()
 
-	rdb := redisclient.NewClient(cfg.RedisAddr)
-	log.Printf("Connected to Redis at %s", cfg.RedisAddr)
+	rdb := redisclient.NewClient(cfg.RedisAddr, cfg.RedisPassword)
+	if err := redisclient.Ping(rdb); err != nil {
+		log.Fatalf("Redis unreachable at %s: %v", cfg.RedisAddr, err)
+	}
+	log.Printf("Redis connection verified at %s", cfg.RedisAddr)
 
 	overrideStore = override.NewStore(rdb, time.Duration(cfg.OverrideCacheTTLMs)*time.Millisecond)
 
@@ -50,28 +55,33 @@ func main() {
 		log.Println("Hierarchical limiter enabled (global / tenant / user / endpoint)")
 	}
 
+	metricsKey := ""
+	if cfg.MetricsRequireAuth {
+		metricsKey = cfg.MetricsAuthKey()
+	}
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/metrics", auth.RequireAPIKey(metricsKey, promhttp.Handler().ServeHTTP))
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := rdb.Ping(context.Background()).Err(); err != nil {
+			log.Printf("health check failed: %v", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status": "unhealthy",
-				"reason": "Redis unreachable",
-			})
+			json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy"})
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
 	})
 
-	mux.HandleFunc("/check", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/check", auth.RequireAPIKey(cfg.InternalAPIKey, func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		userID := r.URL.Query().Get("user_id")
-		if userID == "" {
-			userID = "anonymous"
+		userID, err := identity.ResolveUserID(r, cfg.AllowQueryUserID)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
 		}
 
 		allowed, remaining, err := limiterInstance.Allow(userID)
@@ -84,8 +94,8 @@ func main() {
 			return
 		}
 
-		metrics.RecordRequest(userID, allowed)
-		metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
+		metrics.RecordRequest("check", allowed)
+		metrics.RecordRequestDuration("check", time.Since(start).Seconds())
 
 		w.Header().Set("Content-Type", "application/json")
 		setRateLimitHeaders(w, rateLimitLimitHeader(cfg), remaining)
@@ -100,15 +110,18 @@ func main() {
 			"allowed":   true,
 			"remaining": remaining,
 		})
-	})
+	}))
 
 	if cfg.EnableHierarchical {
-		mux.HandleFunc("/check_hierarchical", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/check_hierarchical", auth.RequireAPIKey(cfg.InternalAPIKey, func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
-			userID := r.URL.Query().Get("user_id")
-			if userID == "" {
-				userID = "anonymous"
+			userID, err := identity.ResolveUserID(r, cfg.AllowQueryUserID)
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
 			}
 			tenantID := r.Header.Get("X-Tenant-ID")
 			if tenantID == "" {
@@ -142,8 +155,8 @@ func main() {
 				return
 			}
 
-			metrics.RecordRequest(userID, allowed)
-			metrics.RecordRequestDuration(userID, time.Since(start).Seconds())
+			metrics.RecordRequest("hierarchical", allowed)
+			metrics.RecordRequestDuration("hierarchical", time.Since(start).Seconds())
 
 			w.Header().Set("Content-Type", "application/json")
 			setRateLimitHeaders(w, effectiveHierarchicalLimitHeader(capacities), remaining)
@@ -159,7 +172,7 @@ func main() {
 				"remaining": remaining,
 				"message":   "Request allowed by all levels",
 			})
-		})
+		}))
 	}
 
 	srv := &http.Server{
@@ -174,7 +187,13 @@ func main() {
 
 	go func() {
 		log.Printf("Server starting on :%d", cfg.Port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if cfg.TLSCertFile != "" {
+			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("listen: %s\n", err)
 		}
 	}()

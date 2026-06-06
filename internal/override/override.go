@@ -46,8 +46,12 @@ func (s *Store) GetTenantOverride(tenantID string) (Config, bool) {
 	return s.getOverride("tenant", tenantID)
 }
 
-func (s *Store) GetEndpointOverride(endpoint string) (Config, bool) {
-	return s.getOverride("endpoint", endpoint)
+func (s *Store) GetEndpointOverride(tenantID, endpoint string) (Config, bool) {
+	return s.getOverride("endpoint", EndpointOverrideID(tenantID, endpoint))
+}
+
+func EndpointOverrideID(tenantID, endpoint string) string {
+	return tenantID + "|" + endpoint
 }
 
 func (s *Store) getOverride(level, id string) (Config, bool) {

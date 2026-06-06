@@ -19,8 +19,10 @@ export const options = {
 
 export default function () {
     const userId = `test_user_${Math.floor(Math.random() * 100)}`;
-    const url = `http://localhost:9090/check?user_id=${userId}`;
-    const res = http.get(url);
+    const url = `http://localhost:9090/check`;
+    const res = http.get(url, {
+        headers: { 'X-User-ID': userId },
+    });
 
     // Real failure: not 200/429, or 5xx, or connection error (status 0)
     const isRealFailure =

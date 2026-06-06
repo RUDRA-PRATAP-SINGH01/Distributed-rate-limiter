@@ -1,10 +1,11 @@
 module github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.20.0
+	golang.org/x/sync v0.20.0
 )
 
 require (

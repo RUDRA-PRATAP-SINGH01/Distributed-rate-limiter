@@ -10,46 +10,82 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/sync/singleflight"
 )
 
 type CacheEntry struct {
-	Allowed   bool
-	Remaining int
-	Limit     int
-	ExpiresAt time.Time
+	Allowed    bool
+	Remaining  int
+	Limit      int
+	RetryAfter string
+	ExpiresAt  time.Time
+}
+
+type limitResult struct {
+	allowed    bool
+	remaining  int
+	limit      int
+	retryAfter string
 }
 
 type Sidecar struct {
-	upstreamURL     string
-	limiterURL      string
-	cache           sync.Map
-	ttl             time.Duration
-	failOpen        bool
-	defaultLimit    int
-	useHierarchical bool
-	httpClient      *http.Client
-	proxy           *httputil.ReverseProxy
+	upstreamURL      string
+	limiterURL       string
+	internalAPIKey   string
+	metricsAPIKey    string
+	allowQueryUserID bool
+	allowedPaths     []string
+	debug            bool
+	cache            sync.Map
+	limitFlight      singleflight.Group
+	ttl              time.Duration
+	failOpen         bool
+	defaultLimit     int
+	useHierarchical  bool
+	httpClient       *http.Client
+	proxy            *httputil.ReverseProxy
 }
 
-func NewSidecar(upstream, limiter string, ttl time.Duration, failOpen bool, defaultLimit int, useHierarchical bool) *Sidecar {
+func NewSidecar(
+	upstream, limiter, internalAPIKey, metricsAPIKey string,
+	ttl time.Duration,
+	failOpen bool,
+	defaultLimit int,
+	useHierarchical, allowQueryUserID, debug bool,
+	allowedPaths []string,
+) *Sidecar {
 	target, err := url.Parse(upstream)
 	if err != nil {
 		log.Fatalf("invalid UPSTREAM_URL: %v", err)
 	}
 	return &Sidecar{
-		upstreamURL:     upstream,
-		limiterURL:      limiter,
-		ttl:             ttl,
-		failOpen:        failOpen,
-		defaultLimit:    defaultLimit,
-		useHierarchical: useHierarchical,
-		httpClient:      &http.Client{Timeout: 5 * time.Second},
-		proxy:           httputil.NewSingleHostReverseProxy(target),
+		upstreamURL:      upstream,
+		limiterURL:       limiter,
+		internalAPIKey:   internalAPIKey,
+		metricsAPIKey:    metricsAPIKey,
+		allowQueryUserID: allowQueryUserID,
+		allowedPaths:     allowedPaths,
+		debug:            debug,
+		ttl:              ttl,
+		failOpen:         failOpen,
+		defaultLimit:     defaultLimit,
+		useHierarchical:  useHierarchical,
+		httpClient:       &http.Client{Timeout: 5 * time.Second},
+		proxy:            httputil.NewSingleHostReverseProxy(target),
+	}
+}
+
+func (s *Sidecar) debugf(format string, args ...interface{}) {
+	if s.debug {
+		log.Printf("[DEBUG] "+format, args...)
 	}
 }
 
@@ -67,45 +103,64 @@ func (s *Sidecar) cacheKey(r *http.Request, userID string) string {
 	return tenantID + "|" + userID + "|" + r.URL.Path
 }
 
-func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		userID = r.URL.Query().Get("user_id")
+func (s *Sidecar) pathAllowed(path string) bool {
+	if len(s.allowedPaths) == 0 {
+		return true
 	}
-	if userID == "" {
-		userID = "anonymous"
+	for _, prefix := range s.allowedPaths {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") || strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/health" || r.URL.Path == "/metrics" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if !s.pathAllowed(r.URL.Path) {
+		http.Error(w, "path not allowed", http.StatusNotFound)
+		return
+	}
+
+	userID, err := identity.ResolveUserID(r, s.allowQueryUserID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	cacheKey := s.cacheKey(r, userID)
-	log.Printf("[DEBUG] Request for user: %s (cache key: %s)", userID, cacheKey)
+	s.debugf("Request for user %s (cache key: %s)", userID, cacheKey)
 
 	if val, ok := s.cache.Load(cacheKey); ok {
 		entry := val.(CacheEntry)
-		log.Printf("[DEBUG] Cache entry found – allowed=%v, remaining=%d, expires=%v", entry.Allowed, entry.Remaining, entry.ExpiresAt)
 		if time.Now().Before(entry.ExpiresAt) {
 			if !entry.Allowed {
-				log.Printf("[DEBUG] Serving cached DENIAL for %s", cacheKey)
+				s.debugf("Serving cached DENIAL for %s", cacheKey)
 				metrics.RecordCacheHit()
-				s.writeRateLimitHeaders(w, entry.Limit, entry.Remaining)
-				http.Error(w, "Too many requests", http.StatusTooManyRequests)
+				s.writeDenial(w, entry.Limit, entry.Remaining, entry.RetryAfter)
 				return
 			}
-			log.Printf("[DEBUG] Cache entry is ALLOWED – ignoring cache, will call central limiter")
+			s.debugf("Cache entry is ALLOWED – ignoring cache, will call central limiter")
 		} else {
-			log.Printf("[DEBUG] Cache entry expired, deleting")
 			s.cache.Delete(cacheKey)
 		}
 	} else {
-		log.Printf("[DEBUG] Cache miss for cache key %s", cacheKey)
+		s.debugf("Cache miss for cache key %s", cacheKey)
 	}
 
 	metrics.RecordCacheMiss()
-	log.Printf("[DEBUG] Calling central limiter for %s", userID)
-	allowed, remaining, limit, err := s.checkRateLimit(r, userID)
-	log.Printf("[DEBUG] checkRateLimit returned allowed=%v, remaining=%d, limit=%d, err=%v", allowed, remaining, limit, err)
+
+	resultAny, err, _ := s.limitFlight.Do(cacheKey, func() (interface{}, error) {
+		return s.checkRateLimit(r, userID)
+	})
 	if err != nil {
 		log.Printf("Rate limiter error: %v", err)
 		if s.failOpen {
+			log.Printf("WARNING: FAIL_OPEN enabled — forwarding request despite limiter error")
 			s.forwardRequest(w, r)
 			return
 		}
@@ -113,20 +168,21 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	result := resultAny.(limitResult)
 	s.cache.Store(cacheKey, CacheEntry{
-		Allowed:   allowed,
-		Remaining: remaining,
-		Limit:     limit,
-		ExpiresAt: time.Now().Add(s.ttl),
+		Allowed:    result.allowed,
+		Remaining:  result.remaining,
+		Limit:      result.limit,
+		RetryAfter: result.retryAfter,
+		ExpiresAt:  time.Now().Add(s.ttl),
 	})
 
-	if !allowed {
-		s.writeRateLimitHeaders(w, limit, remaining)
-		http.Error(w, "Too many requests", http.StatusTooManyRequests)
+	if !result.allowed {
+		s.writeDenial(w, result.limit, result.remaining, result.retryAfter)
 		return
 	}
 
-	s.writeRateLimitHeaders(w, limit, remaining)
+	s.writeRateLimitHeaders(w, result.limit, result.remaining)
 	s.forwardRequest(w, r)
 }
 
@@ -135,7 +191,15 @@ func (s *Sidecar) writeRateLimitHeaders(w http.ResponseWriter, limit, remaining 
 	w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 }
 
-func (s *Sidecar) checkRateLimit(r *http.Request, userID string) (bool, int, int, error) {
+func (s *Sidecar) writeDenial(w http.ResponseWriter, limit, remaining int, retryAfter string) {
+	s.writeRateLimitHeaders(w, limit, remaining)
+	if retryAfter != "" {
+		w.Header().Set("Retry-After", retryAfter)
+	}
+	http.Error(w, "Too many requests", http.StatusTooManyRequests)
+}
+
+func (s *Sidecar) checkRateLimit(r *http.Request, userID string) (limitResult, error) {
 	var req *http.Request
 	var err error
 
@@ -145,31 +209,32 @@ func (s *Sidecar) checkRateLimit(r *http.Request, userID string) (bool, int, int
 			endpoint = "/"
 		}
 		checkURL := fmt.Sprintf(
-			"%s/check_hierarchical?user_id=%s&endpoint=%s",
+			"%s/check_hierarchical?endpoint=%s",
 			s.limiterURL,
-			url.QueryEscape(userID),
 			url.QueryEscape(endpoint),
 		)
 		req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, checkURL, nil)
-		if err != nil {
-			return false, 0, s.defaultLimit, err
-		}
-		if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
-			req.Header.Set("X-Tenant-ID", tenantID)
-		} else if tenantID := r.URL.Query().Get("tenant_id"); tenantID != "" {
-			req.Header.Set("X-Tenant-ID", tenantID)
-		}
 	} else {
-		checkURL := fmt.Sprintf("%s/check?user_id=%s", s.limiterURL, url.QueryEscape(userID))
+		checkURL := fmt.Sprintf("%s/check", s.limiterURL)
 		req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, checkURL, nil)
-		if err != nil {
-			return false, 0, s.defaultLimit, err
-		}
+	}
+	if err != nil {
+		return limitResult{}, err
+	}
+
+	req.Header.Set(identity.UserIDHeader, userID)
+	if s.internalAPIKey != "" {
+		req.Header.Set(auth.InternalAPIKeyHeader, s.internalAPIKey)
+	}
+	if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
+		req.Header.Set("X-Tenant-ID", tenantID)
+	} else if tenantID := r.URL.Query().Get("tenant_id"); tenantID != "" {
+		req.Header.Set("X-Tenant-ID", tenantID)
 	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return false, 0, s.defaultLimit, err
+		return limitResult{}, err
 	}
 	defer resp.Body.Close()
 
@@ -181,27 +246,50 @@ func (s *Sidecar) checkRateLimit(r *http.Request, userID string) (bool, int, int
 	if val := resp.Header.Get("X-RateLimit-Remaining"); val != "" {
 		fmt.Sscanf(val, "%d", &remaining)
 	}
+	retryAfter := resp.Header.Get("Retry-After")
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return false, remaining, limit, nil
+		return limitResult{allowed: false, remaining: remaining, limit: limit, retryAfter: retryAfter}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return false, 0, limit, fmt.Errorf("limiter returned %d", resp.StatusCode)
+		return limitResult{}, fmt.Errorf("limiter returned %d", resp.StatusCode)
 	}
 
-	var result struct {
+	var body struct {
 		Allowed bool `json:"allowed"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return false, 0, limit, err
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return limitResult{}, err
 	}
-	return result.Allowed, remaining, limit, nil
+	return limitResult{allowed: body.Allowed, remaining: remaining, limit: limit, retryAfter: retryAfter}, nil
 }
 
 func (s *Sidecar) forwardRequest(w http.ResponseWriter, r *http.Request) {
 	target, _ := url.Parse(s.upstreamURL)
 	r.Host = target.Host
 	s.proxy.ServeHTTP(w, r)
+}
+
+func parseAllowedPaths(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func sidecarMetricsAuthKey(internalKey, metricsKey string) string {
+	if metricsKey != "" {
+		return metricsKey
+	}
+	return internalKey
 }
 
 func main() {
@@ -219,17 +307,44 @@ func main() {
 	}
 
 	failOpen := os.Getenv("FAIL_OPEN") == "true"
+	if failOpen {
+		log.Printf("WARNING: FAIL_OPEN=true — sidecar forwards all traffic when limiter/Redis is down. Never use in production.")
+	}
+
 	useHierarchical := os.Getenv("USE_HIERARCHICAL") == "true"
+	allowQueryUserID := os.Getenv("ALLOW_QUERY_USER_ID") == "true"
+	debug := os.Getenv("DEBUG") == "true"
+	internalAPIKey := os.Getenv("INTERNAL_API_KEY")
+	metricsRequireAuth := os.Getenv("METRICS_REQUIRE_AUTH") == "true"
+	metricsAPIKey := sidecarMetricsAuthKey(internalAPIKey, os.Getenv("METRICS_API_KEY"))
+	metricsKey := ""
+	if metricsRequireAuth {
+		metricsKey = metricsAPIKey
+	}
+	allowedPaths := parseAllowedPaths(os.Getenv("ALLOWED_PATHS"))
+
+	if len(allowedPaths) == 0 {
+		log.Printf("WARNING: ALLOWED_PATHS is not set — all paths are proxied. Set ALLOWED_PATHS=/ for production hardening.")
+	}
 
 	defaultLimit := 10
 	if l := os.Getenv("RATE_LIMIT"); l != "" {
 		fmt.Sscanf(l, "%d", &defaultLimit)
 	}
 
-	sidecar := NewSidecar(upstream, limiter, ttl, failOpen, defaultLimit, useHierarchical)
+	tlsCert := os.Getenv("TLS_CERT_FILE")
+	tlsKey := os.Getenv("TLS_KEY_FILE")
+	if (tlsCert != "" || tlsKey != "") && (tlsCert == "" || tlsKey == "") {
+		log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable TLS")
+	}
+
+	sidecar := NewSidecar(
+		upstream, limiter, internalAPIKey, metricsAPIKey,
+		ttl, failOpen, defaultLimit, useHierarchical, allowQueryUserID, debug, allowedPaths,
+	)
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/metrics", auth.RequireAPIKey(metricsKey, promhttp.Handler().ServeHTTP))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		resp, err := sidecar.httpClient.Get(limiter + "/health")
@@ -261,5 +376,9 @@ func main() {
 		mode = "hierarchical /check_hierarchical"
 	}
 	log.Printf("Sidecar starting on :%s, forwarding to %s, limiter mode: %s", port, upstream, mode)
+
+	if tlsCert != "" {
+		log.Fatal(http.ListenAndServeTLS(":"+port, tlsCert, tlsKey, mux))
+	}
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }

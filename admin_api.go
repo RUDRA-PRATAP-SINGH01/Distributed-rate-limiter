@@ -100,14 +100,16 @@ func handleLimitOverride(
 			newCfg.RefillRate = defaultCfg.RefillRate
 		}
 		if err := store.SetOverride(level, id, newCfg); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("[admin] set override error: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		log.Printf("[admin] set %s override for %s: capacity=%d refill_rate=%.2f", level, id, newCfg.Capacity, newCfg.RefillRate)
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodDelete:
 		if err := store.DeleteOverride(level, id); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("[admin] delete override error: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
 		log.Printf("[admin] deleted %s override for %s", level, id)
@@ -126,7 +128,7 @@ func getOverrideByLevel(store *override.Store, level, id string) (override.Confi
 	case "tenant":
 		return store.GetTenantOverride(id)
 	case "endpoint":
-		return store.GetEndpointOverride(id)
+		return store.GetEndpointOverride(parseEndpointOverrideTenant(id), parseEndpointOverridePath(id))
 	default:
 		return override.Config{}, false
 	}
@@ -147,7 +149,7 @@ func effectiveHierarchicalLimits(cfg Config, store *override.Store, tenantID, us
 	if ov, ok := store.GetUserOverride(userID); ok {
 		userCap, userRate = ov.Capacity, ov.RefillRate
 	}
-	if ov, ok := store.GetEndpointOverride(endpoint); ok {
+	if ov, ok := store.GetEndpointOverride(tenantID, endpoint); ok {
 		endpointCap, endpointRate = ov.Capacity, ov.RefillRate
 	}
 
@@ -163,4 +165,23 @@ func effectiveHierarchicalLimitHeader(capacities []int) string {
 		}
 	}
 	return fmt.Sprintf("%d", limit)
+}
+
+// Endpoint override admin IDs use "tenant|/path" (pipe-separated, URL-encoded in path).
+func parseEndpointOverrideTenant(id string) string {
+	for i := 0; i < len(id); i++ {
+		if id[i] == '|' {
+			return id[:i]
+		}
+	}
+	return "default"
+}
+
+func parseEndpointOverridePath(id string) string {
+	for i := 0; i < len(id); i++ {
+		if id[i] == '|' {
+			return id[i+1:]
+		}
+	}
+	return id
 }

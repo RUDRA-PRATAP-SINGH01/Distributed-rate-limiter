@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -73,7 +74,9 @@ func (hl *HierarchicalLimiter) AllowWithParams(
 		1,
 	}
 
+	start := time.Now()
 	result, err := hl.script.Run(ctx, hl.rdb, keys, args...).Result()
+	metrics.RecordRedisDuration(time.Since(start).Seconds())
 	if err != nil {
 		return false, 0, fmt.Errorf("lua error: %w", err)
 	}

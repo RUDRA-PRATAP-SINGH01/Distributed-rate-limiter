@@ -2,19 +2,26 @@ services:
   redis:
     image: redis:7-alpine
     container_name: rate-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-dev-redis-password}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     networks:
       - rate-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-dev-redis-password}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   limiter:
     build:
       context: .
-      dockerfile: dockerfiles/Dockerfile.limiter   # relative path
+      dockerfile: dockerfiles/Dockerfile.limiter
     container_name: rate-limiter
     environment:
       - PORT=8080
       - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
       - ALGORITHM=sliding
       - CAPACITY=10
       - REFILL_RATE=1.0
@@ -31,6 +38,8 @@ services:
       - ENABLE_ADMIN_API=true
       - ADMIN_PORT=8082
       - ADMIN_API_KEY=dev-key-change-in-prod
+      - INTERNAL_API_KEY=dev-internal-key-change-in-prod
+      - ALLOW_QUERY_USER_ID=true
       - OVERRIDE_CACHE_TTL_MS=5000
     ports:
       - "8080:8080"
@@ -38,7 +47,14 @@ services:
     networks:
       - rate-net
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   demo:
     build:
@@ -64,14 +80,56 @@ services:
       - RATE_LIMIT=10
       - USE_HIERARCHICAL=false
       - FAIL_OPEN=false
+      - INTERNAL_API_KEY=dev-internal-key-change-in-prod
+      - ALLOW_QUERY_USER_ID=true
+      - ALLOWED_PATHS=/
+      - DEBUG=false
     ports:
       - "9090:9090"
     networks:
       - rate-net
     depends_on:
-      - limiter
-      - demo
+      limiter:
+        condition: service_healthy
+      demo:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - rate-net
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    depends_on:
+      limiter:
+        condition: service_healthy
+      sidecar:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - rate-net
+    restart: unless-stopped
+    depends_on:
+      - prometheus
 
 networks:
   rate-net:
     driver: bridge
+
+volumes:
+  grafana-data:
