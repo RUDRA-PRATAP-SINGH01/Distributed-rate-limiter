@@ -2,93 +2,223 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A distributed rate limiter built in Go using Redis and atomic Lua scripts. The system combines a central rate-limiting service, a sidecar proxy with denial caching, Prometheus observability, load testing, and chaos testing to provide a resilient and scalable traffic-control layer.
+A cloud-native distributed rate limiting platform built in Go, Redis, and Lua.
 
-**Use Cases**
+The system provides distributed traffic control through multiple rate limiting algorithms, hierarchical quota enforcement, runtime configuration management, sidecar-based deployment, Prometheus observability, load testing, and chaos engineering validation.
 
-* API rate limiting
-* Multi-tenant quota enforcement
-* DDoS mitigation
-* Service mesh sidecar integration
-* Microservice traffic protection
+Designed to explore architectural patterns commonly used in API gateways, service meshes, multi-tenant SaaS platforms, and large-scale backend systems.
 
 ---
 
-#  Features
+## Overview
 
-| Category       | Features                                                   |
-| -------------- | ---------------------------------------------------------- |
-| Core Algorithm | Atomic Redis + Lua Token Bucket                            |
-| Distributed    | Multiple limiter instances share state through Redis       |
-| Sidecar Proxy  | Denial-only local cache for reduced limiter load           |
-| Performance    | Low-latency request validation with Redis atomic execution |
-| Observability  | Prometheus metrics and health endpoints                    |
-| Resilience     | Fail-open / fail-closed modes                              |
-| Testing        | Unit tests, k6 load testing, chaos testing                 |
-| Deployment     | Docker Compose support                                     |
+Traditional in-memory rate limiters work only within a single application instance. Once traffic is distributed across multiple servers, maintaining consistent quotas becomes significantly harder due to race conditions, stale state, and coordination overhead.
+
+This project addresses those challenges through:
+
+* Redis-backed distributed state
+* Atomic Lua script execution
+* Hierarchical quota enforcement
+* Sidecar-based request interception
+* Runtime configuration updates
+* Production-oriented observability
+* Failure testing through chaos engineering
 
 ---
 
-# 🏛️ Architecture
+## Features
 
-### Components
+### Rate Limiting Algorithms
 
-* **Client** (Web / Mobile / API Consumer)
-* **Sidecar Proxy** (Port 9090)
-* **Central Rate Limiter** (Port 8080)
-* **Redis** (Port 6379)
-* **Demo Backend** (Port 8081)
+Implemented multiple algorithms to compare trade-offs and deployment strategies:
 
-### High-Level Architecture
+* In-Memory Token Bucket
+* Redis Token Bucket
+* Redis Atomic Token Bucket (Lua)
+* Sliding Window Rate Limiter
+* Hierarchical Multi-Level Rate Limiter
 
-```mermaid
-flowchart LR
+---
 
-    Client["Client"]
-    Sidecar["Sidecar Proxy<br/>Port 9090"]
-    Limiter["Central Rate Limiter<br/>Port 8080"]
-    Redis["Redis<br/>Port 6379"]
-    Backend["Demo Backend<br/>Port 8081"]
+### Distributed Enforcement
 
-    Client --> Sidecar
-    Sidecar --> Limiter
-    Limiter --> Redis
-    Sidecar --> Backend
+All distributed quota updates are executed through Redis Lua scripts to guarantee atomicity under concurrent traffic.
+
+Benefits:
+
+* No race conditions
+* No lost updates
+* Consistent quota enforcement
+* Single round-trip execution
+
+---
+
+### Hierarchical Quota Management
+
+Supports enforcement across four levels:
+
+```text
+Global
+ └── Tenant
+      └── User
+           └── Endpoint
 ```
 
-### Request Flow (Allowed Request)
+A request is permitted only if every level has available capacity.
 
-1. Client sends request to sidecar.
-2. Sidecar checks local denial cache.
-3. Cache miss triggers request to central limiter.
-4. Limiter executes Redis Lua script atomically.
-5. Redis returns token availability.
-6. Request is allowed.
-7. Sidecar forwards traffic to backend.
-8. Backend response is returned to client.
+Examples:
 
-### Request Flow (Denied Request)
-
-1. Client sends request.
-2. Sidecar forwards to limiter.
-3. Token bucket is exhausted.
-4. Limiter returns denial.
-5. Sidecar caches denial for 30ms.
-6. Client receives HTTP 429.
-7. Subsequent requests may be served directly from cache.
-
-### Failure Handling
-
-| Failure Scenario    | Behaviour                  |
-| ------------------- | -------------------------- |
-| Redis unavailable   | 503 fail-closed            |
-| Network partition   | Timeout / 503              |
-| Redis latency spike | Request timeout protection |
-| Cache corruption    | Automatic expiration       |
+* Protect platform-wide traffic
+* Limit individual tenants
+* Control user abuse
+* Restrict expensive endpoints
 
 ---
 
-#  Project Structure
+### Sidecar Proxy Architecture
+
+A dedicated sidecar service sits in front of application services and handles rate limiting independently from business logic.
+
+Responsibilities:
+
+* Request interception
+* Denial-only caching
+* Singleflight request deduplication
+* Traffic forwarding
+* Failure handling
+* Path filtering
+
+This allows backend services to remain completely unaware of rate limiting implementation details.
+
+---
+
+### Dynamic Configuration
+
+Runtime limits can be modified without restarting services.
+
+Supported overrides:
+
+* User-level limits
+* Tenant-level limits
+* Endpoint-level limits
+
+Configuration changes become effective immediately through the Admin API.
+
+---
+
+### Observability
+
+Integrated monitoring and operational tooling:
+
+* Prometheus metrics
+* Health endpoints
+* Docker health checks
+* Request latency tracking
+* Error monitoring
+* Structured logging
+
+---
+
+### Reliability Engineering
+
+The system was tested under adverse conditions to validate operational behavior.
+
+Scenarios tested:
+
+* Redis failures
+* Network partitions
+* High latency injection
+* Concurrent traffic bursts
+
+---
+
+## Architecture
+
+```text
+                        ┌─────────────┐
+                        │   Client    │
+                        └──────┬──────┘
+                               │
+                               ▼
+                ┌─────────────────────────────┐
+                │      Sidecar Proxy          │
+                │                             │
+                │ • Denial Cache              │
+                │ • Singleflight              │
+                │ • Path Allowlist            │
+                │ • TLS Support               │
+                └─────────────┬───────────────┘
+                              │
+                              ▼
+                ┌─────────────────────────────┐
+                │   Central Limiter Service   │
+                │                             │
+                │ • Token Bucket              │
+                │ • Sliding Window            │
+                │ • Hierarchical Limits       │
+                │ • Admin API                 │
+                │ • Prometheus Metrics        │
+                └─────────────┬───────────────┘
+                              │
+                              ▼
+                ┌─────────────────────────────┐
+                │           Redis             │
+                │                             │
+                │ • Lua Scripts               │
+                │ • Bucket State              │
+                │ • Overrides                 │
+                └─────────────────────────────┘
+```
+
+---
+
+## Request Lifecycle
+
+### Allowed Request
+
+```text
+Client
+   │
+   ▼
+Sidecar
+   │
+   ▼
+Limiter
+   │
+   ▼
+Redis Lua Script
+   │
+   ▼
+Allowed
+   │
+   ▼
+Backend
+```
+
+### Rejected Request
+
+```text
+Client
+   │
+   ▼
+Sidecar
+   │
+   ▼
+Limiter
+   │
+   ▼
+Redis Lua Script
+   │
+   ▼
+Quota Exceeded
+   │
+   ▼
+HTTP 429
+```
+
+---
+
+## Project Structure
 
 ```text
 .
@@ -99,10 +229,7 @@ flowchart LR
 │
 ├── cmd/
 │   ├── demo-backend/
-│   │   └── main.go
-│   │
 │   └── sidecar/
-│       └── main.go
 │
 ├── dockerfiles/
 │   ├── Dockerfile.demo
@@ -110,111 +237,84 @@ flowchart LR
 │   └── Dockerfile.sidecar
 │
 ├── internal/
+│   ├── auth/
+│   ├── identity/
 │   ├── limiter/
-│   │   ├── lua/
-│   │   │   └── token_bucket.lua
+│   │   ├── hierarchical.go
 │   │   ├── redis_atomic_token_bucket.go
-│   │   └── redis_token_bucket.go
+│   │   ├── redis_sliding_window.go
+│   │   ├── redis_token_bucket.go
+│   │   └── lua/
+│   │       ├── token_bucket.lua
+│   │       ├── sliding_window.lua
+│   │       └── hierarchical.lua
 │   │
 │   ├── metrics/
-│   │   └── metrics.go
-│   │
+│   ├── override/
 │   └── redis/
-│       └── client.go
 │
 ├── tests/
 │   └── legacy/
-│       └── race_demo.go
 │
-├── .gitignore
+├── admin_api.go
 ├── config.go
-├── docker-compose.yml
-├── go.mod
-├── go.sum
-├── LICENSE
 ├── limiter.go
-├── load-test.js
+├── ratelimit_http.go
 ├── main.go
-├── README.md
-├── sliding_window.go
-├── sliding_window_test.go
-├── token_bucket.go
-└── token_bucket_test.go
+├── load-test.js
+├── prometheus.yml
+├── docker-compose.yml
+└── README.md
 ```
 
 ---
 
-#  Quick Start
+## Getting Started
 
-## Prerequisites
+### Prerequisites
 
 * Go 1.24+
 * Docker
 * Docker Compose
+* Redis
 
 ---
 
-## Run with Docker Compose
+## Running with Docker
 
-### 1. Clone Repository
-
-```bash
-git clone https://github.com/RUDRA-PRATAP-SINGH01/Distributed-rate-limiter.git
-
-cd Distributed-rate-limiter
-```
-
-### 2. Start Services
+Clone the repository:
 
 ```bash
-docker compose up -d
+git clone https://github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter.git
+
+cd Distributed-Rate-Limiter
 ```
 
-### 3. Verify Containers
+Start the entire stack:
 
 ```bash
-docker ps
+docker compose up -d --build
 ```
 
-Expected services:
-
-* Redis
-* Central Rate Limiter
-* Sidecar Proxy
-* Demo Backend
-
-### 4. Test Rate Limiting
+Verify the service:
 
 ```bash
 curl "http://localhost:9090/check?user_id=alice"
 ```
 
-Send multiple requests:
-
-```bash
-for i in {1..15}; do
-  curl "http://localhost:9090/check?user_id=alice"
-done
-```
-
-Expected:
-
-* Initial requests return success
-* Requests beyond the limit return HTTP 429
-
-### 5. Check Metrics
-
-```bash
-curl http://localhost:8080/metrics
-```
-
-### 6. Health Check
+Health endpoint:
 
 ```bash
 curl http://localhost:8080/health
 ```
 
-### 7. Stop Services
+Metrics endpoint:
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+Shutdown:
 
 ```bash
 docker compose down -v
@@ -222,175 +322,154 @@ docker compose down -v
 
 ---
 
-## Run Locally
+## Running Tests
 
-### Start Redis
-
-```bash
-docker run -d \
-  --name rate-redis \
-  -p 6379:6379 \
-  redis
-```
-
-### Start Central Limiter
+### Unit Tests
 
 ```bash
-go run .
+go test ./...
 ```
 
-### Start Demo Backend
-
-```bash
-go run ./cmd/demo-backend
-```
-
-### Start Sidecar
-
-Linux / macOS:
-
-```bash
-export UPSTREAM_URL=http://localhost:8081
-export RATE_LIMITER_URL=http://localhost:8080
-export PORT=9090
-
-go run cmd/sidecar/main.go
-```
-
-Windows PowerShell:
-
-```powershell
-$env:UPSTREAM_URL="http://localhost:8081"
-$env:RATE_LIMITER_URL="http://localhost:8080"
-$env:PORT="9090"
-
-go run cmd/sidecar/main.go
-```
-
-### Test
-
-```bash
-curl "http://localhost:9090/check?user_id=alice"
-```
-
----
-
-#  Configuration
-
-## Central Limiter
-
-| Variable    | Default        | Description             |
-| ----------- | -------------- | ----------------------- |
-| PORT        | 8080           | HTTP port               |
-| REDIS_ADDR  | localhost:6379 | Redis address           |
-| CAPACITY    | 10             | Token bucket capacity   |
-| REFILL_RATE | 1.0            | Tokens added per second |
-
-## Sidecar
-
-| Variable         | Default  | Description                          |
-| ---------------- | -------- | ------------------------------------ |
-| UPSTREAM_URL     | Required | Protected backend URL                |
-| RATE_LIMITER_URL | Required | Limiter endpoint                     |
-| PORT             | 9090     | Sidecar port                         |
-| FAIL_OPEN        | false    | Allow traffic if limiter unavailable |
-| RATE_LIMIT       | 10       | Rate limit header value              |
-
----
-
-#  Observability
-
-Metrics Endpoint:
-
-```text
-/metrics
-```
-
-Health Endpoint:
-
-```text
-/health
-```
-
-Metrics collected:
-
-* Total Requests
-* Allowed Requests
-* Denied Requests
-* Redis Latency
-* Cache Hits
-* Cache Misses
-* Request Duration
-
----
-
-#  Testing
-
-## Unit Tests
-
-```bash
-go test -v ./...
-```
-
-## Race Detection
+### Race Detection
 
 ```bash
 go test -race ./...
 ```
 
-## Load Testing
+### Load Testing
 
 ```bash
 k6 run load-test.js
 ```
 
-Sample Results:
+### Chaos Testing
 
-```text
-P99 latency < 12ms
-Error rate < 1%
-Status validation 100%
+Redis Failure:
+
+```bash
+./chaos/chaos_test.sh
 ```
 
----
-
-## Chaos Testing
-
-### Redis Failure
-
-```powershell
-.\chaos\chaos_test.ps1
-```
-
-Expected:
-
-```text
-Redis unavailable -> 503
-Redis restored -> service recovery
-```
-
-### Network Partition
+Network Partition:
 
 ```bash
 python chaos/network_partition.py
 ```
 
-Expected:
-
-```text
-Limiter unreachable -> timeout / 503
-Network restored -> recovery
-```
-
-### High Latency
+High Latency Injection:
 
 ```bash
 python chaos/high_latency.py
 ```
 
-Expected:
+---
 
-```text
-Injected latency handled within timeout limits
+## Admin API
+
+### Create User Override
+
+```bash
+curl -X POST \
+http://localhost:8082/admin/limits/user/alice \
+-H "Content-Type: application/json" \
+-d '{
+      "capacity":20,
+      "refill_rate":2
+    }'
 ```
 
+### Retrieve Override
+
+```bash
+curl http://localhost:8082/admin/limits/user/alice
+```
+
+### Delete Override
+
+```bash
+curl -X DELETE \
+http://localhost:8082/admin/limits/user/alice
+```
+
+Equivalent APIs are available for tenants and endpoints.
+
+---
+
+## Technical Challenges
+
+### Distributed Consistency
+
+A distributed rate limiter must prevent concurrent requests from corrupting quota state.
+
+Solved using Redis Lua scripts that execute atomically.
+
+---
+
+### Hierarchical Enforcement
+
+A request may satisfy user-level limits while violating tenant-level limits.
+
+Implemented multi-level validation through a single execution path.
+
+---
+
+### Cache Correctness
+
+Caching successful requests can introduce stale decisions.
+
+The sidecar uses denial-only caching to preserve correctness while reducing repeated rejection traffic.
+
+---
+
+### Metrics Cardinality
+
+Per-user metrics can overwhelm monitoring systems.
+
+Implemented bounded labels to maintain predictable Prometheus storage requirements.
+
+---
+
+## Trade-Offs
+
+| Decision              | Benefit                 | Cost                             |
+| --------------------- | ----------------------- | -------------------------------- |
+| Denial-only cache     | Strong correctness      | More limiter traffic             |
+| Redis-based state     | Distributed consistency | External dependency              |
+| Single Redis instance | Simpler deployment      | No high availability             |
+| Sidecar architecture  | Separation of concerns  | Additional network hop           |
+| Runtime overrides     | Operational flexibility | Higher implementation complexity |
+
+---
+
+## Tech Stack
+
+**Backend**
+
+* Go
+
+**Distributed State**
+
+* Redis
+* Lua
+
+**Infrastructure**
+
+* Docker
+* Docker Compose
+
+**Observability**
+
+* Prometheus
+
+**Testing**
+
+* k6
+* Go Testing
+* Chaos Engineering Scripts
+
+---
+
+
+## License
+
+This project is licensed under the MIT License.
