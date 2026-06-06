@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// SlidingWindow counts timestamps inside a rolling window — stricter burst control than token bucket.
+// In-memory variant for tests; production uses Redis sorted sets via Lua.
+
 type SlidingWindow struct {
 	limit    int
 	window   time.Duration
@@ -27,6 +30,8 @@ func (sw *SlidingWindow) Allow(userID string) (bool, int, error) {
 	now := time.Now()
 	timestamps := sw.requests[userID]
 	cutoff := now.Add(-sw.window)
+
+	// Drop expired entries — the window "slides" forward with each request.
 	valid := []time.Time{}
 	for _, ts := range timestamps {
 		if ts.After(cutoff) {

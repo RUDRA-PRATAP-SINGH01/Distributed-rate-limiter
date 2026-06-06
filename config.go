@@ -7,14 +7,16 @@ import (
 	"strconv"
 )
 
+// Config holds all runtime tuning knobs. Everything is env-driven so the same binary
+// runs locally, in Docker, and on Railway without recompilation.
 type Config struct {
-	Port       int
-	RedisAddr  string
+	Port          int
+	RedisAddr     string
 	RedisPassword string
-	Algorithm  string
-	Capacity   int
-	RefillRate float64
-	WindowSec  int
+	Algorithm     string
+	Capacity      int
+	RefillRate    float64
+	WindowSec     int
 
 	EnableHierarchical bool
 	EnableAdminAPI     bool
@@ -23,16 +25,16 @@ type Config struct {
 	OverrideCacheTTLMs int
 
 	// Security
-	InternalAPIKey   string
-	MetricsAPIKey    string
+	InternalAPIKey     string
+	MetricsAPIKey      string
 	MetricsRequireAuth bool
-	AllowQueryUserID bool
-	StrictConfig     bool
-	StrictSecurity   bool
-	TLSCertFile      string
-	TLSKeyFile       string
+	AllowQueryUserID   bool
+	StrictConfig       bool
+	StrictSecurity     bool
+	TLSCertFile        string
+	TLSKeyFile         string
 
-	// Hierarchical limits
+	// Hierarchical limits — each level can independently cap traffic (SaaS-style quotas).
 	GlobalCapacity     int
 	GlobalRefillRate   float64
 	TenantCapacity     int
@@ -69,6 +71,7 @@ func LoadConfig() Config {
 		EnableHierarchical: getEnv("ENABLE_HIERARCHICAL", "true") == "true",
 		EnableAdminAPI:     getEnv("ENABLE_ADMIN_API", "true") == "true",
 		AdminPort:          mustParseIntEnv("ADMIN_PORT", "8082", strict),
+		// Default is a dev placeholder only — override in any shared or production environment.
 		AdminAPIKey:        getEnv("ADMIN_API_KEY", "dev-key-change-in-prod"),
 		OverrideCacheTTLMs: mustParseIntEnv("OVERRIDE_CACHE_TTL_MS", "5000", strict),
 
@@ -76,11 +79,10 @@ func LoadConfig() Config {
 		MetricsAPIKey:      getEnv("METRICS_API_KEY", ""),
 		MetricsRequireAuth: getEnv("METRICS_REQUIRE_AUTH", "false") == "true",
 		AllowQueryUserID:   getEnv("ALLOW_QUERY_USER_ID", "false") == "true",
-		StrictConfig:     strict,
-		StrictSecurity:   getEnv("STRICT_SECURITY", "false") == "true",
-		TLSCertFile:      getEnv("TLS_CERT_FILE", ""),
-		TLSKeyFile:       getEnv("TLS_KEY_FILE", ""),
-
+		StrictConfig:       strict,
+		StrictSecurity:     getEnv("STRICT_SECURITY", "false") == "true",
+		TLSCertFile:        getEnv("TLS_CERT_FILE", ""),
+		TLSKeyFile:         getEnv("TLS_KEY_FILE", ""),
 		GlobalCapacity:     mustParseIntEnv("GLOBAL_CAPACITY", "1000000", strict),
 		GlobalRefillRate:   mustParseFloatEnv("GLOBAL_REFILL_RATE", "10000.0", strict),
 		TenantCapacity:     mustParseIntEnv("TENANT_CAPACITY", "100000", strict),
@@ -113,6 +115,8 @@ func getEnv(key, defaultVal string) string {
 	return defaultVal
 }
 
+// mustParseIntEnv rejects garbage like CAPACITY=abc. In strict mode we fail startup
+// instead of silently running with capacity 0 (which would deny everyone or break Lua).
 func mustParseIntEnv(key, defaultVal string, strict bool) int {
 	raw := getEnv(key, defaultVal)
 	value, err := strconv.Atoi(raw)

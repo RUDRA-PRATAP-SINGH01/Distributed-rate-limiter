@@ -1,3 +1,7 @@
+// Admin API: runtime override CRUD for hierarchical limits.
+//
+// Overrides are stored in Redis and merged into each /check_hierarchical call.
+// This lets ops bump a tenant's quota during an incident without redeploying sidecars.
 package main
 
 import (
@@ -134,6 +138,8 @@ func getOverrideByLevel(store *override.Store, level, id string) (override.Confi
 	}
 }
 
+// effectiveHierarchicalLimits merges static env defaults with Redis overrides.
+// Each level is evaluated independently in Lua; this function only supplies the numbers.
 func effectiveHierarchicalLimits(cfg Config, store *override.Store, tenantID, userID, endpoint string) ([]int, []float64) {
 	globalCap, globalRate := cfg.GlobalCapacity, cfg.GlobalRefillRate
 	tenantCap, tenantRate := cfg.TenantCapacity, cfg.TenantRefillRate
@@ -157,6 +163,8 @@ func effectiveHierarchicalLimits(cfg Config, store *override.Store, tenantID, us
 		[]float64{globalRate, tenantRate, userRate, endpointRate}
 }
 
+// X-RateLimit-Limit header shows the tightest capacity across all hierarchical levels
+// so clients see the bottleneck they actually hit.
 func effectiveHierarchicalLimitHeader(capacities []int) string {
 	limit := capacities[0]
 	for _, cap := range capacities[1:] {
@@ -167,7 +175,7 @@ func effectiveHierarchicalLimitHeader(capacities []int) string {
 	return fmt.Sprintf("%d", limit)
 }
 
-// Endpoint override admin IDs use "tenant|/path" (pipe-separated, URL-encoded in path).
+// Endpoint overrides are tenant-scoped: admin path id is "tenant|/path" (URL-encode the pipe).
 func parseEndpointOverrideTenant(id string) string {
 	for i := 0; i < len(id); i++ {
 		if id[i] == '|' {

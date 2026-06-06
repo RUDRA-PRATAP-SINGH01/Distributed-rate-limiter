@@ -1,3 +1,5 @@
+// Minimal upstream target for sidecar demos and load tests.
+// In production this would be your real API; here it proves the proxy path end-to-end.
 package main
 
 import (

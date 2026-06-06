@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+// Validates sliding-window edge: deny at limit, allow again after window rolls forward.
+
 func TestSlidingWindow_Allow(t *testing.T) {
 	sw := NewSlidingWindow(3, 2*time.Second)
 	user := "alice"

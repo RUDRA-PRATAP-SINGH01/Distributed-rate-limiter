@@ -1,3 +1,10 @@
+// Sidecar proxy: sits in front of the application and enforces limits before upstream work runs.
+//
+// Architecture pattern (service mesh lite):
+//   Client -> Sidecar -> [central limiter + Redis] -> upstream backend
+//
+// Denials can be cached briefly to protect Redis under abuse; allowances always re-check
+// so token counts stay accurate. singleflight collapses concurrent misses for the same key.
 package main
 
 import (
@@ -51,7 +58,7 @@ type Sidecar struct {
 	defaultLimit     int
 	useHierarchical  bool
 	httpClient       *http.Client
-	proxy            *httputil.ReverseProxy
+	proxy            *httputil.ReverseProxy // created once — reusing per request would leak goroutines
 }
 
 func NewSidecar(
@@ -89,6 +96,8 @@ func (s *Sidecar) debugf(format string, args ...interface{}) {
 	}
 }
 
+// cacheKey scopes entries by tenant + user + path in hierarchical mode so
+// /api/login and /api/search maintain separate endpoint buckets.
 func (s *Sidecar) cacheKey(r *http.Request, userID string) string {
 	if !s.useHierarchical {
 		return userID
@@ -139,6 +148,8 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		entry := val.(CacheEntry)
 		if time.Now().Before(entry.ExpiresAt) {
 			if !entry.Allowed {
+				// Only denials are served from cache — allowed responses must re-hit Redis
+				// or attackers could freeze their quota at "allowed" forever.
 				s.debugf("Serving cached DENIAL for %s", cacheKey)
 				metrics.RecordCacheHit()
 				s.writeDenial(w, entry.Limit, entry.Remaining, entry.RetryAfter)
@@ -154,6 +165,7 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	metrics.RecordCacheMiss()
 
+	// singleflight: 100 concurrent requests for the same user share one limiter round-trip.
 	resultAny, err, _ := s.limitFlight.Do(cacheKey, func() (interface{}, error) {
 		return s.checkRateLimit(r, userID)
 	})
@@ -222,6 +234,7 @@ func (s *Sidecar) checkRateLimit(r *http.Request, userID string) (limitResult, e
 		return limitResult{}, err
 	}
 
+	// Identity travels in headers, not query strings — harder to spoof from the browser.
 	req.Header.Set(identity.UserIDHeader, userID)
 	if s.internalAPIKey != "" {
 		req.Header.Set(auth.InternalAPIKeyHeader, s.internalAPIKey)
@@ -354,7 +367,7 @@ func main() {
 			return
 		}
 		defer resp.Body.Close()
-		io.Copy(io.Discard, resp.Body)
+		io.Copy(io.Discard, resp.Body) // drain body so keep-alive connections are reused
 
 		if resp.StatusCode != http.StatusOK {
 			w.WriteHeader(http.StatusServiceUnavailable)

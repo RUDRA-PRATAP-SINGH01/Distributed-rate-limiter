@@ -6,6 +6,8 @@ import (
 	"net/http"
 )
 
+// retryAfterForCheck derives a conservative Retry-After from the active algorithm.
+// Token bucket: time to refill one token. Sliding window: full window length.
 func retryAfterForCheck(cfg Config) string {
 	switch cfg.Algorithm {
 	case "sliding":
@@ -19,8 +21,9 @@ func retryAfterForCheck(cfg Config) string {
 	}
 }
 
+// retryAfterForHierarchical uses the slowest refill rate across levels.
+// When four buckets stack, the client should wait for the tightest refill curve.
 func retryAfterForHierarchical(cfg Config) string {
-	// Use the slowest refill among levels (usually endpoint) as a conservative hint.
 	minRate := cfg.EndpointRefillRate
 	if cfg.UserRefillRate < minRate {
 		minRate = cfg.UserRefillRate
@@ -42,6 +45,7 @@ func rateLimitLimitHeader(cfg Config) string {
 	return fmt.Sprintf("%d", cfg.Capacity)
 }
 
+// Static header helper when overrides are not in play (legacy / docs).
 func hierarchicalRateLimitLimitHeader(cfg Config) string {
 	limit := cfg.GlobalCapacity
 	if cfg.TenantCapacity < limit {

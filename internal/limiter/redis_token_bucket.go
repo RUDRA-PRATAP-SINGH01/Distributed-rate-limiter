@@ -3,11 +3,16 @@ package limiter
 import (
 	"context"
 	"fmt"
-	"github.com/redis/go-redis/v9"
 	"strconv"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
+// RedisTokenBucket is the non-atomic Redis implementation (read, compute, write as separate commands).
+//
+// Kept for reference and race-condition demos — production uses RedisAtomicTokenBucket instead.
+// Two concurrent Allow() calls can both observe the same token count and both succeed.
 type RedisTokenBucket struct {
 	rdb        *redis.Client
 	capacity   int
@@ -26,7 +31,6 @@ func (tb *RedisTokenBucket) Allow(userID string) (bool, int, error) {
 	ctx := context.Background()
 	key := fmt.Sprintf("rate:%s", userID)
 
-	// Read current state
 	tokensStr, err := tb.rdb.HGet(ctx, key, "tokens").Result()
 	var tokens float64
 	var lastRefill time.Time
@@ -43,7 +47,6 @@ func (tb *RedisTokenBucket) Allow(userID string) (bool, int, error) {
 		lastRefill = time.Unix(lastRefillUnix, 0)
 	}
 
-	// Refill logic
 	now := time.Now()
 	elapsed := now.Sub(lastRefill).Seconds()
 	newTokens := tokens + elapsed*tb.refillRate
@@ -57,7 +60,6 @@ func (tb *RedisTokenBucket) Allow(userID string) (bool, int, error) {
 		allowed = true
 	}
 
-	// Write back
 	tb.rdb.HSet(ctx, key, "tokens", newTokens, "last_refill", now.Unix())
 	tb.rdb.Expire(ctx, key, 1*time.Hour)
 

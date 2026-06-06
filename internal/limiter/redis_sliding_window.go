@@ -14,6 +14,8 @@ import (
 //go:embed lua/sliding_window.lua
 var slidingWindowLua string
 
+// RedisSlidingWindow implements a fixed-window counter in Redis sorted sets.
+// Better when you need "max N requests per 60s" rather than smooth token refill.
 type RedisSlidingWindow struct {
 	rdb    *redis.Client
 	limit  int
@@ -35,7 +37,9 @@ func (rw *RedisSlidingWindow) Allow(userID string) (bool, int, error) {
 	key := fmt.Sprintf("sw:%s", userID)
 	now := time.Now().UnixMilli()
 	windowStart := now - rw.window.Milliseconds()
-	member := fmt.Sprintf("%d:%d", now, time.Now().UnixNano())
+	member := fmt.Sprintf("%d:%d", now, time.Now().UnixNano()) // unique member avoids ZADD collisions
+
+	// EXPIRE must be at least 1s — Redis rejects sub-second TTL on older configs.
 	expireSec := int((rw.window.Milliseconds() + 999) / 1000)
 	if expireSec < 1 {
 		expireSec = 1

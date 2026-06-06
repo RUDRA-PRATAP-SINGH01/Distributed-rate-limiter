@@ -13,6 +13,8 @@ import (
 //go:embed lua/hierarchical.lua
 var hierarchicalLua string
 
+// HierarchicalLimiter enforces four stacked token buckets in a single Lua script.
+// All levels must approve before any token is deducted — partial commits are impossible.
 type HierarchicalLimiter struct {
 	rdb          *redis.Client
 	script       *redis.Script
@@ -55,6 +57,8 @@ func (hl *HierarchicalLimiter) Allow(
 	)
 }
 
+// AllowWithParams accepts dynamic capacities (from admin overrides) while keeping
+// the same atomic multi-key Lua evaluation.
 func (hl *HierarchicalLimiter) AllowWithParams(
 	keys []string,
 	capacities []int,

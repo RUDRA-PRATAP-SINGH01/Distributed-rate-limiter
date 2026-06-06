@@ -1,3 +1,8 @@
+// Package main is the central rate limiter service.
+//
+// This process owns the authoritative quota state in Redis. Sidecars call it over HTTP;
+// they may cache denials locally but never own the source of truth. That split keeps
+// enforcement consistent across a fleet while still cutting latency on hot paths.
 package main
 
 import (
@@ -27,14 +32,20 @@ var overrideStore *override.Store
 func main() {
 	cfg := LoadConfig()
 
+	// Fail fast if Redis is down. A limiter that starts without verified connectivity
+	// would either panic on first request or silently mis-report health.
 	rdb := redisclient.NewClient(cfg.RedisAddr, cfg.RedisPassword)
 	if err := redisclient.Ping(rdb); err != nil {
 		log.Fatalf("Redis unreachable at %s: %v", cfg.RedisAddr, err)
 	}
 	log.Printf("Redis connection verified at %s", cfg.RedisAddr)
 
+	// Override store sits beside the algorithm layer: limits can be tuned at runtime
+	// without redeploying binaries. Local TTL cache avoids a Redis round-trip per check.
 	overrideStore = override.NewStore(rdb, time.Duration(cfg.OverrideCacheTTLMs)*time.Millisecond)
 
+	// Algorithm is swappable via env. Token bucket gives smooth refill; sliding window
+	// gives hard per-window caps. Both use Lua so increment + read is atomic cluster-wide.
 	switch cfg.Algorithm {
 	case "sliding":
 		limiterInstance = limiter.NewRedisSlidingWindow(rdb, cfg.Capacity, time.Duration(cfg.WindowSec)*time.Second)
@@ -60,11 +71,15 @@ func main() {
 		metricsKey = cfg.MetricsAuthKey()
 	}
 	mux := http.NewServeMux()
+
+	// Metrics stay open by default so Prometheus can scrape without bearer tokens.
+	// Flip METRICS_REQUIRE_AUTH in production if the endpoint is on a public network.
 	mux.Handle("/metrics", auth.RequireAPIKey(metricsKey, promhttp.Handler().ServeHTTP))
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := rdb.Ping(context.Background()).Err(); err != nil {
+			// Deliberately vague body: external callers get status only, not infra details.
 			log.Printf("health check failed: %v", err)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy"})
@@ -74,6 +89,8 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
 	})
 
+	// /check is the flat per-user limiter path. Protected by INTERNAL_API_KEY so only
+	// trusted sidecars (or internal services) can consume quota on behalf of users.
 	mux.HandleFunc("/check", auth.RequireAPIKey(cfg.InternalAPIKey, func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		userID, err := identity.ResolveUserID(r, cfg.AllowQueryUserID)
@@ -86,6 +103,7 @@ func main() {
 
 		allowed, remaining, err := limiterInstance.Allow(userID)
 		if err != nil {
+			// Redis/Lua failure is 503, not 429. Mixing them would hide outages as "rate limited".
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]string{
@@ -113,6 +131,8 @@ func main() {
 	}))
 
 	if cfg.EnableHierarchical {
+		// Hierarchical check enforces four independent buckets in one Lua round-trip.
+		// A request must pass every level; remaining reflects the tightest constraint.
 		mux.HandleFunc("/check_hierarchical", auth.RequireAPIKey(cfg.InternalAPIKey, func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
@@ -135,6 +155,7 @@ func main() {
 				endpoint = "default"
 			}
 
+			// Keys are namespaced so tenants and endpoints never share Redis state accidentally.
 			globalKey := "rate:global"
 			tenantKey := fmt.Sprintf("rate:tenant:%s", tenantID)
 			userKey := fmt.Sprintf("rate:user:%s", userID)
@@ -183,6 +204,8 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
+	// Admin API runs on a separate port so override CRUD can be network-isolated from
+	// the hot /check path in production (e.g. internal-only on Railway/K8s).
 	adminSrv := startAdminServer(cfg, overrideStore)
 
 	go func() {
@@ -198,6 +221,7 @@ func main() {
 		}
 	}()
 
+	// Graceful shutdown drains in-flight checks before exit — important during rolling deploys.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

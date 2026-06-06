@@ -2,7 +2,9 @@ import http from 'k6/http';
 import { sleep, check } from 'k6';
 import { Rate } from 'k6/metrics';
 
-// Custom metric: only count network errors or 5xx as failures
+// k6 load test: hits the sidecar (not the central limiter directly) to mimic production traffic.
+// real_failures excludes 429 — rate limiting is success, not an outage.
+
 const realFailures = new Rate('real_failures');
 
 export const options = {
@@ -20,6 +22,7 @@ export const options = {
 export default function () {
     const userId = `test_user_${Math.floor(Math.random() * 100)}`;
     const url = `http://localhost:9090/check`;
+    // X-User-ID mirrors production: identity from gateway header, not spoofable query param.
     const res = http.get(url, {
         headers: { 'X-User-ID': userId },
     });

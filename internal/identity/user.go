@@ -1,3 +1,7 @@
+// Package identity resolves who is consuming quota on a request.
+//
+// Production traffic should arrive with X-User-ID set by an auth gateway (JWT validated
+// upstream). Query-string user_id is opt-in for local demos only.
 package identity
 
 import (
@@ -9,8 +13,7 @@ import (
 const UserIDHeader = "X-User-ID"
 
 // ResolveUserID returns a trusted user identifier.
-// Production: only X-User-ID (set by auth gateway or sidecar).
-// Dev/demo: query ?user_id= allowed when allowQuery is true.
+// allowQuery enables ?user_id= for development; disable it anywhere clients are untrusted.
 func ResolveUserID(r *http.Request, allowQuery bool) (string, error) {
 	if userID := strings.TrimSpace(r.Header.Get(UserIDHeader)); userID != "" {
 		return userID, nil

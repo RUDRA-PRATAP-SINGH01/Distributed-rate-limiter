@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+// In-memory token bucket used by unit tests and as a reference implementation.
+// Production uses RedisAtomicTokenBucket — this version shows the refill math without network I/O.
+
 type userBucket struct {
 	tokens     float64
 	lastRefill time.Time
@@ -14,7 +17,7 @@ type TokenBucket struct {
 	capacity   int
 	refillRate float64
 	mu         sync.Mutex
-	users      map[string]*userBucket
+	users      map[string]*userBucket // per-user isolation: one noisy neighbor cannot drain others
 }
 
 func NewTokenBucket(capacity int, refillRate float64) *TokenBucket {

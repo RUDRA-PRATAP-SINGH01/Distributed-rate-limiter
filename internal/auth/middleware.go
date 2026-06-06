@@ -1,3 +1,5 @@
+// Package auth provides lightweight HTTP middleware for shared-secret authentication.
+// Used between sidecars and the central limiter, and optionally on /metrics.
 package auth
 
 import "net/http"
@@ -6,7 +8,7 @@ const APIKeyHeader = "X-API-Key"
 const InternalAPIKeyHeader = "X-Internal-API-Key"
 
 // RequireAPIKey wraps a handler and rejects requests when the key does not match.
-// When expectedKey is empty the middleware is a no-op (dev / internal-network mode).
+// Empty expectedKey disables the check — useful for local Prometheus scraping.
 func RequireAPIKey(expectedKey string, next http.HandlerFunc) http.HandlerFunc {
 	if expectedKey == "" {
 		return next

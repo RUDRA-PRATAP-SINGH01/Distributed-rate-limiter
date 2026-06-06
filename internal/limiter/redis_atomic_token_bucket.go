@@ -14,6 +14,10 @@ import (
 //go:embed lua/token_bucket.lua
 var luaScript string
 
+// RedisAtomicTokenBucket is the production limiter path.
+//
+// Why Lua: a naive GET-then-SET from Go has a race — two sidecars can both read
+// "1 token left" and both allow. EVAL runs refill + deduct atomically on the Redis primary.
 type RedisAtomicTokenBucket struct {
 	rdb        *redis.Client
 	capacity   int
@@ -40,7 +44,7 @@ func (tb *RedisAtomicTokenBucket) Allow(userID string) (bool, int, error) {
 		tb.capacity,
 		tb.refillRate,
 		now,
-		1, // requested tokens
+		1, // one request consumes one token
 	).Result()
 	metrics.RecordRedisDuration(time.Since(start).Seconds())
 
@@ -61,6 +65,7 @@ func (tb *RedisAtomicTokenBucket) Allow(userID string) (bool, int, error) {
 	return allowed, remaining, nil
 }
 
+// luaInt normalizes Redis/Lua return types — RESP encodings differ by version and driver.
 func luaInt(v interface{}) int64 {
 	switch n := v.(type) {
 	case int64:

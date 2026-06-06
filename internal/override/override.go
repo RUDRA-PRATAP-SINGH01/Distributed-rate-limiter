@@ -1,3 +1,7 @@
+// Runtime limit overrides stored in Redis and cached locally.
+//
+// Pattern: read-through cache with short TTL so admin changes propagate within seconds
+// without hammering Redis on every hierarchical check.
 package override
 
 import (
@@ -17,7 +21,7 @@ type Config struct {
 
 type Store struct {
 	rdb   *redis.Client
-	cache sync.Map
+	cache sync.Map // keyed by full Redis key; safe for concurrent readers
 	ttl   time.Duration
 }
 
@@ -50,6 +54,8 @@ func (s *Store) GetEndpointOverride(tenantID, endpoint string) (Config, bool) {
 	return s.getOverride("endpoint", EndpointOverrideID(tenantID, endpoint))
 }
 
+// EndpointOverrideID scopes endpoint limits per tenant — two tenants can share a path
+// like /api/login without sharing the same bucket.
 func EndpointOverrideID(tenantID, endpoint string) string {
 	return tenantID + "|" + endpoint
 }
@@ -83,7 +89,7 @@ func (s *Store) SetOverride(level, id string, cfg Config) error {
 	if err := s.rdb.HSet(ctx, key, "capacity", cfg.Capacity, "refill_rate", cfg.RefillRate).Err(); err != nil {
 		return err
 	}
-	s.cache.Delete(key)
+	s.cache.Delete(key) // invalidate so next read picks up the new limits immediately
 	return nil
 }
 
