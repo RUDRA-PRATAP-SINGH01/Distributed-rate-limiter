@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 benchmarks/*/results/*.json
 benchmarks/*/results/
+benchmarks/metrics/results/
+benchmarks/graphs/*.png
