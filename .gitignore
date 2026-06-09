@@ -1,3 +1,7 @@
 sidecar.exe
 rate-limiter.exe
 *.exe
+__pycache__/
+*.pyc
+benchmarks/*/results/*.json
+benchmarks/*/results/
