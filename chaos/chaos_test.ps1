@@ -28,7 +28,7 @@ Write-Host "OK: Redis is running." -ForegroundColor Green
 
 $limiterOk = Test-Service "http://localhost:8080/health" "Central limiter"
 if (-not $limiterOk) {
-    Write-Host "FAIL: Central limiter not reachable on port 8080. Start with: go run ." -ForegroundColor Red
+    Write-Host "FAIL: Central limiter not reachable on port 8080. Start with: go run ./cmd/limiter" -ForegroundColor Red
     exit 1
 }
 Write-Host "OK: Central limiter is healthy." -ForegroundColor Green

@@ -227,9 +227,16 @@ HTTP 429
 │   ├── high_latency.py
 │   └── network_partition.py
 │
+├── benchmarks/          # k6 load tests, results, graphs, metrics
+├── chaos/               # fault-injection scripts and tests
+│
 ├── cmd/
-│   ├── demo-backend/
-│   └── sidecar/
+│   ├── limiter/         # central rate limiter service (main binary)
+│   ├── demo-backend/    # sample upstream API
+│   └── sidecar/         # sidecar proxy with local cache
+│
+├── deploy/
+│   └── prometheus.yml   # Prometheus scrape config (optional stack)
 │
 ├── dockerfiles/
 │   ├── Dockerfile.demo
@@ -239,16 +246,12 @@ HTTP 429
 ├── internal/
 │   ├── auth/
 │   ├── identity/
-│   ├── limiter/
+│   ├── limiter/         # Redis-backed algorithms (production)
 │   │   ├── hierarchical.go
 │   │   ├── redis_atomic_token_bucket.go
 │   │   ├── redis_sliding_window.go
 │   │   ├── redis_token_bucket.go
 │   │   └── lua/
-│   │       ├── token_bucket.lua
-│   │       ├── sliding_window.lua
-│   │       └── hierarchical.lua
-│   │
 │   ├── metrics/
 │   ├── override/
 │   └── redis/
@@ -256,13 +259,6 @@ HTTP 429
 ├── tests/
 │   └── legacy/
 │
-├── admin_api.go
-├── config.go
-├── limiter.go
-├── ratelimit_http.go
-├── main.go
-├── load-test.js
-├── prometheus.yml
 ├── docker-compose.yml
 └── README.md
 ```
@@ -339,7 +335,7 @@ go test -race ./...
 ### Load Testing
 
 ```bash
-k6 run load-test.js
+k6 run benchmarks/load-test.js
 ```
 
 ### Chaos Testing

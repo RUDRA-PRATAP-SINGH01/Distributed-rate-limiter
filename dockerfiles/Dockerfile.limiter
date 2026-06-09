@@ -3,7 +3,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -o rate-limiter .
+RUN go build -o rate-limiter ./cmd/limiter
 
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates wget
