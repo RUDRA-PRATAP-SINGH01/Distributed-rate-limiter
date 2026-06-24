@@ -1,4 +1,4 @@
-# Why Lua Scripts in Redis
+﻿# Why Lua Scripts in Redis
 
 **Status:** Accepted  
 **Date:** 2025-06  
@@ -6,22 +6,22 @@
 
 ---
 
-## 1. Problem Statement
+## Problem Statement
 
 Distributed rate limiting breaks the moment two goroutines on two machines both read "remaining=1" and both allow the request. I needed every increment, compare, and state transition to happen atomically in one server-side execution, without MULTI/EXEC races or application-level locks that fail across process crashes.
 
-## 2. Why the problem exists
+## Why the problem exists
 
 Redis commands are single-key atomic, but quota checks are multi-field workflows: read tokens, subtract one, set TTL, return remaining. Idempotency claims must decide between replay, in-progress, hash-mismatch, and new-claim in one decision. Circuit breaker Allow/Record pairs must not double-count probes during concurrent failover traffic. Naive `GET` + `SET` from Go loses races under concurrent sidecars.
 
-## 3. Design goals
+## Design goals
 
-- **Single round-trip atomicity** for hot paths.
-- **Embeddable scripts** via `//go:embed` so binaries are self-contained (no runtime script fetch).
-- **Explicit return codes** from Lua (integers) parsed in Go — easier to test than parsing nested JSON.
-- **Consistent pattern** across packages: `internal/limiter/lua/`, `internal/idempotency/lua/`, `internal/circuitbreaker/lua/`, `internal/routing/lua/`, `internal/audit/lua/`.
+- Single round-trip atomicity: For hot paths.
+- Embeddable scripts: Via `//go:embed` so binaries are self-contained (no runtime script fetch).
+- Explicit return codes: From Lua (integers) parsed in Go. easier to test than parsing nested JSON.
+- Consistent pattern: Across packages: `internal/limiter/lua/`, `internal/idempotency/lua/`, `internal/circuitbreaker/lua/`, `internal/routing/lua/`, `internal/audit/lua/`.
 
-## 4. Alternative approaches considered
+## Alternative approaches considered
 
 | Alternative | Why I rejected it |
 |-------------|-------------------|
@@ -31,7 +31,7 @@ Redis commands are single-key atomic, but quota checks are multi-field workflows
 | **Compare-and-swap with version fields** | Possible but more round-trips and client complexity than one `EVAL`. |
 | **Move logic to stored procedures in SQL** | Wrong store; I already committed to Redis for counters. |
 
-## 5. Final architecture
+## Final architecture
 
 Each subsystem registers a `redis.Script` at init:
 
@@ -47,7 +47,7 @@ Example: `claim.lua` returns `{1, fence_token}` for new claim, `{2, status, head
 
 Limiter selects algorithm via `ALGORITHM=token|sliding` and runs the corresponding script on every `/check` and `/check_hierarchical`.
 
-## 6. Tradeoffs
+## Tradeoffs
 
 | Choice | Benefit | Cost |
 |--------|---------|------|
@@ -56,25 +56,25 @@ Limiter selects algorithm via `ALGORITHM=token|sliding` and runs the correspondi
 | Integer return codes | Fast parsing | Documented contract per script |
 | Server-side TTL logic | Fewer client bugs | Harder to debug than stepping through Go |
 
-## 7. Failure modes
+## Failure modes
 
-- **SCRIPT LOAD failures after Redis upgrade:** Rare; go-redis re-sends script body on `EVAL`.
-- **Long-running scripts:** Block Redis single thread; I kept scripts O(1) per key.
-- **Key mismatch in ARGV:** Wrong fence token → `complete.lua` returns `{0}` → Go returns `ErrStaleFence`.
-- **Redis down:** All Lua paths fail; circuit breaker records `OutcomeFailure` on `TargetRedis`.
+- SCRIPT LOAD failures after Redis upgrade: Rare; go-redis re-sends script body on `EVAL`.
+- Long-running scripts: Block Redis single thread; I kept scripts O(1) per key.
+- Key mismatch in ARGV: Wrong fence token → `complete.lua` returns `{0}` → Go returns `ErrStaleFence`.
+- Redis down: All Lua paths fail; circuit breaker records `OutcomeFailure` on `TargetRedis`.
 
-## 8. Operational concerns
+## Operational concerns
 
-- When changing a script, treat it as a **breaking schema change** — rolling deploys must tolerate old+new return codes briefly or flush state.
+- When changing a script, treat it as a **breaking schema change**. rolling deploys must tolerate old+new return codes briefly or flush state.
 - Use `redis_failover_reconnects_total` and `*_redis_duration_seconds` histograms per subsystem to spot script latency regressions.
 - Chaos tests (`chaos/chaos_test.ps1`) assume Lua-backed enforcement; disabling Redis invalidates test assumptions.
 
-## 9. Performance implications
+## Performance implications
 
-Lua execution is in-process to Redis — typically sub-millisecond for my scripts. The dominant cost is network RTT, which is why hierarchical limits use one script for four buckets instead of four round-trips. Idempotency adds one Lua call before upstream work; routing adds one on every gateway outcome. Benchmarks under `benchmarks/` compare algorithms; token bucket Lua wins on steady-state throughput, sliding window on burst fairness.
+Lua execution is in-process to Redis. typically sub-millisecond for my scripts. The dominant cost is network RTT, which is why hierarchical limits use one script for four buckets instead of four round-trips. Idempotency adds one Lua call before upstream work; routing adds one on every gateway outcome. Benchmarks under `benchmarks/` compare algorithms; token bucket Lua wins on steady-state throughput, sliding window on burst fairness.
 
-## 10. Lessons learned
+## Lessons learned
 
-The first version used separate `INCR` + `EXPIRE` calls and I watched limits overshoot by 15–20% under k6 load. Moving to Lua fixed enforcement accuracy immediately. The subtle lesson: **return codes are API contracts** — `ErrStaleFence` exists because `complete.lua` deliberately returns `{0}` instead of throwing Redis errors, letting Go distinguish stale owners from store outages. I would not ship another distributed counter without server-side atomicity.
+The first version used separate `INCR` + `EXPIRE` calls and I watched limits overshoot by 15 to 20% under k6 load. Moving to Lua fixed enforcement accuracy immediately. The subtle lesson: **return codes are API contracts**. `ErrStaleFence` exists because `complete.lua` deliberately returns `{0}` instead of throwing Redis errors, letting Go distinguish stale owners from store outages. I would not ship another distributed counter without server-side atomicity.
 
 **References:** `internal/limiter/lua/`, `internal/idempotency/lua/claim.lua`, `internal/circuitbreaker/lua/`, `benchmarks/enforcement/`

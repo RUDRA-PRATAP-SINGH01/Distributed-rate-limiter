@@ -1,32 +1,32 @@
-# Sentinel HA Architecture
+﻿# Sentinel HA Architecture
 
-> इंजीनियरिंग जर्नल — मैंने Redis single point of failure को Sentinel failover से कैसे address किया।
+> Engineering journal. How I addressed Redis as a single point of failure with Sentinel failover.
 
 ## Problem Statement
 
-Rate limiter, idempotency, circuit breaker, audit trail, और routing state **सब Redis पर depend** करते हैं। Standalone `redis:6379` container dev के लिए ठीक है, पर production में master crash = पूरी fleet blind (fail-closed circuits, no quota, no idempotency)। मुझे **automatic master promotion** और application-side transparent reconnect** चाहिए था — बिना limiter/sidecar code rewrite के।
+The rate limiter, idempotency, circuit breaker, audit trail, and routing state **all depend on Redis**. A standalone `redis:6379` container is fine for dev, but in production a master crash blinds the whole fleet (fail-closed circuits, no quota, no idempotency). I needed **automatic master promotion** and **application-side transparent reconnect** without rewriting limiter or sidecar code.
 
 ## Why the problem exists
 
-Redis primary-replica replication async है — manual failover slow और error-prone। हर app instance को topology changes (new master IP) track करना unrealistic है। go-redis `FailoverClient` Sentinel queries handle करता है, पर configuration (master name, sentinel addrs, passwords) और health reporting consistently wire करनी पड़ती है। Docker Compose में standalone और HA profiles coexist करने चाहिए थे ताकि local dev simple रहे।
+Redis primary-replica replication is async. Manual failover is slow and error-prone; it is unrealistic for every app instance to track topology changes (new master IP). go-redis `FailoverClient` handles Sentinel queries, but configuration (master name, sentinel addrs, passwords) and health reporting must be wired consistently. In Docker Compose, standalone and HA profiles should coexist so local dev stays simple.
 
 ## Design goals
 
-1. **Redis Sentinel** — quorum-based failover monitoring।
-2. **1 master + 2 replicas** — read scaling secondary; failover candidates।
-3. **`FailoverClient`** in `internal/redis` — Sentinel-driven master discovery।
-4. **Compose overlay** — `docker-compose.ha.yml` switches fleet without forking base stack।
-5. **Health checks** — Redis ping + replication INFO in `/health`।
-6. **Password auth** — master, replica, sentinel aligned।
+1. **Redis Sentinel**. Quorum-based failover monitoring.
+2. **1 master plus 2 replicas**. Read scaling is secondary. Replicas are failover candidates.
+3. **`FailoverClient`** in `internal/redis`. Sentinel-driven master discovery.
+4. **Compose overlay**. `docker-compose.ha.yml` switches the fleet without forking the base stack.
+5. **Health checks**. Redis ping plus replication INFO in `/health`.
+6. **Password auth**. Master, replica, and sentinel aligned.
 
 ## Alternative approaches considered
 
 | Approach | Verdict |
 |----------|---------|
-| Standalone Redis only | Unacceptable SPOF for HA demo/prod path |
-| Redis Cluster (sharding) | Overkill; our keys fit single master memory |
-| Managed ElastiCache/MemoryDB | Valid prod path; wanted self-hosted compose |
-| Manual DNS failover | Slow; no automatic promotion |
+| Standalone Redis only | Unacceptable SPOF for HA demo and prod path |
+| Redis Cluster (sharding) | Overkill. Our keys fit single master memory. |
+| Managed ElastiCache or MemoryDB | Valid prod path. I wanted self-hosted compose. |
+| Manual DNS failover | Slow. No automatic promotion. |
 | Sentinel in app (custom) | Reinventing go-redis FailoverClient |
 | Active-active multi-master | Conflict resolution complexity for Lua scripts |
 
@@ -62,10 +62,10 @@ docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --
 | `redis` (standalone) | `standalone` | Disabled in HA mode |
 | `redis-master` | `ha` | Primary with AOF |
 | `redis-replica-1/2` | `ha` | `replicaof redis-master 6379` |
-| `redis-sentinel-1/2/3` | `ha` | Monitor + failover |
+| `redis-sentinel-1/2/3` | `ha` | Monitor and failover |
 | `limiter`, `sidecar` | (base) | Env overridden to Sentinel mode |
 
-**Limiter/sidecar Sentinel env** (in overlay):
+**Limiter and sidecar Sentinel env** (in overlay):
 
 ```yaml
 REDIS_MODE=sentinel
@@ -87,7 +87,7 @@ REDIS_PASSWORD=dev-redis-password
 **`replica.conf`**:
 
 - `replica-read-only yes`
-- `requirepass` + `masterauth dev-redis-password`
+- `requirepass` and `masterauth dev-redis-password`
 - `replicaof` via docker command line: `--replicaof redis-master 6379`
 
 **`sentinel.conf`**:
@@ -103,7 +103,7 @@ sentinel resolve-hostnames yes
 sentinel announce-hostnames yes
 ```
 
-Quorum `2` of 3 sentinels — master deemed down after 5s, failover timeout 60s。
+Quorum is 2 of 3 sentinels. Master is deemed down after 5s. Failover timeout is 60s.
 
 ### FailoverClient (`internal/redis/client.go`)
 
@@ -128,7 +128,7 @@ func New(cfg Config) redis.UniversalClient {
 }
 ```
 
-`RouteByLatency` / `RouteRandomly` false — **all writes and Lua scripts go to current master** (required for atomicity)।
+`RouteByLatency` and `RouteRandomly` are false. **All writes and Lua scripts go to the current master** (required for atomicity).
 
 ### Config from env (`internal/redis/config.go`)
 
@@ -138,11 +138,11 @@ func New(cfg Config) redis.UniversalClient {
 | `REDIS_ADDR` | Standalone address |
 | `REDIS_SENTINEL_ADDRS` | Comma-separated sentinel hosts |
 | `REDIS_MASTER_NAME` | Sentinel logical name (`mymaster`) |
-| `REDIS_PASSWORD` | Master/replica auth |
+| `REDIS_PASSWORD` | Master and replica auth |
 | `REDIS_SENTINEL_PASSWORD` | Defaults to `REDIS_PASSWORD` |
 | `REDIS_DB` | DB index |
 
-`Describe(cfg)` logs human-readable mode for startup messages。
+`Describe(cfg)` logs a human-readable mode for startup messages.
 
 ### Health checks
 
@@ -173,16 +173,16 @@ Limiter health JSON:
 }
 ```
 
-Sidecar health proxies limiter `/health` — indirect Redis visibility。
+Sidecar health proxies limiter `/health`. Redis visibility is indirect.
 
 ### Failover behavior (runtime)
 
-1. Master stops → sentinels detect (5s `down-after-milliseconds`)
-2. Quorum promotes best replica → new master
-3. `FailoverClient` receives topology update via Sentinel
-4. Connection pool reconnects to new master
-5. Brief window: `Ping` failures, circuit breaker may open (`redis` target)
-6. Metric `redis_failover_reconnects_total` reserved for reconnect counting
+1. Master stops. Sentinels detect (5s `down-after-milliseconds`).
+2. Quorum promotes the best replica to new master.
+3. `FailoverClient` receives topology update via Sentinel.
+4. Connection pool reconnects to the new master.
+5. Brief window: `Ping` failures. Circuit breaker may open (`redis` target).
+6. Metric `redis_failover_reconnects_total` is reserved for reconnect counting.
 
 ### Startup validation
 
@@ -195,47 +195,47 @@ if err := redisclient.Ping(rdb); err != nil {
 }
 ```
 
-Fail fast — unhealthy fleet doesn't serve partial state。
+Fail fast. An unhealthy fleet does not serve partial state.
 
 ## Tradeoffs
 
-- **Async replication** — promoted replica may miss last writes (RPO > 0); idempotency/audit may lose seconds of data on crash。
-- **Sentinel compose complexity** — 6 extra containers vs 1 Redis。
-- **All writes to master** — replicas unused for reads in current code; simpler correctness。
-- **dev-redis-password in repo** — demo only; prod needs secrets management。
-- **Single shard** — vertical scale limit; Cluster future path。
-- **Sidecar depends on sentinel-1 health only** — other sentinels may lag starting。
+- **Async replication**. A promoted replica may miss the last writes (RPO greater than 0). Idempotency and audit may lose seconds of data on crash.
+- **Sentinel compose complexity**. Six extra containers vs one Redis.
+- **All writes to master**. Replicas are unused for reads in current code. Simpler correctness.
+- **dev-redis-password in repo**. Demo only. Prod needs secrets management.
+- **Single shard**. Vertical scale limit. Cluster is a future path.
+- **Sidecar depends on sentinel-1 health only**. Other sentinels may lag on startup.
 
 ## Failure modes
 
 | Scenario | Effect |
 |----------|--------|
-| Master crash | ~5-60s failover; requests fail until reconnect |
-| Split-brain (network partition) | Sentinel quorum prevents dual master (with proper deploy) |
-| All sentinels down | No failover; stale master assumption |
-| Wrong `REDIS_MASTER_NAME` | Client connects to wrong or empty topology |
-| Password mismatch | Auth errors across replication chain |
-| Replica lag at promotion | Short inconsistency window |
-| Lua scripts during failover | `EXEC`/`EVAL` errors; circuit breaker trips |
+| Master crash | Roughly 5 to 60s failover. Requests fail until reconnect. |
+| Split-brain (network partition) | Sentinel quorum prevents dual master with proper deploy. |
+| All sentinels down | No failover. Stale master assumption. |
+| Wrong `REDIS_MASTER_NAME` | Client connects to wrong or empty topology. |
+| Password mismatch | Auth errors across the replication chain. |
+| Replica lag at promotion | Short inconsistency window. |
+| Lua scripts during failover | `EXEC` or `EVAL` errors. Circuit breaker trips. |
 
 ## Operational concerns
 
-- Runbook: `docker compose ... --profile ha` for HA demo; default compose uses `standalone` profile。
-- Monitor `/health` redis.role — should be `master` on connected node post-failover。
-- `circuit_breaker_state{target="redis"}` during failover spikes — expected。
-- AOF `appendfsync everysec` — up to 1s write loss on catastrophic failure。
-- Chaos testing: see `chaos/README.md` for failure injection patterns。
-- Diagram: `docs/diagrams/sentinel-failover.mmd`。
-- Production: odd number of sentinels (3+), spread AZs, separate `requirepass` rotation procedure。
+- Runbook: `docker compose ... --profile ha` for HA demo. Default compose uses `standalone` profile.
+- Monitor `/health` `redis.role`. Should be `master` on the connected node after failover.
+- `circuit_breaker_state{target="redis"}` spikes during failover. Expected.
+- AOF `appendfsync everysec`. Up to 1s write loss on catastrophic failure.
+- Chaos testing: see `chaos/README.md` for failure injection patterns.
+- Diagram: `docs/diagrams/sentinel-failover.mmd`.
+- Production: odd number of sentinels (3+), spread AZs, separate `requirepass` rotation procedure.
 
 ## Performance implications
 
-- **Sentinel queries** — cached by go-redis; negligible steady-state overhead。
-- **Replication lag** — doesn't affect read path (we don't read replicas)।
-- **Failover window** — all Redis ops fail; sidecar cache may serve **denials only** (not allowances) briefly。
-- **Connection pool** — `PoolSize=100`, `MinIdleConns=10` per process; reconnect storm after failover across many pods — watch `redis_failover_reconnects_total` and connection limits。
-- **AOF everysec** — small write amplification vs RDB only; durability trade accepted。
+- **Sentinel queries**. Cached by go-redis. Negligible steady-state overhead.
+- **Replication lag**. Does not affect read path (we do not read replicas).
+- **Failover window**. All Redis ops fail. Sidecar cache may serve **denials only** (not allowances) briefly.
+- **Connection pool**. `PoolSize=100`, `MinIdleConns=10` per process. Reconnect storm after failover across many pods. Watch `redis_failover_reconnects_total` and connection limits.
+- **AOF everysec**. Small write amplification vs RDB only. Durability trade accepted.
 
 ## Lessons learned
 
-मैंने **compose profiles** से standalone/HA dual-mode रखा — developers को Sentinel नहीं चलाना पड़ता local quick start के लिए। `FailoverClient` with `RouteByLatency=false` conscious choice: Lua atomicity > read scaling from replicas। Sentinel `resolve-hostnames` + `announce-hostnames` Docker networking में IP drift से बचाते हैं। Health endpoint में replication INFO add करना failover drills में "कौन master है" instantly दिखाता है। Password on sentinel + master + replica तीनों जगह sync रखना deploy footgun है — `masterauth` replica conf में explicit। अगला step होगा `RecordRedisFailoverReconnect` को go-redis hook पर wire करना ताकि failover SLO measure हो सके।
+I kept **compose profiles** for standalone and HA dual mode. Developers do not need to run Sentinel for a local quick start. `FailoverClient` with `RouteByLatency=false` was a conscious choice: Lua atomicity beats read scaling from replicas. Sentinel `resolve-hostnames` and `announce-hostnames` avoid IP drift in Docker networking. Adding replication INFO to the health endpoint shows instantly who is master during failover drills. Password on sentinel, master, and replica must stay in sync. `masterauth` in replica conf is explicit. Next step is wiring `RecordRedisFailoverReconnect` to the go-redis hook so we can measure failover SLO.

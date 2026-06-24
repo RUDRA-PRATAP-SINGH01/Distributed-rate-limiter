@@ -1,33 +1,33 @@
-# Idempotency Architecture
+﻿# Idempotency Architecture
 
-> इंजीनियरिंग जर्नल — मैंने sidecar में distributed idempotency layer क्यों और कैसे बनाया।
+> Engineering journal. Why and how I built the distributed idempotency layer in the sidecar.
 
 ## Problem Statement
 
-मुझे POST/PUT/PATCH जैसे mutating HTTP requests के लिए **exactly-once client semantics** चाहिए थीं — client retry करे तो upstream दोबारा execute न हो, बल्कि पहली बार store हुआ response replay हो। साथ ही same `Idempotency-Key` को अलग payload के साथ reuse करने पर reject करना था, और slow/crashed worker के बाद lock reclaim हो सके।
+I needed **exactly-once client semantics** for mutating HTTP requests (POST, PUT, PATCH). When a client retries, the upstream must not execute again. Instead, the sidecar should replay the response stored from the first successful attempt. I also needed to reject reuse of the same `Idempotency-Key` with a different payload, and to reclaim locks when a slow or crashed worker holds a processing lease too long.
 
 ## Why the problem exists
 
-Distributed rate limiter के साथ sidecar pattern में client → sidecar → central limiter → upstream chain है। Network timeout, 502, या client library की automatic retry policy के कारण **duplicate side effects** आम हैं — payment, inventory, या कोई भी non-idempotent upstream call दो बार चल सकती है। Pure in-memory dedup fleet-wide काम नहीं करता; हर sidecar instance अलग state रखता है। Redis atomic scripts के बिना claim और complete के बीच race हो जाती है।
+The sidecar pattern chains client, sidecar, central limiter, and upstream. Network timeouts, 502 responses, and automatic client retry policies make **duplicate side effects** common. A payment, inventory, or any non-idempotent upstream call can run twice. Pure in-memory deduplication does not work fleet-wide because each sidecar instance keeps its own state. Without Redis atomic Lua scripts, races appear between claim and complete.
 
 ## Design goals
 
-1. **Atomic claim** — एक Lua script में new / replay / in-progress / hash-mismatch / expired-reclaim सब handle हो।
-2. **Request fingerprinting** — method + path + sorted query + body का SHA-256 hash; same key, different body = `422 Unprocessable Entity`।
-3. **Tenant-scoped keys** — `BuildScope(tenantID, userID)` से cross-tenant collision न हो।
-4. **Fencing tokens** — reclaim के बाद stale worker पुराने token से complete/fail न कर सके।
-5. **Sidecar integration** — rate limit check के बाद upstream forward; response capture करके Redis में store।
-6. **Fail-closed by default** — Redis down हो तो `503`; optional `IDEMPOTENCY_FAIL_OPEN=true`।
+1. **Atomic claim**. One Lua script handles new, replay, in-progress, hash mismatch, and expired reclaim paths.
+2. **Request fingerprinting**. SHA-256 over method, path, sorted query, and body. Same key with a different body returns `422 Unprocessable Entity`.
+3. **Tenant-scoped keys**. `BuildScope(tenantID, userID)` prevents cross-tenant collisions.
+4. **Fencing tokens**. After reclaim, a stale worker cannot complete or fail with the old token.
+5. **Sidecar integration**. Rate limit check runs after claim, then upstream forward. Response capture stores the result in Redis.
+6. **Fail-closed by default**. Redis down returns `503`. Optional `IDEMPOTENCY_FAIL_OPEN=true` bypasses dedup.
 
 ## Alternative approaches considered
 
-| Approach | क्यों reject किया |
+| Approach | Why I rejected it |
 |----------|-------------------|
-| Database unique constraint on key | Latency और schema coupling; response body storage awkward |
-| Kafka / event log dedup | Overkill for HTTP replay; operational burden |
-| Optimistic locking without fence token | Reclaim के बाद दो workers दोनों complete कर सकते थे |
-| Client-only idempotency | Malicious या buggy clients bypass कर सकते हैं |
-| Separate idempotency microservice | Extra hop; sidecar already Redis से जुड़ा है |
+| Database unique constraint on key | Latency and schema coupling. Response body storage is awkward. |
+| Kafka or event log dedup | Overkill for HTTP replay. High operational burden. |
+| Optimistic locking without fence token | After reclaim, two workers could both complete. |
+| Client-only idempotency | Malicious or buggy clients can bypass it. |
+| Separate idempotency microservice | Extra hop. The sidecar already talks to Redis. |
 
 ## Final architecture
 
@@ -38,22 +38,22 @@ idem:{scope}:{key}           → HASH (metadata: status, request_hash, fence_tok
 idem:body:{scope}:{key}      → STRING (large response bodies, >64 KB)
 ```
 
-`scope` = first 16 bytes of `SHA256(tenantID + "|" + userID)` as hex (32 chars).
+`scope` is the first 16 bytes of `SHA256(tenantID + "|" + userID)` as hex (32 characters).
 
 ### Lua lifecycle
 
-**`claim.lua`** — atomic entry point:
+**`claim.lua`**. Atomic entry point:
 
 | Return code | Meaning |
 |-------------|---------|
 | `{1, fence_token}` | Claimed (new or reclaimed after lock expiry) |
-| `{2, status, headers, body}` | Replay cached completed/failed response |
-| `{3, retry_after_ms}` | Another holder processing; client gets `409 Conflict` |
+| `{2, status, headers, body}` | Replay cached completed or failed response |
+| `{3, retry_after_ms}` | Another holder is processing. Client gets `409 Conflict`. |
 | `{0}` | Hash mismatch |
 
-**`complete.lua`** — `processing` + matching `fence_token` हो तभी `completed` set करता है; body ≤64 KB inline HASH में, बड़ा body अलग STRING key में।
+**`complete.lua`**. Sets `completed` only when status is `processing` and `fence_token` matches. Bodies at or below 64 KB go inline in the HASH. Larger bodies use a separate STRING key.
 
-**`fail.lua`** — transient upstream errors के लिए `failed` state; retryable, replay पर same error response मिलता है।
+**`fail.lua`**. Marks `failed` for transient upstream errors. Retryable. Replay returns the same error response.
 
 ### Fingerprint (`internal/idempotency/fingerprint.go`)
 
@@ -65,9 +65,9 @@ Mutating methods: POST, PUT, PATCH only.
 
 ### Fencing flow
 
-1. `Claim` पर `uuid.New().String()` fence token generate होता है।
-2. Lock expire होने पर reclaim नया fence token लिखता है।
-3. `Complete` / `Fail` पर token match नहीं → `ErrStaleFence` (silent no-op in Lua returns `{0}`).
+1. `Claim` generates a fence token with `uuid.New().String()`.
+2. Lock expiry triggers reclaim with a new fence token written to Redis.
+3. `Complete` or `Fail` with a mismatched token returns `ErrStaleFence` (Lua returns `{0}`).
 
 ### Sidecar integration (`cmd/sidecar/main.go`)
 
@@ -81,13 +81,13 @@ Client → Sidecar.ServeHTTP
         ├─ claimed → checkRateLimit → forwardIdempotent
         │     ├─ ResponseCapturer wraps ResponseWriter
         │     ├─ router.Forward OR reverse proxy
-        │     └─ Complete with captured status/headers/body
+        │     └─ Complete with captured status, headers, body
         └─ limiter error → Fail or fail-open path
 ```
 
-`ENABLE_IDEMPOTENCY=true` पर sidecar Redis connect करता है; `X-Idempotency-Status` header: `created`, `replayed`, `in_progress`, `hash_mismatch`।
+With `ENABLE_IDEMPOTENCY=true`, the sidecar connects to Redis. The `X-Idempotency-Status` header reports `created`, `replayed`, `in_progress`, or `hash_mismatch`.
 
-Replay headers whitelist: `content-type`, `x-request-id`, `x-correlation-id`।
+Replay header whitelist: `content-type`, `x-request-id`, `x-correlation-id`.
 
 ### Config defaults (`idempotency.DefaultConfig`)
 
@@ -98,37 +98,37 @@ Replay headers whitelist: `content-type`, `x-request-id`, `x-correlation-id`।
 
 ## Tradeoffs
 
-- **Redis dependency** — idempotency और rate limiting दोनों same Redis; outage पर sidecar fail-closed (unless fail-open)।
-- **24h retention** — Stripe-style; long-running workflows के लिए TTL extend करना पड़ सकता है।
-- **Failed state replay** — client को same error मिलता है; intentional retry के लिए नया key चाहिए या TTL wait।
-- **ResponseCapturer** — streaming / SSE responses buffer में जाते हैं; very large responses `MaxBodyBytes` से reject।
+- **Redis dependency**. Idempotency and rate limiting share the same Redis. Outage makes the sidecar fail-closed unless fail-open is enabled.
+- **24h retention**. Stripe-style. Long-running workflows may need a longer TTL.
+- **Failed state replay**. The client gets the same error again. Intentional retry needs a new key or a TTL wait.
+- **ResponseCapturer**. Streaming and SSE responses buffer in memory. Very large responses hit `MaxBodyBytes` and reject.
 
 ## Failure modes
 
 | Scenario | Behavior |
 |----------|----------|
 | Redis unavailable | `503 Idempotency store unavailable` (or fail-open bypass) |
-| Worker crash after claim | Lock expires → reclaim → new worker proceeds |
-| Stale worker completes after reclaim | `complete.lua` returns `{0}`; client may retry |
-| Hash mismatch | `422` — client bug or key reuse abuse |
+| Worker crash after claim | Lock expires, reclaim runs, new worker proceeds |
+| Stale worker completes after reclaim | `complete.lua` returns `{0}`. Client may retry. |
+| Hash mismatch | `422`. Client bug or key reuse abuse. |
 | Body too large | `413 Request Entity Too Large` before claim |
-| Rate limit denial on claimed request | `429` stored via Complete — replay भी 429 देगा |
+| Rate limit denial on claimed request | `429` stored via Complete. Replay also returns 429. |
 
 ## Operational concerns
 
-- Admin API: `cmd/limiter/admin_idempotency.go` — scope/key से record inspect/delete।
-- Metrics: `idempotency_claims_total{result}`, `idempotency_completes_total`, `idempotency_redis_duration_seconds`।
-- Traces: spans `idempotency.claim`, `idempotency.complete`, `idempotency.fail`, `sidecar.idempotency`।
-- Env: `IDEMPOTENCY_LOCK_TTL_MS`, `IDEMPOTENCY_COMPLETED_TTL_MS`, `IDEMPOTENCY_MAX_BODY_BYTES`, `IDEMPOTENCY_FAIL_OPEN`।
-- Monitor `hash_mismatch` और `in_progress` spike — client misconfiguration या thundering herd।
+- Admin API: `cmd/limiter/admin_idempotency.go`. Inspect or delete records by scope and key.
+- Metrics: `idempotency_claims_total{result}`, `idempotency_completes_total`, `idempotency_redis_duration_seconds`.
+- Traces: spans `idempotency.claim`, `idempotency.complete`, `idempotency.fail`, `sidecar.idempotency`.
+- Env: `IDEMPOTENCY_LOCK_TTL_MS`, `IDEMPOTENCY_COMPLETED_TTL_MS`, `IDEMPOTENCY_MAX_BODY_BYTES`, `IDEMPOTENCY_FAIL_OPEN`.
+- Monitor `hash_mismatch` and `in_progress` spikes. They often mean client misconfiguration or a thundering herd.
 
 ## Performance implications
 
-- हर mutating idempotent request पर **कम से कम एक Redis round-trip** (claim); success path पर complete भी।
-- Replay path upstream skip करता है — significant win on retries।
-- Lua scripts single-key atomic; large bodies external STRING से HASH size bounded रहता है।
-- `ReadBody` request body को memory में hold करता है — `MaxBodyBytes` cap जरूरी है।
+- Every mutating idempotent request pays **at least one Redis round-trip** for claim. The success path also calls complete.
+- The replay path skips upstream. That is a significant win on retries.
+- Lua scripts are single-key atomic. Large bodies in an external STRING keep HASH size bounded.
+- `ReadBody` holds the request body in memory. The `MaxBodyBytes` cap is essential.
 
 ## Lessons learned
 
-मैंने सीखा कि **fencing token के बिना lock reclaim dangerous है** — expired lease पर दो workers race कर सकते हैं। Fingerprint में sorted query string include करना जरूरी था; बिना इसके `?a=1&b=2` vs `?b=2&a=1` अलग requests मानी जातीं। Sidecar में rate-limit denial को भी complete करना controversial लगा, पर Stripe model follow किया: replay पर consistent 429 better than double-charging upstream। `ResponseCapturer` का `Hijack`/`Flush` support रखा ताकि websocket paths crash न करें, भले idempotency उन पर apply न हो।
+I learned that **lock reclaim without a fencing token is dangerous**. On an expired lease, two workers can race. Including the sorted query string in the fingerprint was necessary. Without it, `?a=1&b=2` and `?b=2&a=1` would count as different requests. Completing rate-limit denials in the sidecar felt controversial, but I followed the Stripe model: a consistent 429 on replay is better than double-charging upstream. I kept `Hijack` and `Flush` support in `ResponseCapturer` so websocket paths do not crash, even though idempotency does not apply to them.

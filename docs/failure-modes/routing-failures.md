@@ -1,4 +1,4 @@
-# Failure Mode: Routing Failures
+﻿# Failure Mode: Routing Failures
 
 **Status:** Documented  
 **Severity:** High  
@@ -6,23 +6,23 @@
 
 ---
 
-## 1. Problem Statement
+## Problem Statement
 
-Intelligent routing can fail before any upstream gateway is contacted, during gateway execution, or after exhausting failover candidates. Each failure mode needs distinct HTTP semantics, metrics, and ops signals — a generic 502 hides whether Redis, selection, or all gateways failed.
+Intelligent routing can fail before any upstream gateway is contacted, during gateway execution, or after exhausting failover candidates. Each failure mode needs distinct HTTP semantics, metrics, and ops signals. a generic 502 hides whether Redis, selection, or all gateways failed.
 
-## 2. Why the problem exists
+## Why the problem exists
 
-Routing pulls live state from Redis (`route:index`, `route:gw:{id}`), enriches circuit snapshots per gateway, scores candidates, and sequentially attempts HTTP forwards. Any step errors. `StateUnknown` deliberately excludes gateways when `breaker.GetState` fails — routing prefers **no traffic** over **blind traffic**.
+Routing pulls live state from Redis (`route:index`, `route:gw:{id}`), enriches circuit snapshots per gateway, scores candidates, and sequentially attempts HTTP forwards. Any step errors. `StateUnknown` deliberately excludes gateways when `breaker.GetState` fails. routing prefers **no traffic** over **blind traffic**.
 
-## 3. Design goals
+## Design goals
 
 - Fail with explicit errors logged: `probe list error`, `Routing forward error`, `all gateways unavailable`.
 - Response headers on success: `X-Gateway-ID`, `X-Gateway-Score`, `X-Gateway-Failover`.
 - Metrics: `routing_decisions_total`, `routing_failovers_total`, `routing_outcomes_total`, `routing_gateway_health_score`.
 - Admin visibility: `/admin/routing/gateways` on limiter admin port `:8082`.
-- Require `GATEWAYS` env at startup when `ENABLE_ROUTING=true` — fail fast if empty.
+- Require `GATEWAYS` env at startup when `ENABLE_ROUTING=true`. fail fast if empty.
 
-## 4. Alternative approaches considered
+## Alternative approaches considered
 
 | Fallback | Why not default |
 |----------|-----------------|
@@ -30,7 +30,7 @@ Routing pulls live state from Redis (`route:index`, `route:gw:{id}`), enriches c
 | Route to `StateUnknown` gateways | Could send traffic to open circuits |
 | Infinite failover tries | Unbounded latency |
 
-## 5. Final architecture
+## Final architecture
 
 **Failure taxonomy:**
 
@@ -54,24 +54,24 @@ if s.CircuitState == circuitbreaker.StateOpen || s.CircuitState == circuitbreake
 
 `enrichCircuit` sets `StateUnknown` when `breaker.GetState` errors (`routing/store.go`).
 
-**Health probes:** Background goroutine `StartHealthProbes` — probe failure calls `UpdateHealthProbe` → lowers `health_score`.
+**Health probes:** Background goroutine `StartHealthProbes`. probe failure calls `UpdateHealthProbe` → lowers `health_score`.
 
-## 6. Tradeoffs
+## Tradeoffs
 
 | Strict exclusion (unknown/open) | Loose routing |
 |--------------------------------|---------------|
 | Safer under Redis glitches | Might hit dying gateway |
 | Lower available capacity | Higher success rate short-term |
 
-## 7. Failure modes
+## Failure modes
 
-- **Redis outage during route:** Same as redis-outage — cannot list gateways.
-- **Single gateway enabled, circuit open:** Immediate `no healthy gateways`.
-- **Weight 0 or missing:** Defaults to 100 on parse — misconfig can skew traffic.
-- **Seed failure at startup:** `log.Fatalf("gateway seed failed")` — process exits.
-- **Idempotent + routing failure:** `failIdempotent` stores 503 JSON for key retry.
+- Redis outage during route: Same as redis-outage. cannot list gateways.
+- Single gateway enabled, circuit open: Immediate `no healthy gateways`.
+- Weight 0 or missing: Defaults to 100 on parse. misconfig can skew traffic.
+- Seed failure at startup: `log.Fatalf("gateway seed failed")`. process exits.
+- Idempotent + routing failure: `failIdempotent` stores 503 JSON for key retry.
 
-## 8. Operational concerns
+## Operational concerns
 
 **Enable checklist:**
 
@@ -91,12 +91,12 @@ ROUTING_PROBE_INTERVAL_SEC=15
 
 **Benchmarks:** `benchmarks/routing/routing-test.js`.
 
-## 9. Performance implications
+## Performance implications
 
-`ListGateways` is O(n) Redis HGETALL per request — acceptable for n≤10. Failover multiplies upstream RTT. Probes add steady background traffic every `ROUTING_PROBE_INTERVAL_SEC` independent of user load — tune on large fleets.
+`ListGateways` is O(n) Redis HGETALL per request. acceptable for n≤10. Failover multiplies upstream RTT. Probes add steady background traffic every `ROUTING_PROBE_INTERVAL_SEC` independent of user load. tune on large fleets.
 
-## 10. Lessons learned
+## Lessons learned
 
-I once routed to a gateway with `StateUnknown` during a partial Redis flake and amplified errors to a payment partner. Excluding unknown state was the conservative fix — capacity drops but blast radius shrinks. Failover headers (`X-Gateway-Failover: true`) became my support team's fastest triage signal for "routing did its job but backends struggled."
+I once routed to a gateway with `StateUnknown` during a partial Redis flake and amplified errors to a payment partner. Excluding unknown state was the conservative fix. capacity drops but blast radius shrinks. Failover headers (`X-Gateway-Failover: true`) became my support team's fastest triage signal for "routing did its job but backends struggled."
 
 **References:** `internal/routing/router.go`, `internal/routing/store.go`, `internal/routing/types.go`, `docs/decisions/why-weighted-routing.md`

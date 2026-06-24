@@ -1,6 +1,6 @@
-# Request Flow
+﻿# Request Flow
 
-When I wired the first end-to-end demo — client → sidecar → limiter → Redis → demo backend — I assumed one code path would suffice. Then I added idempotency for POST retries, hierarchical limits for multi-tenant SaaS, and intelligent routing to three simulated gateways. The sidecar now branches into **normal** and **idempotent** flows that share limiter calls but diverge sharply around upstream execution and Redis idempotency keys.
+When I wired the first end-to-end demo. client → sidecar → limiter → Redis → demo backend. I assumed one code path would suffice. Then I added idempotency for POST retries, hierarchical limits for multi-tenant SaaS, and intelligent routing to three simulated gateways. The sidecar now branches into **normal** and **idempotent** flows that share limiter calls but diverge sharply around upstream execution and Redis idempotency keys.
 
 This document follows the canonical sequence in [../diagrams/request-flow.mmd](../diagrams/request-flow.mmd).
 
@@ -23,7 +23,7 @@ The flow must remain correct under concurrent duplicate requests, limiter outage
 
 A rate limiter alone does not solve **duplicate execution**. Payment processors retry POSTs; mobile clients double-tap submit. If I only rate-limit, I still get double charges.
 
-Conversely, idempotency without rate limiting lets a client replay a cached 200 forever without consuming quota — or worse, hammer upstream during a replay storm.
+Conversely, idempotency without rate limiting lets a client replay a cached 200 forever without consuming quota. or worse, hammer upstream during a replay storm.
 
 I needed orthogonal layers on the same sidecar hop:
 
@@ -38,11 +38,11 @@ I needed orthogonal layers on the same sidecar hop:
 
 ## Design goals
 
-- **Fail fast on identity** — missing `X-User-ID` returns 400 before Redis.
-- **Limiter before upstream** — never forward traffic I have not budgeted (except explicit fail-open).
-- **Idempotent replays skip upstream** — completed keys return cached status/body from Redis.
-- **Idempotent claims serialize** — concurrent same-key requests get 409 + `Retry-After`, not parallel upstream calls.
-- **Observability** — OpenTelemetry spans: `sidecar.proxy`, `sidecar.idempotency`, `sidecar.rate_limit_check`, `limiter.check`.
+- Missing `X-User-ID` returns 400 before Redis.
+- Limiter before upstream: Never forward traffic I have not budgeted (except explicit fail-open).
+- Idempotent replays skip upstream: Completed keys return cached status/body from Redis.
+- Concurrent same-key requests get 409 + `Retry-After`, not parallel upstream calls.
+- Observability: OpenTelemetry spans: `sidecar.proxy`, `sidecar.idempotency`, `sidecar.rate_limit_check`, `limiter.check`.
 
 ---
 
@@ -54,13 +54,13 @@ Some meshes limit at egress. I rejected this: upstream work (DB writes, payment 
 
 ### Idempotency in the application only
 
-App-level dedup databases work but duplicate limiter integration per service. Centralizing in the sidecar means any service behind `:9090` gets dedup without code changes — at the cost of body buffering and Redis storage.
+App-level dedup databases work but duplicate limiter integration per service. Centralizing in the sidecar means any service behind `:9090` gets dedup without code changes. at the cost of body buffering and Redis storage.
 
 ### Synchronous limiter call inside idempotent replay path
 
-For **completed** idempotency keys I return the cached response with **zero** limiter calls — correct, because quota was consumed on the original execution.
+For **completed** idempotency keys I return the cached response with **zero** limiter calls. correct, because quota was consumed on the original execution.
 
-For **in-progress** collisions I return 409 without upstream — the first holder still owns the lock.
+For **in-progress** collisions I return 409 without upstream. the first holder still owns the lock.
 
 When the sidecar **claims** a new key, it calls the limiter normally. I briefly considered skipping limit on replay via `idempotent_replay=true` on the limiter for claimed-but-not-completed paths; today only the limiter's explicit query param short-circuits quota for replays initiated by trusted callers, not the sidecar's happy path.
 
@@ -90,57 +90,57 @@ Path allowlist uses prefix matching: `/api` matches `/api/login` and `/api/v2/fo
 
 ### Normal path (`serveNormal`)
 
-Reference: diagram lines 36–46 in `request-flow.mmd`.
+Reference: diagram lines 36 to 46 in `request-flow.mmd`.
 
-1. **Denial cache lookup** — key is `userID` or `tenant|user|path` in hierarchical mode. If entry exists, not expired, and `Allowed == false`, return 429 immediately.
-2. **Allowed cache entries are ignored** — I log "ignoring cache, will call central limiter" in debug mode.
-3. **singleflight** — `limitFlight.Do(cacheKey, checkRateLimit)` collapses concurrent misses.
-4. **checkRateLimit** — HTTP GET to limiter:
+1. Denial cache lookup: Key is `userID` or `tenant|user|path` in hierarchical mode. If entry exists, not expired, and `Allowed == false`, return 429 immediately.
+2. Allowed cache entries are ignored: I log "ignoring cache, will call central limiter" in debug mode.
+3. singleflight: `limitFlight.Do(cacheKey, checkRateLimit)` collapses concurrent misses.
+4. checkRateLimit: HTTP GET to limiter:
    - Flat: `GET {RATE_LIMITER_URL}/check`
    - Hierarchical: `GET {RATE_LIMITER_URL}/check_hierarchical?endpoint={path}`
    - Headers: `X-User-ID`, optional `X-Tenant-ID`, `X-Internal-API-Key`
-5. **Circuit guard** — if `limiterCircuit` is configured, `Allow(central-limiter)` must pass before HTTP call.
-6. **On deny** — store `CacheEntry` with TTL (`CACHE_TTL_MS`, default 30 ms), return 429 with `X-RateLimit-*` and `Retry-After`.
-7. **On allow** — set rate limit headers, `forwardRequest`:
+5. If `limiterCircuit` is configured, `Allow(central-limiter)` must pass before HTTP call.
+6. Store `CacheEntry` with TTL (`CACHE_TTL_MS`, default 30 ms), return 429 with `X-RateLimit-*` and `Retry-After`.
+7. Set rate limit headers, `forwardRequest`:
    - `router.Forward` if `ENABLE_ROUTING`
    - else `httputil.ReverseProxy` to `UPSTREAM_URL`
 
 ### Idempotent path (`serveIdempotent`)
 
-Reference: diagram lines 13–34 in `request-flow.mmd`.
+Reference: diagram lines 13 to 34 in `request-flow.mmd`.
 
-1. **Validate key** — format rules in `idempotency.ValidateKey`.
-2. **Read body** — up to `IDEMPOTENCY_MAX_BODY_BYTES` for fingerprinting and later proxy.
-3. **Build scope** — `SHA256(tenant|user)[:16]` hex isolates keys per tenant+user.
-4. **Fingerprint** — `SHA256(method, path, sortedQuery, body)`.
-5. **claim.lua** in Redis:
+1. Validate key: Format rules in `idempotency.ValidateKey`.
+2. Read body: Up to `IDEMPOTENCY_MAX_BODY_BYTES` for fingerprinting and later proxy.
+3. Build scope: `SHA256(tenant|user)[:16]` hex isolates keys per tenant+user.
+4. Fingerprint: `SHA256(method, path, sortedQuery, body)`.
+5. claim.lua: In Redis:
 
 | Result | Sidecar action |
 |--------|----------------|
 | `ResultReplay` | Write cached response to client; **no limiter, no upstream** |
 | `ResultInProgress` | 409 + `Retry-After` from lock TTL remainder |
-| `ResultHashMismatch` | 409 — same key, different payload |
+| `ResultHashMismatch` | 409. same key, different payload |
 | `ResultClaimed` | Proceed; hold `fence_token` |
 
-6. **Rate limit** — `checkRateLimit` (same as normal). On deny: `complete.lua` stores 429 body, return 429.
-7. **On allow** — `forwardIdempotent`:
+6. Rate limit: `checkRateLimit` (same as normal). On deny: `complete.lua` stores 429 body, return 429.
+7. On allow: `forwardIdempotent`:
    - Route or reverse-proxy through `ResponseCapturer`
    - `complete.lua` with matching `fence_token` stores status, headers, body
    - Set `X-Idempotency-Status: created`
-8. **On limiter error** — if `FAIL_OPEN`, forward anyway (dangerous); else `fail.lua` and 503.
+8. If `FAIL_OPEN`, forward anyway (dangerous); else `fail.lua` and 503.
 
 ### Limiter path (`/check` and `/check_hierarchical`)
 
 The limiter is not in the diagram's first hop but is on the critical path for both flows:
 
 1. `auth.RequireAPIKey(INTERNAL_API_KEY)`
-2. `checkRedisCircuit` — `cb:redis` must allow (fail-closed unless `CIRCUIT_FAIL_OPEN`)
-3. `limiterInstance.Allow` or `hierarchicalLimiter.AllowWithParams` — Lua in Redis
-4. `recordRedisCircuit` — classify Redis error/latency
-5. `recordAudit` — async enqueue (allowed / denied / error)
+2. `checkRedisCircuit`. `cb:redis` must allow (fail-closed unless `CIRCUIT_FAIL_OPEN`)
+3. `limiterInstance.Allow` or `hierarchicalLimiter.AllowWithParams`. Lua in Redis
+4. `recordRedisCircuit`. classify Redis error/latency
+5. `recordAudit`. async enqueue (allowed / denied / error)
 6. JSON response + `X-RateLimit-Limit`, `X-RateLimit-Remaining`, optional `Retry-After`
 
-**Special case:** `?idempotent_replay=true` on `/check` returns synthetic `allowed: true` without touching Redis — a trusted shortcut for callers that already deduplicated elsewhere. The sidecar does not use this on the standard idempotent path today.
+**Special case:** `?idempotent_replay=true` on `/check` returns synthetic `allowed: true` without touching Redis. a trusted shortcut for callers that already deduplicated elsewhere. The sidecar does not use this on the standard idempotent path today.
 
 ### Hierarchical keys on limiter
 
@@ -161,11 +161,11 @@ Overrides from `config:*` merge via `effectiveHierarchicalLimits` before Lua run
 
 **Idempotent path buffers full body in memory.** Large uploads hit `IDEMPOTENCY_MAX_BODY_BYTES` with 413. I chose correctness over streaming for mutating APIs.
 
-**Complete/fail requires fence token match.** A stale worker cannot overwrite Redis after lock reclaim — but legitimate completes fail with `ErrStaleFence` if the client retried after lock expiry and another worker claimed.
+**Complete/fail requires fence token match.** A stale worker cannot overwrite Redis after lock reclaim, but legitimate completes fail with `ErrStaleFence` if the client retried after lock expiry and another worker claimed.
 
-**Normal path does not deduplicate.** Duplicate GETs each consume quota — by design.
+**Normal path does not deduplicate.** Duplicate GETs each consume quota. by design.
 
-**Routing reads body twice in some paths.** `forwardRequest` and idempotent forward call `readRequestBody` to support POST through router — small CPU cost for correctness.
+**Routing reads body twice in some paths.** `forwardRequest` and idempotent forward call `readRequestBody` to support POST through router. small CPU cost for correctness.
 
 ---
 
@@ -185,10 +185,10 @@ Overrides from `config:*` merge via `effectiveHierarchicalLimits` before Lua run
 
 ## Operational concerns
 
-- **Header contract:** Clients must send `X-User-ID`. Tenant-aware hierarchical sidecar cache needs `X-Tenant-ID` or `tenant_id` query param.
-- **Idempotency-Key** only activates on POST/PUT/PATCH with `ENABLE_IDEMPOTENCY=true`.
-- **Health:** Sidecar `/health` checks limiter `/health`, not Redis directly — idempotency/routing Redis could be down while health is green. I rely on metrics and claim errors for that gap.
-- **Debug:** `DEBUG=true` logs cache key decisions — noisy but essential during cache poisoning investigations.
+- Header contract: Clients must send `X-User-ID`. Tenant-aware hierarchical sidecar cache needs `X-Tenant-ID` or `tenant_id` query param.
+- Idempotency-Key: Only activates on POST/PUT/PATCH with `ENABLE_IDEMPOTENCY=true`.
+- Health: Sidecar `/health` checks limiter `/health`, not Redis directly. idempotency/routing Redis could be down while health is green. I rely on metrics and claim errors for that gap.
+- Debug: `DEBUG=true` logs cache key decisions. noisy but essential during cache poisoning investigations.
 
 ---
 
@@ -196,27 +196,27 @@ Overrides from `config:*` merge via `effectiveHierarchicalLimits` before Lua run
 
 | Step | Typical cost driver |
 |------|---------------------|
-| Denial cache hit | In-memory map lookup — microseconds |
+| Denial cache hit | In-memory map lookup. microseconds |
 | singleflight miss | One HTTP RTT to limiter + one Redis Lua |
-| Idempotency replay | One Redis Lua (claim returns cached) — no limiter |
-| Idempotency claim | claim.lua + limiter + upstream + complete.lua — 3+ Redis scripts |
+| Idempotency replay | One Redis Lua (claim returns cached). no limiter |
+| Idempotency claim | claim.lua + limiter + upstream + complete.lua. 3+ Redis scripts |
 | Hierarchical vs flat | Same one Lua; hierarchical checks 4 buckets in-script |
 
-Default denial TTL 30 ms is aggressively short — I tuned it to catch burst abuse without stale 429s after refill.
+Default denial TTL 30 ms is aggressively short. I tuned it to catch burst abuse without stale 429s after refill.
 
 ---
 
 ## Lessons learned
 
-1. **Branch at the top on idempotency key presence** — mixing dedup into `serveNormal` created impossible state around body teeing.
+1. Branch at the top on idempotency key presence: Mixing dedup into `serveNormal` created impossible state around body teeing.
 
-2. **Store 429 in idempotency complete** — a denied mutating request should replay as 429, not re-hit upstream on retry.
+2. A denied mutating request should replay as 429, not re-hit upstream on retry.
 
-3. **The diagram's "ID" participant is Redis-backed idempotency**, not a separate service — keeping it in Redis avoids another failure domain.
+3. The diagram's "ID" participant is Redis-backed idempotency: , not a separate service. keeping it in Redis avoids another failure domain.
 
-4. **`idempotent_replay` on limiter is a scalpel** — useful for admin replay tools (`audit.Replay` hints), not for general clients.
+4. `idempotent_replay` on limiter is a scalpel: Useful for admin replay tools (`audit.Replay` hints), not for general clients.
 
-5. **Record routing outcomes only after gateway response** — `Router.Forward` updates `route:gw:{id}` and `cb:{id}` per attempt, so failover loops produce accurate per-gateway metrics.
+5. Record routing outcomes only after gateway response: `Router.Forward` updates `route:gw:{id}` and `cb:{id}` per attempt, so failover loops produce accurate per-gateway metrics.
 
 ---
 
@@ -224,7 +224,7 @@ Default denial TTL 30 ms is aggressively short — I tuned it to catch burst abu
 
 The Mermaid source at [../diagrams/request-flow.mmd](../diagrams/request-flow.mmd) is the authoritative numbering:
 
-- Steps 10–34: mutating + `Idempotency-Key`
-- Steps 36–46: normal path with denial cache
+- Steps 10 to 34: mutating + `Idempotency-Key`
+- Steps 36 to 46: normal path with denial cache
 
 For idempotency-only detail see [../diagrams/idempotency-flow.mmd](../diagrams/idempotency-flow.mmd). For routing after allow see [routing-architecture.md](./routing-architecture.md).

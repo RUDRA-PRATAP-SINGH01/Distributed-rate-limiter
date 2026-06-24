@@ -1,6 +1,6 @@
-# Sidecar Architecture
+﻿# Sidecar Architecture
 
-When I extracted rate limiting from application code into `cmd/sidecar`, I was building a **service-mesh-lite** reverse proxy: one binary per pod (or per node) that every client hits on `:9090` before traffic reaches the real service on `:8081` or a gateway pool. The sidecar does not own quota — it **asks** the central limiter on `:8080` — but it owns every optimization and safety valve on the edge path.
+When I extracted rate limiting from application code into `cmd/sidecar`, I was building a **service-mesh-lite** reverse proxy: one binary per pod (or per node) that every client hits on `:9090` before traffic reaches the real service on `:8081` or a gateway pool. The sidecar does not own quota; it **asks** the central limiter on `:8080`, but it owns every optimization and safety valve on the edge path.
 
 This is the component I would clone per deployment region, not the limiter.
 
@@ -28,7 +28,7 @@ Without a sidecar, each service variant implements its own:
 
 I centralized that logic once in `Sidecar` struct (`cmd/sidecar/main.go`) so behavior is identical whether the upstream is `demo:8081` or three payment gateways.
 
-The sidecar also solves **coordination locality**: `singleflight` and denial cache are process-local — they reduce fleet-wide Redis QPS without claiming global consistency for allows.
+The sidecar also solves **coordination locality**: `singleflight` and denial cache are process-local. they reduce fleet-wide Redis QPS without claiming global consistency for allows.
 
 ---
 
@@ -41,7 +41,7 @@ The sidecar also solves **coordination locality**: `singleflight` and denial cac
 | Trusted identity | Header-first `X-User-ID`; query opt-in only |
 | Blast radius containment | `ALLOWED_PATHS` prefix allowlist |
 | Optional strictness | `FAIL_OPEN`, `IDEMPOTENCY_FAIL_OPEN` default false |
-| One reverse proxy instance | `httputil.NewSingleHostReverseProxy` at startup — per-request creation leaks goroutines |
+| One reverse proxy instance | `httputil.NewSingleHostReverseProxy` at startup. per-request creation leaks goroutines |
 | Shared Redis connection | One `UniversalClient` for idempotency + routing when both enabled |
 
 ---
@@ -58,7 +58,7 @@ I prototyped this. Attackers could park on "allowed" for the TTL window. I delet
 
 ### Sidecar talks to Redis for quota directly
 
-Would eliminate the limiter HTTP hop but duplicates algorithm logic and bypasses audit/circuit on the limiter. I kept Redis on the sidecar only for **idempotency** and **routing/circuit** state — orthogonal concerns.
+Would eliminate the limiter HTTP hop but duplicates algorithm logic and bypasses audit/circuit on the limiter. I kept Redis on the sidecar only for **idempotency** and **routing/circuit** state. orthogonal concerns.
 
 ### Pull-based limiter (sidecar subscribes to quota stream)
 
@@ -96,14 +96,14 @@ Elegant for massive scale; overkill for my target (thousands of RPS, single Redi
 
 `Sidecar` holds:
 
-- `cache sync.Map` — denial entries keyed by `cacheKey`
-- `limitFlight singleflight.Group` — per-key coalescing
-- `ttl time.Duration` — denial cache TTL (default 30 ms)
-- `failOpen bool` — forward on limiter errors
-- `useHierarchical bool` — switches `/check` vs `/check_hierarchical`
-- `idempotency idempotency.Store` — Redis Lua backend
-- `router *routing.Router` — when `ENABLE_ROUTING=true`
-- `limiterCircuit *circuitbreaker.Breaker` — target `central-limiter` and per-gateway when routing enabled
+- `cache sync.Map`. denial entries keyed by `cacheKey`
+- `limitFlight singleflight.Group`. per-key coalescing
+- `ttl time.Duration`. denial cache TTL (default 30 ms)
+- `failOpen bool`. forward on limiter errors
+- `useHierarchical bool`. switches `/check` vs `/check_hierarchical`
+- `idempotency idempotency.Store`. Redis Lua backend
+- `router *routing.Router`. when `ENABLE_ROUTING=true`
+- `limiterCircuit *circuitbreaker.Breaker`. target `central-limiter` and per-gateway when routing enabled
 
 ### Identity resolution
 
@@ -112,7 +112,7 @@ Elegant for massive scale; overkill for my target (thousands of RPS, single Redi
 1. `X-User-ID` header (production path).
 2. `?user_id=` query only if `ALLOW_QUERY_USER_ID=true`.
 
-The sidecar forwards identity to the limiter via **header**, not query string — harder to spoof from browser address bars and consistent with hierarchical tenant headers.
+The sidecar forwards identity to the limiter via **header**, not query string. harder to spoof from browser address bars and consistent with hierarchical tenant headers.
 
 Tenant resolution (`tenantID` helper):
 
@@ -138,13 +138,13 @@ if !entry.Allowed {
 // allowed entries: fall through to limiter
 ```
 
-On every limiter response (hit or miss), I **store both allow and deny** in the map — but only **read** denials. Allows in the map are overwritten each check; they exist mainly as debugging artifacts and expire via TTL without affecting correctness.
+On every limiter response (hit or miss), I **store both allow and deny** in the map, but only **read** denials. Allows in the map are overwritten each check; they exist mainly as debugging artifacts and expire via TTL without affecting correctness.
 
 ### singleflight
 
 `limitFlight.Do(cacheKey, func() { return checkRateLimit(...) })`
 
-When 100 goroutines miss cache for `user-42`, one executes `checkRateLimit`; others receive the same `limitResult`. This protects the limiter during thundering herds **after** a cache miss — not on denial hits.
+When 100 goroutines miss cache for `user-42`, one executes `checkRateLimit`; others receive the same `limitResult`. This protects the limiter during thundering herds **after** a cache miss, not on denial hits.
 
 Shared error propagation: if the leader's limiter call fails, all waiters get the same error (503 or fail-open forward).
 
@@ -157,7 +157,7 @@ Shared error propagation: if the leader's limiter call fails, all waiters get th
 
 Circuit check order:
 
-1. `limiterCircuit.Allow(central-limiter)` — if denied, error before network
+1. `limiterCircuit.Allow(central-limiter)`. if denied, error before network
 2. HTTP to limiter
 3. `Record` with classified outcome
 
@@ -174,7 +174,7 @@ Two independent flags:
 
 I log `WARNING: FAIL_OPEN=true` at startup. This is an availability lever for disasters, not a default.
 
-Circuit breaker has its own `CIRCUIT_FAIL_OPEN` on the **limiter** process for Redis — sidecar fail-open is separate.
+Circuit breaker has its own `CIRCUIT_FAIL_OPEN` on the **limiter** process for Redis. sidecar fail-open is separate.
 
 ### Forwarding paths
 
@@ -186,7 +186,7 @@ Idempotent forwards use `ResponseCapturer` to buffer response for `complete.lua`
 
 ### Redis connection (`connectSidecarRedis`)
 
-Required when `ENABLE_IDEMPOTENCY` or `ENABLE_ROUTING`. Supports standalone (`REDIS_ADDR`) and Sentinel (`REDIS_MODE=sentinel`). Fails fast on `Ping` — same discipline as limiter.
+Required when `ENABLE_IDEMPOTENCY` or `ENABLE_ROUTING`. Supports standalone (`REDIS_ADDR`) and Sentinel (`REDIS_MODE=sentinel`). Fails fast on `Ping`. same discipline as limiter.
 
 ### Configuration surface (docker-compose defaults)
 
@@ -205,13 +205,13 @@ Required when `ENABLE_IDEMPOTENCY` or `ENABLE_ROUTING`. Supports standalone (`RE
 
 ## Tradeoffs
 
-**Process-local cache is not shared across sidecars.** Two pods can both miss cache and double-call limiter — acceptable; double **allow** is impossible because limiter decrements atomically. Double **deny cache miss** only adds load.
+**Process-local cache is not shared across sidecars.** Two pods can both miss cache and double-call limiter. acceptable; double **allow** is impossible because limiter decrements atomically. Double **deny cache miss** only adds load.
 
 **30 ms denial TTL is a guess.** Too long → users see 429 after refill. Too short → less protection. I expose `CACHE_TTL_MS` for tuning per workload.
 
 **Body read for routing/idempotency** prevents true streaming uploads through the sidecar for those modes.
 
-**Health check indirect** — sidecar health reflects limiter health only, not sidecar-local Redis.
+**Health check indirect**. sidecar health reflects limiter health only, not sidecar-local Redis.
 
 ---
 
@@ -225,20 +225,20 @@ Required when `ENABLE_IDEMPOTENCY` or `ENABLE_ROUTING`. Supports standalone (`RE
 | Invalid `UPSTREAM_URL` | Fatal at startup |
 | `ENABLE_ROUTING` without `GATEWAYS` | Fatal at startup |
 | Stale denial cache | User waits up to TTL then gets accurate limiter result |
-| singleflight panic in worker | Would propagate — I keep checkRateLimit panic-free |
+| singleflight panic in worker | Would propagate. I keep checkRateLimit panic-free |
 
 ---
 
 ## Operational concerns
 
 - Deploy sidecar **co-located** with app instances (K8s sidecar container or same host).
-- Set `ALLOWED_PATHS` to exact API roots — unset allows entire URL space (startup warning).
+- Set `ALLOWED_PATHS` to exact API roots. unset allows entire URL space (startup warning).
 - Protect `:9090` at ingress; it trusts `X-User-ID` from inner mesh.
 - `INTERNAL_API_KEY` must match limiter configuration.
 - For TLS termination, set `TLS_CERT_FILE` + `TLS_KEY_FILE` on sidecar.
-- Metrics on `/metrics` — optional `METRICS_REQUIRE_AUTH`.
+- Metrics on `/metrics`. optional `METRICS_REQUIRE_AUTH`.
 
-Rolling restart: in-memory cache clears — safe, no state loss that matters.
+Rolling restart: in-memory cache clears. safe, no state loss that matters.
 
 ---
 
@@ -258,20 +258,20 @@ Metrics: `RecordCacheHit`, `RecordCacheMiss` on sidecar; correlate with limiter 
 
 ## Lessons learned
 
-1. **The comment about allowed-cache attacks is there because I did it wrong once.** New contributors should not "optimize" by caching allows.
+1. The comment about allowed-cache attacks is there because I did it wrong once: New contributors should not "optimize" by caching allows.
 
-2. **singleflight key must match cache key** — using only `userID` in hierarchical mode would coalesce unrelated endpoints incorrectly... actually they'd share limiter calls for same user which might be OK for flat check but wrong for endpoint-scoped hierarchical limits. Path in the key fixes this.
+2. singleflight key must match cache key: Using only `userID` in hierarchical mode would coalesce unrelated endpoints incorrectly... actually they'd share limiter calls for same user which might be OK for flat check but wrong for endpoint-scoped hierarchical limits. Path in the key fixes this.
 
-3. **Set `r.Host = target.Host` on reverse proxy** — virtual hosting breaks silently without it.
+3. Set `r.Host = target.Host` on reverse proxy: Virtual hosting breaks silently without it.
 
-4. **Drain limiter health response body** in sidecar `/health` — `io.Copy(Discard)` prevents keep-alive connection leaks.
+4. Drain limiter health response body: In sidecar `/health`. `io.Copy(Discard)` prevents keep-alive connection leaks.
 
-5. **Idempotency fail-open to normal path** is a conscious degradation ladder: lose dedup, keep rate limits, still serve traffic.
+5. Idempotency fail-open to normal path: Is a conscious degradation ladder: lose dedup, keep rate limits, still serve traffic.
 
 ---
 
 ## Related documents
 
-- [request-flow.md](./request-flow.md) — full sequence diagrams
-- [routing-architecture.md](./routing-architecture.md) — gateway selection after allow
-- [redis-design.md](./redis-design.md) — `idem:*` key layout
+- [request-flow.md](./request-flow.md). full sequence diagrams
+- [routing-architecture.md](./routing-architecture.md). gateway selection after allow
+- [redis-design.md](./redis-design.md). `idem:*` key layout

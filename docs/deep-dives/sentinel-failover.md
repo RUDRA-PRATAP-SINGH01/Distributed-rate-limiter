@@ -1,8 +1,8 @@
-# Sentinel Failover — Engineering Journal
+﻿# Sentinel Failover
 
 ## Problem Statement
 
-Standalone Redis is a single point of failure. When the primary dies, every subsystem — rate limits, idempotency, circuits, audit, routing state — becomes unavailable. I needed **automatic Redis failover** without rewriting application logic, using Sentinel-managed promotion and a client that rediscovers the new master.
+Standalone Redis is a single point of failure. When the primary dies, every subsystem. rate limits, idempotency, circuits, audit, routing state. becomes unavailable. I needed **automatic Redis failover** without rewriting application logic, using Sentinel-managed promotion and a client that rediscovers the new master.
 
 ## Why the problem exists
 
@@ -17,11 +17,11 @@ Manual failover (promote replica, reconfigure apps) takes minutes and human erro
 
 ## Design goals
 
-1. **Mode switch via env** — `REDIS_MODE=sentinel` in `internal/redis/config.go`.
-2. **Universal client interface** — `redis.UniversalClient` so limiter/idempotency packages unchanged.
-3. **Health visibility** — `CheckHealth` reports role, replication, master addr.
-4. **Connection pool defaults** — `PoolSize=100`, `MinIdleConns=10` for failover reconnect storm.
-5. **Documented drill** — `benchmarks/sentinel/summary.md` and `docker-compose.ha.yml` profile.
+1. Mode switch via env: `REDIS_MODE=sentinel` in `internal/redis/config.go`.
+2. Universal client interface: `redis.UniversalClient` so limiter/idempotency packages unchanged.
+3. Health visibility: `CheckHealth` reports role, replication, master addr.
+4. Connection pool defaults: `PoolSize=100`, `MinIdleConns=10` for failover reconnect storm.
+5. Documented drill: `benchmarks/sentinel/summary.md` and `docker-compose.ha.yml` profile.
 
 ## Alternative approaches considered
 
@@ -31,7 +31,7 @@ Manual failover (promote replica, reconfigure apps) takes minutes and human erro
 | Primary-replica with manual promotion | Too slow |
 | Elasticache Multi-AZ | Cloud-specific; we support self-hosted Sentinel |
 | Raft alternative (etcd) | Rewrite all Lua state machines |
-| Read replicas for writes | Incorrect for atomic Lua — all writes must hit primary |
+| Read replicas for writes | Incorrect for atomic Lua. all writes must hit primary |
 
 Sentinel + FailoverClient is the pragmatic HA layer.
 
@@ -59,7 +59,7 @@ case ModeSentinel:
     return redis.NewFailoverClient(opts)
 ```
 
-Comments note Sentinel-driven topology updates — go-redis reconnects to promoted master.
+Comments note Sentinel-driven topology updates. go-redis reconnects to promoted master.
 
 **Health** (`internal/redis/health.go`):
 
@@ -77,23 +77,23 @@ Comments note Sentinel-driven topology updates — go-redis reconnects to promot
 | Client | FailoverClient discovers new master, reconnects |
 | Old master returns | Rejoins as replica |
 
-**Metrics** — `redis_failover_reconnects_total` (referenced in sentinel summary).
+**Metrics**. `redis_failover_reconnects_total` (referenced in sentinel summary).
 
 ## Tradeoffs
 
-- **Brief write unavailability** — election window 5–30s; all sidecars fail-closed — user-visible 503 burst.
-- **Async replication** — last seconds of writes may be lost if master dies before replicate; idempotency in-flight keys at risk (RPO > 0).
-- **Sentinel quorum** — 3 sentinels recommended; split-brain if misconfigured.
-- **Single primary write scale** — Sentinel solves HA not horizontal write scale.
-- **Lua on new master** — replica promotion must complete replication backlog before serving writes.
+- Election window 5 to 30s; all sidecars fail-closed. user-visible 503 burst.
+- Last seconds of writes may be lost if master dies before replicate; idempotency in-flight keys at risk (RPO > 0).
+- Sentinel quorum: 3 sentinels recommended; split-brain if misconfigured.
+- Single primary write scale: Sentinel solves HA not horizontal write scale.
+- Replica promotion must complete replication backlog before serving writes.
 
 ## Failure modes
 
-1. **All sentinels down** — client holds last known master; may talk to stale master if partition.
-2. **Split brain (mis-quorum)** — two masters — rare with proper sentinel count; data corruption risk.
-3. **Connection pool exhaustion during reconnect** — many sidecars reconnect simultaneously — tune pool.
-4. **SCRIPT FLUSH on new master** — go-redis resends scripts; transient latency spike.
-5. **Read your writes** — app never reads quota from replica; good — replicas not used in our code paths.
+1. All sentinels down: Client holds last known master; may talk to stale master if partition.
+2. Split brain (mis-quorum): Two masters. rare with proper sentinel count; data corruption risk.
+3. Connection pool exhaustion during reconnect: Many sidecars reconnect simultaneously. tune pool.
+4. SCRIPT FLUSH on new master: Go-redis resends scripts; transient latency spike.
+5. Read your writes: App never reads quota from replica; good. replicas not used in our code paths.
 
 ## Operational concerns
 
@@ -102,28 +102,28 @@ Comments note Sentinel-driven topology updates — go-redis reconnects to promot
 - Verify: `curl http://localhost:8080/health | jq .redis`
 - Monitor `redis.role` flips and reconnect metric.
 - `go test -bench=. ./internal/redis/...` for client benchmarks.
-- Chaos: `chaos/chaos_test.ps1` kills Redis container — related but tests total outage not graceful failover.
+- Chaos: `chaos/chaos_test.ps1` kills Redis container. related but tests total outage not graceful failover.
 
 ## Performance implications
 
-FailoverClient maintains sentinel connections — small background overhead vs standalone `redis.NewClient`.
+FailoverClient maintains sentinel connections. small background overhead vs standalone `redis.NewClient`.
 
-During steady state, performance matches standalone — same single-primary Lua execution ceiling (~1,000 RPS system knee per `benchmarks/summary.md`).
+During steady state, performance matches standalone. same single-primary Lua execution ceiling (~1,000 RPS system knee per `benchmarks/summary.md`).
 
 Reconnect storm after promotion may cause p99 spike across all sidecars for one pool refresh cycle.
 
-`Describe(cfg)` logs `sentinel master=mymaster sentinels=[...]` at startup — verify correct topology in multi-env deploys.
+`Describe(cfg)` logs `sentinel master=mymaster sentinels=[...]` at startup. verify correct topology in multi-env deploys.
 
 ## Lessons learned
 
-HA Redis does not mean **zero downtime** — it means bounded recovery. Product and SLO docs must say so.
+HA Redis does not mean **zero downtime**; it means bounded recovery. Product and SLO docs must say so.
 
-I test failover with load running, not idle — connection pool bugs only appear under concurrent `EVAL`.
+I test failover with load running, not idle. connection pool bugs only appear under concurrent `EVAL`.
 
-Keeping `UniversalClient` interface meant limiter packages never learned about Sentinel — correct abstraction boundary.
+Keeping `UniversalClient` interface meant limiter packages never learned about Sentinel. correct abstraction boundary.
 
-Replication lag is the hidden SLA killer for idempotency — document RPO; fences don't help if claim metadata never replicated.
+Replication lag is the hidden SLA killer for idempotency. document RPO; fences don't help if claim metadata never replicated.
 
 Run failover drill quarterly; Sentinel config drifts (wrong `down-after-milliseconds`) silently until real incident.
 
-Instrument Redis with `telemetry.InstrumentRedis` (`internal/telemetry/redis.go`) — traces show reconnect gaps in Jaeger.
+Instrument Redis with `telemetry.InstrumentRedis` (`internal/telemetry/redis.go`). traces show reconnect gaps in Jaeger.

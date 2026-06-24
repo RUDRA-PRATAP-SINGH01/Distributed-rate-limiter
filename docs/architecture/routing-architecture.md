@@ -1,6 +1,6 @@
-# Routing Architecture
+﻿# Routing Architecture
 
-When I added payment-gateway simulation (`gateway-a`, `gateway-b`, `gateway-c` in `docker-compose.yml`), a static `UPSTREAM_URL` was no longer enough. Gateway C was slow and error-prone but could not simply be removed — it was the DR endpoint with lower weight. I built `internal/routing` so the sidecar **scores**, **samples**, and **failovers** across gateways using live metrics in Redis, while a distributed circuit breaker (`cb:{gatewayID}`) prevents hammering dead endpoints.
+When I added payment-gateway simulation (`gateway-a`, `gateway-b`, `gateway-c` in `docker-compose.yml`), a static `UPSTREAM_URL` was no longer enough. Gateway C was slow and error-prone but could not simply be removed; it was the DR endpoint with lower weight. I built `internal/routing` so the sidecar **scores**, **samples**, and **failovers** across gateways using live metrics in Redis, while a distributed circuit breaker (`cb:{gatewayID}`) prevents hammering dead endpoints.
 
 This is optional: `ENABLE_ROUTING=true` on the sidecar. Without it, `httputil.ReverseProxy` handles a single upstream.
 
@@ -10,17 +10,17 @@ This is optional: `ENABLE_ROUTING=true` on the sidecar. Without it, `httputil.Re
 
 Given multiple upstream gateways with different latency, error rates, and static weights, I need to:
 
-1. **Distribute traffic proportionally** to healthy capacity — not round-robin.
-2. **Detect degradation** faster than DNS TTL or manual ops toggles.
-3. **Fail over** within a single client request when the primary gateway errors.
-4. **Integrate with circuit breakers** so open circuits exclude gateways from selection.
-5. **Expose decision metadata** (`X-Gateway-ID`, score, failover flag) for support tickets.
+1. Distribute traffic proportionally: To healthy capacity, not round-robin.
+2. Detect degradation: Faster than DNS TTL or manual ops toggles.
+3. Fail over: Within a single client request when the primary gateway errors.
+4. Integrate with circuit breakers: So open circuits exclude gateways from selection.
+5. Expose decision metadata: (`X-Gateway-ID`, score, failover flag) for support tickets.
 
 ---
 
 ## Why the problem exists
 
-Weighted DNS does not see 5xx responses. Kubernetes Service endpoints spread load evenly — they ignore that gateway-b has 50 ms P99 while gateway-c throws 35% errors in my chaos tests.
+Weighted DNS does not see 5xx responses. Kubernetes Service endpoints spread load evenly. they ignore that gateway-b has 50 ms P99 while gateway-c throws 35% errors in my chaos tests.
 
 Client-side retries multiply traffic to already-failing nodes unless something centralizes health signal. The sidecar already sits on the request path after rate limiting; routing is the next hop.
 
@@ -32,7 +32,7 @@ I store gateway state in Redis (not in sidecar memory) so **all sidecar replicas
 
 | Goal | Implementation |
 |------|----------------|
-| Weighted load spread | `PickPrimary` — weighted random by score |
+| Weighted load spread | `PickPrimary`. weighted random by score |
 | Latency awareness | EMA latency in `route:gw:{id}` + scorer latency factor |
 | Error awareness | Error rate penalty + circuit `record.lua` |
 | Admin control | Enable/disable, weight CRUD on admin `:8082` |
@@ -50,7 +50,7 @@ Simple, ignores weight and latency. Bad for payment routing where DR gateway sho
 
 ### Pick lowest latency only (always best)
 
-Starves exploration — a recovering gateway never receives traffic to prove health. Weighted random preserves minimum share for low-weight nodes.
+Starves exploration. a recovering gateway never receives traffic to prove health. Weighted random preserves minimum share for low-weight nodes.
 
 ### Sidecar-local health cache only
 
@@ -62,7 +62,7 @@ Viable at scale; my Go router keeps custom headers, integrates with existing `ci
 
 ### Separate health service polling gateways
 
-I folded passive health into `record_outcome.lua` and active health into `StartHealthProbes` — fewer moving parts, at cost of probe traffic every `ROUTING_PROBE_INTERVAL_SEC` (default 15 s).
+I folded passive health into `record_outcome.lua` and active health into `StartHealthProbes`. fewer moving parts, at cost of probe traffic every `ROUTING_PROBE_INTERVAL_SEC` (default 15 s).
 
 ---
 
@@ -86,24 +86,24 @@ I folded passive health into `record_outcome.lua` and active health into `StartH
 
 **Router** (`router.go`):
 
-- `Seed` — register gateways from `GATEWAYS` env at startup
-- `StartHealthProbes` — background ticker hits `{gatewayURL}/health`
-- `Forward` — select, try, failover loop, copy response
+- `Seed`. register gateways from `GATEWAYS` env at startup
+- `StartHealthProbes`. background ticker hits `{gatewayURL}/health`
+- `Forward`. select, try, failover loop, copy response
 
 **Selector** (`selector.go`):
 
-- `PickPrimary` — weighted random among score > 0
-- `FailoverOrder` — descending score, exclude failed primary, cap tries
+- `PickPrimary`. weighted random among score > 0
+- `FailoverOrder`. descending score, exclude failed primary, cap tries
 
 **Scorer** (`scorer.go`):
 
-- `ComputeScore` — multiplicative formula
-- `RankScores` — insertion sort (N ≤ ~10 gateways)
+- `ComputeScore`. multiplicative formula
+- `RankScores`. insertion sort (N ≤ ~10 gateways)
 
 **RedisStore** (`store.go`):
 
 - `RegisterGateway`, `ListGateways`, `RecordOutcome`, `UpdateHealthProbe`
-- `enrichCircuit` — attaches `CircuitState` from `cb:{id}`
+- `enrichCircuit`. attaches `CircuitState` from `cb:{id}`
 
 ### Gateway registration
 
@@ -160,23 +160,23 @@ score = weight * latencyFactor * healthFactor * errorFactor
 1. `RankScores` descending
 2. Filter `score > 0`
 3. `roll = rng.Float64() * totalScore`
-4. Cumulative sum until `roll <= acc` — classic roulette wheel
+4. Cumulative sum until `roll <= acc`. classic roulette wheel
 
-This is **probabilistic**, not strict proportion — variance is acceptable for my throughput targets. Over thousands of requests, empirical share converges to score ratios.
+This is **probabilistic**, not strict proportion. variance is acceptable for my throughput targets. Over thousands of requests, empirical share converges to score ratios.
 
 ### Failover loop
 
 `Forward` builds try list:
 
 1. `primary` from `PickPrimary`
-2. Append `FailoverOrder(states, primary.ID)` — next best scores, max `MaxFailoverTries`
+2. Append `FailoverOrder(states, primary.ID)`. next best scores, max `MaxFailoverTries`
 
 For each candidate:
 
-1. `breaker.Allow(gatewayID)` — skip if open or error
-2. `execute` — HTTP with original method, path, query, headers, body
+1. `breaker.Allow(gatewayID)`. skip if open or error
+2. `execute`. HTTP with original method, path, query, headers, body
 3. Classify success: `err == nil && status < 500`
-4. `store.RecordOutcome` — updates `route:gw:*` + breaker `Record`
+4. `store.RecordOutcome`. updates `route:gw:*` + breaker `Record`
 5. On success → copy response, set headers, return
 6. On failure → continue; set `X-Gateway-Failover: true` on eventual success
 
@@ -192,7 +192,7 @@ After each outcome:
 4. `latency_penalty = min(ema / 200, 1.0)`
 5. `health = (1 - error_rate) * (1 - latency_penalty * 0.3) * 100`
 
-Passive probes (`UpdateHealthProbe`) call the same `RecordOutcome` path — failed `/health` counts as error.
+Passive probes (`UpdateHealthProbe`) call the same `RecordOutcome` path. failed `/health` counts as error.
 
 ### Circuit integration and unknown state
 
@@ -207,22 +207,22 @@ if err != nil {
 st.CircuitState = snap.State
 ```
 
-`GatewayState.Selectable` treats **`StateUnknown` like open** — non-selectable.
+`GatewayState.Selectable` treats **`StateUnknown` like open**. non-selectable.
 
 **Why:** If I cannot read `cb:{id}`, I refuse to guess. Sending traffic to a gateway that might be circuit-open wastes failover budget and poisons metrics.
 
-On the limiter, Redis circuit errors with fail-closed behave similarly — different service, same philosophy.
+On the limiter, Redis circuit errors with fail-closed behave similarly. different service, same philosophy.
 
 Circuit states per gateway:
 
 | State | Routing behavior |
 |-------|------------------|
 | `closed` | Normal selection |
-| `half_open` | `allow.lua` permits limited probes — may appear in selection |
+| `half_open` | `allow.lua` permits limited probes. may appear in selection |
 | `open` | Excluded from `Selectable` |
-| `unknown` | Excluded — Redis read failure on enrich |
+| `unknown` | Excluded. Redis read failure on enrich |
 
-Separate from routing health score, `record.lua` tracks failure rate, consecutive failures, timeout rate, latency spikes — can open circuit independently of health_score formula.
+Separate from routing health score, `record.lua` tracks failure rate, consecutive failures, timeout rate, latency spikes. can open circuit independently of health_score formula.
 
 ### Response headers
 
@@ -238,15 +238,15 @@ OpenTelemetry span attributes mirror these on `sidecar.intelligent_route`.
 
 ## Tradeoffs
 
-**Probabilistic routing ≠ strict SLA per gateway.** A gateway with 5% score still occasionally wins — intentional for recovery probes.
+**Probabilistic routing ≠ strict SLA per gateway.** A gateway with 5% score still occasionally wins. intentional for recovery probes.
 
-**Double accounting on probes + real traffic** — health probes consume gateway CPU and update same counters. I accept bias toward steady-state probe interval vs bursty user traffic.
+**Double accounting on probes + real traffic**. health probes consume gateway CPU and update same counters. I accept bias toward steady-state probe interval vs bursty user traffic.
 
-**Failover serializes attempts** — latency on failure = sum of failed gateway RTTs. `MaxFailoverTries=3` caps worst case.
+**Failover serializes attempts**. latency on failure = sum of failed gateway RTTs. `MaxFailoverTries=3` caps worst case.
 
-**Score computed at pick time, not re-checked on failover** — failover list is score-ordered snapshot; circuit may change between attempts — `Allow` catches that.
+**Score computed at pick time, not re-checked on failover**. failover list is score-ordered snapshot; circuit may change between attempts. `Allow` catches that.
 
-**Insertion sort** — O(n²) but n ≈ 3–10; simpler than heap for tiny sets.
+**Insertion sort**. O(n²) but n ≈ 3 to 10; simpler than heap for tiny sets.
 
 ---
 
@@ -256,7 +256,7 @@ OpenTelemetry span attributes mirror these on `sidecar.intelligent_route`.
 |----------|---------|
 | No gateways in `route:index` | `Forward` error: no gateways configured |
 | All scores zero | `no healthy gateways available` |
-| All circuits open/unknown | Same — empty candidate set after filter |
+| All circuits open/unknown | Same. empty candidate set after filter |
 | Primary 503, secondary OK | Failover success, `X-Gateway-Failover: true` |
 | All attempts fail | 503 `all gateways unavailable` to client |
 | Redis down during ListGateways | Forward fails immediately |
@@ -269,9 +269,9 @@ Chaos script `chaos/chaos_test.ps1` and `benchmarks/routing/` document observed 
 
 ## Operational concerns
 
-- **Seed on startup:** `router.Seed` upserts URL/weight — does not delete removed gateways from index; ops must disable via admin API.
-- **Admin routes** on limiter `:8082`: enable/disable, weight, circuit reset per gateway.
-- **Env tuning:**
+- Seed on startup: `router.Seed` upserts URL/weight. does not delete removed gateways from index; ops must disable via admin API.
+- Admin routes: On limiter `:8082`: enable/disable, weight, circuit reset per gateway.
+- Env tuning:
 
 | Variable | Default | Role |
 |----------|---------|------|
@@ -281,8 +281,8 @@ Chaos script `chaos/chaos_test.ps1` and `benchmarks/routing/` document observed 
 | `ROUTING_MAX_FAILOVER_TRIES` | 3 | Failover cap |
 | `ROUTING_PROBE_INTERVAL_SEC` | 15 | Active health |
 
-- **ENABLE_ROUTING without UPSTREAM_URL** — allowed; static upstream unused.
-- **Idempotency + routing** — `forwardIdempotent` uses same `Router.Forward` with captured response.
+- Allowed; static upstream unused.
+- Idempotency + routing: `forwardIdempotent` uses same `Router.Forward` with captured response.
 
 Reset playbook: admin `ResetCircuit(gatewayID)` + verify `health_score` recovers on successful probes.
 
@@ -290,34 +290,34 @@ Reset playbook: admin `ResetCircuit(gatewayID)` + verify `health_score` recovers
 
 ## Performance implications
 
-- **ListGateways:** O(n) HGETALL per gateway ID in SET — n small.
-- **Per forward:** 1 list + 1 allow Lua + 1 HTTP + 1 record outcome Lua + 1 circuit record Lua per attempt.
-- **Probes:** `n_gateways / probe_interval` background GETs — negligible at 3 gateways / 15 s.
-- **Weighted random:** O(n) per request — dominates neither HTTP nor Redis.
+- ListGateways: O(n) HGETALL per gateway ID in SET. n small.
+- Per forward: 1 list + 1 allow Lua + 1 HTTP + 1 record outcome Lua + 1 circuit record Lua per attempt.
+- Probes: `n_gateways / probe_interval` background GETs. negligible at 3 gateways / 15 s.
+- Weighted random: O(n) per request. dominates neither HTTP nor Redis.
 
-Benchmark summary in `benchmarks/routing/summary.md` — failover adds RTT linear in failed attempts.
+Benchmark summary in `benchmarks/routing/summary.md`. failover adds RTT linear in failed attempts.
 
 ---
 
 ## Lessons learned
 
-1. **`StateUnknown` must block selection** — optimistic routing on Redis errors sent 40% of traffic to a gateway whose circuit state I could not read during a Sentinel blip.
+1. `StateUnknown` must block selection: Optimistic routing on Redis errors sent 40% of traffic to a gateway whose circuit state I could not read during a Sentinel blip.
 
-2. **Health score and circuit are complementary** — health drags weight gradually; circuit hard-stops after threshold. Using only one left blind spots.
+2. Health drags weight gradually; circuit hard-stops after threshold. Using only one left blind spots.
 
-3. **Weighted pick needs a floor on errorFactor** — without `0.05` minimum, one bad gateway never receives probe traffic to recover.
+3. Weighted pick needs a floor on errorFactor: Without `0.05` minimum, one bad gateway never receives probe traffic to recover.
 
-4. **Failover order by score, not registration order** — first implementation tried SET iteration order; DR gateway never got second-chance tries.
+4. Failover order by score, not registration order: First implementation tried SET iteration order; DR gateway never got second-chance tries.
 
-5. **Record outcome even on failure** — skipping metric update on 503 left health_score stale at 100.
+5. Record outcome even on failure: Skipping metric update on 503 left health_score stale at 100.
 
-6. **Central-limiter circuit on sidecar** — routing enabled still rate-limits first; gateway circuits are a second layer. Do not conflate `cb:central-limiter` with `cb:gateway-a`.
+6. Central-limiter circuit on sidecar: Routing enabled still rate-limits first; gateway circuits are a second layer. Do not conflate `cb:central-limiter` with `cb:gateway-a`.
 
 ---
 
 ## Related documents
 
-- [request-flow.md](./request-flow.md) — routing after rate limit allow
-- [sidecar-architecture.md](./sidecar-architecture.md) — sidecar integration
-- [redis-design.md](./redis-design.md) — `route:gw:*` and `cb:*` keys
+- [request-flow.md](./request-flow.md). routing after rate limit allow
+- [sidecar-architecture.md](./sidecar-architecture.md). sidecar integration
+- [redis-design.md](./redis-design.md). `route:gw:*` and `cb:*` keys
 - Diagram: [../diagrams/routing-flow.mmd](../diagrams/routing-flow.mmd)

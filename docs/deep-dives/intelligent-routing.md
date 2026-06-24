@@ -1,4 +1,4 @@
-# Intelligent Routing — Engineering Journal
+﻿# Intelligent Routing
 
 ## Problem Statement
 
@@ -8,20 +8,20 @@ The sidecar fronts multiple upstream API gateways (regions, versions, canary poo
 
 Multi-gateway deployments happen for:
 
-- **Blue/green and canary** — shift traffic gradually.
-- **Regional failover** — secondary region absorbs load when primary degrades.
-- **Capacity bursting** — overflow pool handles spikes.
+- Shift traffic gradually.
+- Secondary region absorbs load when primary degrades.
+- Overflow pool handles spikes.
 
-A dumb proxy sends traffic to dying gateways until operators manually drain them. Health probes alone are insufficient — a gateway can pass `/health` while returning 500s on business routes or running at 2s latency. I needed **outcome-aware scoring** stored in Redis so all sidecars share the same view.
+A dumb proxy sends traffic to dying gateways until operators manually drain them. Health probes alone are insufficient. a gateway can pass `/health` while returning 500s on business routes or running at 2s latency. I needed **outcome-aware scoring** stored in Redis so all sidecars share the same view.
 
 ## Design goals
 
-1. **Score-based primary selection** — weighted random among gateways with score > 0.
-2. **Deterministic failover ordering** — try next-best by score, capped by `MaxFailoverTries`.
-3. **Background health probes** — `StartHealthProbes` hits `gateway.URL/health` on interval.
-4. **Outcome recording** — latency and success after each forward update EMA/error rate in Redis.
-5. **Circuit breaker integration** — skip gateways with open circuits (`internal/circuitbreaker`).
-6. **Trace propagation** — span `sidecar.intelligent_route` in `router.go`.
+1. Weighted random among gateways with score > 0.
+2. Deterministic failover ordering: Try next-best by score, capped by `MaxFailoverTries`.
+3. Background health probes: `StartHealthProbes` hits `gateway.URL/health` on interval.
+4. Latency and success after each forward update EMA/error rate in Redis.
+5. Circuit breaker integration: Skip gateways with open circuits (`internal/circuitbreaker`).
+6. Trace propagation: Span `sidecar.intelligent_route` in `router.go`.
 
 ## Alternative approaches considered
 
@@ -63,31 +63,31 @@ errorFactor   = 1 - (errorRate × ErrorPenalty), min 0.05
 **Forward flow** (`router.go`):
 
 1. `ListGateways` from Redis
-2. `selector.PickPrimary` — weighted random among candidates
+2. `selector.PickPrimary`. weighted random among candidates
 3. Build try list: primary + `FailoverOrder` (score descending, exclude primary)
 4. For each candidate: circuit `Allow` → `execute` → `RecordOutcome`
 5. On success: set `X-Gateway-ID`, `X-Gateway-Score`, `X-Gateway-Failover` headers
 6. On exhaustion: return last error
 
-**Probes** — `probeAll` updates health independently of user traffic — catches idle gateway failures.
+**Probes**. `probeAll` updates health independently of user traffic. catches idle gateway failures.
 
-**Lua** — `lua/record_outcome.lua` atomically updates rolling stats used by scorer on next read.
+**Lua**. `lua/record_outcome.lua` atomically updates rolling stats used by scorer on next read.
 
 ## Tradeoffs
 
-- **Weighted random vs best-of** — random avoids thundering herd on single "best" node; adds variance in A/B comparisons.
-- **Insertion sort** in `RankScores` — O(n²) but n is 3–10 gateways; simplicity over heap.
-- **Success = status < 500** — 4xx counts as success for circuit/routing (client fault); may keep routing to gateway that returns 404 for all — acceptable.
-- **Shared Redis state** — stale scores if outcome recording fails silently (`_ = RecordOutcome`); metrics gap.
-- **5s default HTTP client timeout** — `NewRouter` default; long uploads need config bump.
+- Weighted random (not strict best-of) avoids thundering herd on a single "best" node, though it adds variance in A/B comparisons.
+- Insertion sort: In `RankScores`. O(n²) but n is 3 to 10 gateways; simplicity over heap.
+- Success = status < 500: 4xx counts as success for circuit/routing (client fault); may keep routing to gateway that returns 404 for all. acceptable.
+- Stale scores if outcome recording fails silently (`_ = RecordOutcome`); metrics gap.
+- 5s default HTTP client timeout: `NewRouter` default; long uploads need config bump.
 
 ## Failure modes
 
-1. **No selectable gateways** — `no healthy gateways available` error.
-2. **All circuits open** — failover loop exhausts; combined routing + CB failure.
-3. **Split brain scores** — two sidecars record outcomes concurrently — Lua EMA update is atomic per gateway key.
-4. **Probe false positive** — `/health` OK but API broken — outcome recording eventually lowers score.
-5. **Failover storm** — primary flaps; `RecordRoutingFailover` metrics spike; need CB dampening.
+1. No selectable gateways: `no healthy gateways available` error.
+2. All circuits open: Failover loop exhausts; combined routing + CB failure.
+3. Split brain scores: Two sidecars record outcomes concurrently. Lua EMA update is atomic per gateway key.
+4. Probe false positive: `/health` OK but API broken. outcome recording eventually lowers score.
+5. Failover storm: Primary flaps; `RecordRoutingFailover` metrics spike; need CB dampening.
 
 ## Operational concerns
 
@@ -101,18 +101,18 @@ errorFactor   = 1 - (errorRate × ErrorPenalty), min 0.05
 
 Forward path adds: list gateways (1 Redis) + per-try circuit allow (1 Redis each) + outcome record (1 Redis) + HTTP upstream.
 
-Worst case tries = 1 + `MaxFailoverTries` — multiply Redis ops. Under healthy primary, 1 try dominates.
+Worst case tries = 1 + `MaxFailoverTries`. multiply Redis ops. Under healthy primary, 1 try dominates.
 
 Routing benchmarks should be compared against direct proxy baseline to quantify overhead.
 
 ## Lessons learned
 
-Weighted random was a product decision — SRE wanted smooth load spread; pure lowest-latency caused hotspot on one node after deploy.
+Weighted random was a product decision. SRE wanted smooth load spread; pure lowest-latency caused hotspot on one node after deploy.
 
 Combining **proactive probes** and **reactive outcomes** caught failures faster than either alone. Probes find idle breakage; outcomes find brownouts.
 
-Integrating circuit breaker **before** execute, not after, saved wasted upstream calls — see `circuit-breakers.md`.
+Integrating circuit breaker **before** execute, not after, saved wasted upstream calls. see `circuit-breakers.md`.
 
-Failover headers (`X-Gateway-Failover: true`) paid for themselves in incident triage — I can grep logs for degraded-path traffic.
+Failover headers (`X-Gateway-Failover: true`) paid for themselves in incident triage. I can grep logs for degraded-path traffic.
 
-Keep scoring transparent — `X-Gateway-Score` makes "why this gateway?" answerable without Redis CLI.
+Keep scoring transparent. `X-Gateway-Score` makes "why this gateway?" answerable without Redis CLI.

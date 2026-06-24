@@ -1,4 +1,4 @@
-# Distributed Tracing — Engineering Journal
+﻿# Distributed Tracing
 
 ## Problem Statement
 
@@ -18,14 +18,14 @@ Without trace IDs, support cannot link client `X-Request-ID` to upstream gateway
 
 ## Design goals
 
-1. **OTLP HTTP exporter** — `telemetry.Init` in `provider.go`.
-2. **Parent-based sampling** — `TraceIDRatioBased` respects upstream decision.
-3. **Request ID middleware** — generate or propagate `X-Request-ID`.
-4. **Response trace headers** — `X-Trace-ID`, `X-Span-ID` for client support.
-5. **Handler wrapping** — `otelhttp` with health/metrics filter.
-6. **Outbound propagation** — `NewHTTPTransport` for router upstream calls.
-7. **Redis tracing** — `InstrumentRedis` via redisotel.
-8. **Manual spans** — idempotency, routing, audit sub-operations.
+1. OTLP HTTP exporter: `telemetry.Init` in `provider.go`.
+2. Parent-based sampling: `TraceIDRatioBased` respects upstream decision.
+3. Request ID middleware: Generate or propagate `X-Request-ID`.
+4. Response trace headers: `X-Trace-ID`, `X-Span-ID` for client support.
+5. Handler wrapping: `otelhttp` with health/metrics filter.
+6. Outbound propagation: `NewHTTPTransport` for router upstream calls.
+7. Redis tracing: `InstrumentRedis` via redisotel.
+8. Idempotency, routing, audit sub-operations.
 
 ## Alternative approaches considered
 
@@ -55,13 +55,13 @@ otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 ))
 ```
 
-Returns shutdown func — must call on process exit to flush spans.
+Returns shutdown func. must call on process exit to flush spans.
 
 **HTTP middleware** (`internal/telemetry/middleware.go`):
 
-1. `requestIDMiddleware` — read or generate UUID, store in context
-2. `otelhttp.NewHandler` — span per request, name `METHOD path`
-3. `SkipHealthMetrics` — still traces `/health` and `/metrics` (filter returns false for those paths — they get spans; naming avoids metric double-count confusion in comments)
+1. `requestIDMiddleware`. read or generate UUID, store in context
+2. `otelhttp.NewHandler`. span per request, name `METHOD path`
+3. `SkipHealthMetrics`. still traces `/health` and `/metrics` (filter returns false for those paths. they get spans; naming avoids metric double-count confusion in comments)
 4. Inner handler sets response headers from span context
 
 **Manual spans:**
@@ -73,7 +73,7 @@ Returns shutdown func — must call on process exit to flush spans.
 
 Attributes: `idempotency.key`, `gateway.id`, `gateway.score`, `gateway.failover`, `http.status_code`.
 
-**Error recording** — `telemetry.RecordError(span, err)` sets status + `RecordError`.
+**Error recording**. `telemetry.RecordError(span, err)` sets status + `RecordError`.
 
 **Redis** (`internal/telemetry/redis.go`):
 
@@ -82,54 +82,54 @@ redisotel.InstrumentTracing(rdb)
 redisotel.InstrumentMetrics(rdb)
 ```
 
-Requires passing `context.Context` into Redis commands — already done in store implementations.
+Requires passing `context.Context` into Redis commands. already done in store implementations.
 
-**Config** (`internal/telemetry/config.go`) — `Enabled`, `ServiceName`, `OTLPEndpoint`, `Insecure`, `SampleRatio`.
+**Config** (`internal/telemetry/config.go`). `Enabled`, `ServiceName`, `OTLPEndpoint`, `Insecure`, `SampleRatio`.
 
 ## Tradeoffs
 
-- **Sampling** — rare production bugs may lack traces; increase sample ratio temporarily during incidents.
-- **Batch export delay** — `WithBatcher` adds seconds before spans appear — bad for live debugging, good for overhead.
-- **Baggage propagation** — enabled but unused — future tenant baggage must be PII-reviewed.
-- **Double instrumentation** — otelhttp + manual spans require consistent context passing.
-- **Health trace noise** — k8s probes generate spans unless filtered — `SkipHealthMetrics` naming is subtle.
+- Sampling: Rare production bugs may lack traces; increase sample ratio temporarily during incidents.
+- Batch export delay: `WithBatcher` adds seconds before spans appear. bad for live debugging, good for overhead.
+- Baggage propagation: Enabled but unused. future tenant baggage must be PII-reviewed.
+- Double instrumentation: Otelhttp + manual spans require consistent context passing.
+- Health trace noise: K8s probes generate spans unless filtered. `SkipHealthMetrics` naming is subtle.
 
 ## Failure modes
 
-1. **OTLP endpoint down** — exporter buffers then drops; no crash; blind window.
-2. **Missing context in goroutine** — async audit workers use `context.Background()` — orphan spans.
-3. **Shutdown skip** — lost tail spans on SIGKILL.
-4. **High cardinality attributes** — putting raw user IDs on every span — cost; we use request/idempotency keys selectively.
-5. **Trace context not forwarded by client** — new root trace per request — acceptable.
+1. OTLP endpoint down: Exporter buffers then drops; no crash; blind window.
+2. Async audit workers use `context.Background()`. orphan spans.
+3. Shutdown skip: Lost tail spans on SIGKILL.
+4. High cardinality attributes: Putting raw user IDs on every span. cost; we use request/idempotency keys selectively.
+5. Trace context not forwarded by client: New root trace per request. acceptable.
 
 ## Operational concerns
 
 - Env: `OTEL_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, sample ratio.
 - Jaeger UI: search by `X-Trace-ID` response header support teams already collect.
 - Link traces to audit via `RequestIDFromContext` matching audit `request_id`.
-- Disable in local dev (`Enabled=false`) — logs confirm in `Init`.
-- Correlate with Prometheus metrics — same request should show Redis duration metrics + Redis spans.
+- Disable in local dev (`Enabled=false`). logs confirm in `Init`.
+- Correlate with Prometheus metrics. same request should show Redis duration metrics + Redis spans.
 
 ## Performance implications
 
 Sampling at 0.1 means 90% requests have zero trace export overhead.
 
-Unsampled trace adds: span creation, attribute serialization, batch append — typically < 1% CPU at 1k RPS.
+Unsampled trace adds: span creation, attribute serialization, batch append. typically < 1% CPU at 1k RPS.
 
-Redis redisotel adds per-command hook — measurable in `go test` micro-bench; acceptable vs one network RTT.
+Redis redisotel adds per-command hook. measurable in `go test` micro-bench; acceptable vs one network RTT.
 
 Benchmarks (`benchmarks/metrics/collect-metrics.ps1`) should capture sidecar CPU with tracing on/off for regression.
 
 ## Lessons learned
 
-**Context is the API** — any new Redis call without `ctx` breaks the chain; code review checklist item.
+**Context is the API**. any new Redis call without `ctx` breaks the chain; code review checklist item.
 
-Response trace headers (`X-Trace-ID`) improved support more than internal Jaeger access — clients paste ID into tickets.
+Response trace headers (`X-Trace-ID`) improved support more than internal Jaeger access. clients paste ID into tickets.
 
-Parent-based sampling respects upstream mesh traces if we later sit behind traced ingress — forward-compatible.
+Parent-based sampling respects upstream mesh traces if we later sit behind traced ingress. forward-compatible.
 
-Async audit workers losing trace context is a known gap — if audit latency matters in traces, pass ctx into queue (not done yet).
+Async audit workers losing trace context is a known gap. if audit latency matters in traces, pass ctx into queue (not done yet).
 
-Init shutdown hook is easy to forget in `main` — document in README runbook; lost spans on deploy look like "gap in graph."
+Init shutdown hook is easy to forget in `main`. document in README runbook; lost spans on deploy look like "gap in graph."
 
-Instrument Redis once at client creation in `main`, not per package — `InstrumentRedis` is global hook on the shared client.
+Instrument Redis once at client creation in `main`, not per package. `InstrumentRedis` is global hook on the shared client.

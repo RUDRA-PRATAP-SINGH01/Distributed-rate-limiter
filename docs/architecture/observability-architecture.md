@@ -1,33 +1,33 @@
-# Observability Architecture
+﻿# Observability Architecture
 
-> इंजीनियरिंग जर्नल — मैंने इस fleet के लिए traces, metrics, और correlation IDs कैसे wire किए।
+> Engineering journal. How I wired traces, metrics, and correlation IDs across this fleet.
 
 ## Problem Statement
 
-Distributed rate limiter में request **client → sidecar → central limiter → Redis** (और optional upstream/routing) से गुजरती है। Production debug के लिए मुझे चाहिए था: end-to-end latency breakdown, Redis/command visibility, rate-limit decision attribution, और support के लिए **stable request correlation** — बिना `/health` और `/metrics` को trace noise से भरे।
+A request in the distributed rate limiter flows **client to sidecar to central limiter to Redis** (and optional upstream or routing). For production debugging I needed end-to-end latency breakdown, Redis and command visibility, rate-limit decision attribution, and **stable request correlation** for support. I also needed to keep `/health` and `/metrics` from flooding the trace backend.
 
 ## Why the problem exists
 
-बिना observability के "sidecar slow है या limiter या Redis?" सवाल का जवाब guesswork है। Multiple binaries (`rate-limiter`, `rate-sidecar`) और shared Redis mean logs alone insufficient — same user retry में different pod logs। Prometheus without careful label discipline OOM कर सकता है (per-user labels)। Production incidents में W3C trace propagation के बिना upstream/downstream disconnect रहता है।
+Without observability, answering "is the sidecar slow, the limiter, or Redis?" is guesswork. Multiple binaries (`rate-limiter`, `rate-sidecar`) and shared Redis mean logs alone are insufficient. The same user retry can land on different pod logs. Prometheus without careful label discipline can OOM the TSDB (for example per-user labels). In production incidents, missing W3C trace propagation leaves upstream and downstream disconnected.
 
 ## Design goals
 
-1. **OpenTelemetry traces** via OTLP HTTP exporter (Jaeger-compatible)।
-2. **Prometheus metrics** from `internal/metrics` — low-cardinality labels only।
-3. **Correlation IDs** — `X-Request-ID` generation/propagation; trace IDs in response headers।
-4. **Redis instrumentation** — `redisotel` tracing + metrics on commands with context।
-5. **Outbound HTTP propagation** — sidecar → limiter → gateway calls carry trace context।
-6. **Health/metrics trace filter** — scrapers don't pollute trace backend।
+1. **OpenTelemetry traces** via OTLP HTTP exporter (Jaeger-compatible).
+2. **Prometheus metrics** from `internal/metrics`. Low-cardinality labels only.
+3. **Correlation IDs**. `X-Request-ID` generation and propagation. Trace IDs in response headers.
+4. **Redis instrumentation**. `redisotel` tracing and metrics on commands with context.
+5. **Outbound HTTP propagation**. Sidecar to limiter to gateway calls carry trace context.
+6. **Health and metrics trace filter**. Scrapers do not pollute the trace backend.
 
 ## Alternative approaches considered
 
 | Approach | Verdict |
 |----------|---------|
-| Logs-only with JSON | No automatic distributed trace linking |
-| Jaeger native agent UDP | OTLP HTTP simpler in Docker Compose; Jaeger all-in-one accepts OTLP |
-| Datadog / commercial APM | Wanted OSS stack for demo/repo |
-| Per-user Prometheus labels | Explicitly rejected — TSDB cardinality explosion |
-| 100% trace sampling always | Cost/latency; made ratio configurable |
+| Logs-only with JSON | No automatic distributed trace linking. |
+| Jaeger native agent UDP | OTLP HTTP is simpler in Docker Compose. Jaeger all-in-one accepts OTLP. |
+| Datadog or commercial APM | I wanted an OSS stack for the demo and repo. |
+| Per-user Prometheus labels | Explicitly rejected. TSDB cardinality explosion. |
+| 100% trace sampling always | Cost and latency. I made the ratio configurable. |
 
 ## Final architecture
 
@@ -51,7 +51,7 @@ Init(ctx, cfg):
 | `OTEL_SERVICE_NAME` | Override service name | arg to LoadConfigFromEnv |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector URL | `http://localhost:4318` |
 | `OTEL_EXPORTER_OTLP_INSECURE` | TLS skip | true (not `false`) |
-| `OTEL_TRACES_SAMPLER_ARG` | Sample ratio 0-1 | 1.0 |
+| `OTEL_TRACES_SAMPLER_ARG` | Sample ratio 0 to 1 | 1.0 |
 
 Docker Compose (`docker-compose.yml`):
 
@@ -62,21 +62,21 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
 OTEL_EXPORTER_OTLP_INSECURE=true
 ```
 
-Jaeger service: `jaegertracing/all-in-one:1.58` — UI + OTLP receiver on 4318।
+Jaeger service: `jaegertracing/all-in-one:1.58`. UI and OTLP receiver on 4318.
 
 ### HTTP middleware (`internal/telemetry/middleware.go`)
 
 `WrapHandler(mux, serviceName)` chain:
 
-1. **`requestIDMiddleware`** — `X-Request-ID` from header or `uuid.New()`; stored in context (`RequestIDFromContext`)
-2. **`otelhttp.NewHandler`** — span per request; `SkipHealthMetrics` filter excludes `/health`, `/metrics` from tracing
-3. **Response headers** — echo `X-Request-ID`, `X-Trace-ID`, `X-Span-ID`
+1. **`requestIDMiddleware`**. `X-Request-ID` from header or `uuid.New()`. Stored in context (`RequestIDFromContext`).
+2. **`otelhttp.NewHandler`**. Span per request. `SkipHealthMetrics` filter excludes `/health` and `/metrics` from tracing.
+3. **Response headers**. Echo `X-Request-ID`, `X-Trace-ID`, `X-Span-ID`.
 
-Span naming: `METHOD path` (e.g. `GET /check`).
+Span naming: `METHOD path` (for example `GET /check`).
 
 ### Outbound propagation
 
-`telemetry.NewHTTPTransport(nil)` wraps sidecar HTTP client — W3C `traceparent` injected on limiter checks and gateway forwards।
+`telemetry.NewHTTPTransport(nil)` wraps the sidecar HTTP client. W3C `traceparent` is injected on limiter checks and gateway forwards.
 
 Manual spans via `telemetry.StartSpan(ctx, name, attrs...)`:
 
@@ -86,7 +86,7 @@ Manual spans via `telemetry.StartSpan(ctx, name, attrs...)`:
 | Sidecar | `sidecar.proxy`, `sidecar.idempotency`, `sidecar.rate_limit_check`, `sidecar.upstream_proxy`, `sidecar.intelligent_route` |
 | Idempotency | `idempotency.claim`, `idempotency.complete`, `idempotency.fail` |
 
-Errors: `telemetry.RecordError(span, err)`; HTTP status: `telemetry.SetHTTPStatus(span, code)`।
+Errors: `telemetry.RecordError(span, err)`. HTTP status: `telemetry.SetHTTPStatus(span, code)`.
 
 ### Redis OTel (`internal/telemetry/redis.go`)
 
@@ -97,23 +97,23 @@ redisotel.InstrumentTracing(rdb)
 redisotel.InstrumentMetrics(rdb)
 ```
 
-Applied in limiter `main` and sidecar `connectSidecarRedis` after ping — Redis commands with `context` get child spans।
+Applied in limiter `main` and sidecar `connectSidecarRedis` after ping. Redis commands with `context` get child spans.
 
 ### Correlation ID flow
 
 ```text
 Client (optional X-Request-ID)
-  → Sidecar WrapHandler: ensure ID in context + response
+  → Sidecar WrapHandler: ensure ID in context and response
   → Limiter WrapHandler: same
   → recordAudit: RequestIDFromContext → audit event
   → Idempotency replay headers: x-request-id, x-correlation-id whitelisted
 ```
 
-Audit trail और idempotency replay दोनों `X-Request-ID` respect करते हैं — support ticket से audit search possible।
+Both the audit trail and idempotency replay respect `X-Request-ID`. Support can search audit from a ticket reference.
 
 ### Prometheus metrics (`internal/metrics/metrics.go`)
 
-**Design rule** (package comment): labels intentionally low-cardinality — **never per-user**।
+**Design rule** (package comment): labels are intentionally low-cardinality. **Never per-user**.
 
 **Core limiter**:
 
@@ -128,13 +128,13 @@ Audit trail और idempotency replay दोनों `X-Request-ID` respect क
 
 **Idempotency**:
 
-- `idempotency_claims_total{result}` — claimed, replay, in_progress, hash_mismatch, failed, error
+- `idempotency_claims_total{result}` (claimed, replay, in_progress, hash_mismatch, failed, error)
 - `idempotency_completes_total`
 - `idempotency_redis_duration_seconds`
 
 **Circuit breaker**:
 
-- `circuit_breaker_state{target}` — 0/1/2
+- `circuit_breaker_state{target}` (0, 1, 2)
 - `circuit_breaker_transitions_total{target, from, to}`
 - `circuit_breaker_rejections_total{target, state}`
 - `circuit_breaker_outcomes_total{target, outcome}`
@@ -161,7 +161,7 @@ Audit trail और idempotency replay दोनों `X-Request-ID` respect क
 
 **Redis HA**:
 
-- `redis_failover_reconnects_total` — defined for Sentinel reconnect tracking
+- `redis_failover_reconnects_total` (defined for Sentinel reconnect tracking)
 
 ### Prometheus scraping (`deploy/prometheus.yml`)
 
@@ -173,48 +173,48 @@ scrape_configs:
     targets: ['sidecar:9090']
 ```
 
-Metrics endpoints: optional `METRICS_REQUIRE_AUTH` + API key on both services।
+Metrics endpoints: optional `METRICS_REQUIRE_AUTH` plus API key on both services.
 
 ### Trace diagram reference
 
-See `docs/diagrams/tracing-flow.mmd` for visual request flow।
+See `docs/diagrams/tracing-flow.mmd` for a visual request flow.
 
 ## Tradeoffs
 
-- **OTLP over HTTP** — simpler than gRPC in compose; slightly more overhead。
-- **ParentBased sampling** — child spans follow parent; root sampling ratio applies。
-- **Health/metrics excluded from traces** — correct for noise; harder to debug scraper issues。
-- **No custom exemplars** — histograms don't link to trace IDs yet。
-- **redis_failover_reconnects_total** — metric defined; wiring to FailoverClient reconnect hook is future work。
-- **Baggage enabled** — unused by default; potential PII risk if misused later。
+- **OTLP over HTTP**. Simpler than gRPC in compose. Slightly more overhead.
+- **ParentBased sampling**. Child spans follow parent. Root sampling ratio applies.
+- **Health and metrics excluded from traces**. Correct for noise. Harder to debug scraper issues.
+- **No custom exemplars**. Histograms do not link to trace IDs yet.
+- **`redis_failover_reconnects_total`**. Metric is defined. Wiring to FailoverClient reconnect hook is future work.
+- **Baggage enabled**. Unused by default. Potential PII risk if misused later.
 
 ## Failure modes
 
 | Scenario | Effect |
 |----------|--------|
-| Jaeger down | Batcher drops/spans buffer; process continues |
-| OTEL init failure | `log.Fatalf` on startup — fail fast |
-| Missing context on Redis call | Span not attached to that command |
-| High sample ratio + traffic | Jaeger storage pressure |
-| Cardinality mistake in new metric | TSDB/memory issues — code review guardrail |
+| Jaeger down | Batcher drops or buffers spans. Process continues. |
+| OTEL init failure | `log.Fatalf` on startup. Fail fast. |
+| Missing context on Redis call | Span not attached to that command. |
+| High sample ratio plus traffic | Jaeger storage pressure. |
+| Cardinality mistake in new metric | TSDB or memory issues. Code review guardrail. |
 
 ## Operational concerns
 
-- Jaeger UI: typically port 16686 in all-in-one image。
-- Tune `OTEL_TRACES_SAMPLER_ARG` in prod (e.g. 0.1)。
-- Dashboards: correlate `rate_limiter_requests_total{allowed="false"}` spike with `circuit_breaker_state` and `audit_events_total{decision="denied"}`。
-- `X-Trace-ID` response header — clients can include in support tickets。
-- Shutdown: `otelShutdown` with 5s timeout flushes batcher on SIGTERM path (defer in main)。
-- Grafana not in repo — Prometheus raw or add dashboard layer separately。
+- Jaeger UI: typically port 16686 in the all-in-one image.
+- Tune `OTEL_TRACES_SAMPLER_ARG` in prod (for example 0.1).
+- Dashboards: correlate `rate_limiter_requests_total{allowed="false"}` spike with `circuit_breaker_state` and `audit_events_total{decision="denied"}`.
+- `X-Trace-ID` response header lets clients include it in support tickets.
+- Shutdown: `otelShutdown` with 5s timeout flushes the batcher on SIGTERM path (defer in main).
+- Grafana is not in the repo. Use Prometheus raw or add a dashboard layer separately.
 
 ## Performance implications
 
-- **otelhttp handler**: ~microseconds overhead per request; excluded paths zero trace cost。
-- **Batcher async export**: minimal hot path blocking。
-- **Redis redisotel**: small per-command overhead; use context everywhere。
-- **Prometheus promauto**: in-process registry; `/metrics` scrape parses all counters — keep label cardinality low。
-- **Manual spans**: limit nesting depth on `/check` — only one child span per handler。
+- **otelhttp handler**: roughly microseconds overhead per request. Excluded paths have zero trace cost.
+- **Batcher async export**: minimal hot path blocking.
+- **Redis redisotel**: small per-command overhead. Use context everywhere.
+- **Prometheus promauto**: in-process registry. `/metrics` scrape parses all counters. Keep label cardinality low.
+- **Manual spans**: limit nesting depth on `/check`. Only one child span per handler.
 
 ## Lessons learned
 
-मैंने सबसे पहले **label cardinality comment** metrics package में लिखा — यह discipline बाद में routing/gateway metrics add करते समय बचाव करता है। `SkipHealthMetrics` filter जरूरी था; पहले Prometheus scrape हर 5s पर thousands of useless spans बना रहा था। Request ID middleware को trace middleware के **बाहर** रखा ताकि tracing disabled होने पर भी correlation काम करे। OTLP endpoint default `localhost:4318` local dev friendly है; compose में service name `jaeger` override। Idempotency replay में `x-correlation-id` whitelist करना observability और API contract को align करता है।
+I wrote the **label cardinality comment** in the metrics package first. That discipline saved me when adding routing and gateway metrics later. The `SkipHealthMetrics` filter was essential. Early on, Prometheus scrape every 5s created thousands of useless spans. I placed request ID middleware **outside** trace middleware so correlation still works when tracing is disabled. The OTLP endpoint default `localhost:4318` is local dev friendly. Compose overrides with service name `jaeger`. Whitelisting `x-correlation-id` in idempotency replay aligns observability with the API contract.

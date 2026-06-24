@@ -14,7 +14,7 @@ sequenceDiagram
     Note over R: fence_token overwritten to B1
 
     A->>R: complete.lua fence_token=A1
-    R-->>A: {0} rejected — stale fence
+    R-->>A: {0} rejected, stale fence
 
     B->>R: complete.lua fence_token=B1
-    R-->>B: {1} success — single completion
+    R-->>B: {1} success, single completion

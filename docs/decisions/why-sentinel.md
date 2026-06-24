@@ -1,4 +1,4 @@
-# Why Redis Sentinel for HA
+﻿# Why Redis Sentinel for HA
 
 **Status:** Accepted  
 **Date:** 2025-06  
@@ -6,24 +6,24 @@
 
 ---
 
-## 1. Problem Statement
+## Problem Statement
 
 A single Redis instance is a single point of failure. When the master dies, every limiter `/check`, idempotency claim, and circuit breaker read fails until manual intervention. I needed automatic master promotion without requiring Kubernetes operators or managed Redis on day one.
 
-## 2. Why the problem exists
+## Why the problem exists
 
-This platform stores **live enforcement state** in Redis. Minutes of write unavailability mean either total 503 traffic (`FAIL_OPEN=false`) or unbounded traffic (`FAIL_OPEN=true`) — both unacceptable in production. Replicas alone do not failover; something must detect master death and promote a replica.
+This platform stores **live enforcement state** in Redis. Minutes of write unavailability mean either total 503 traffic (`FAIL_OPEN=false`) or unbounded traffic (`FAIL_OPEN=true`). both unacceptable in production. Replicas alone do not failover; something must detect master death and promote a replica.
 
-## 3. Design goals
+## Design goals
 
-- **Config-driven mode switch:** `REDIS_MODE=standalone|sentinel` in `internal/redis/config.go`.
-- **No code forks:** Same `redis.UniversalClient` interface; Sentinel uses `redis.NewFailoverClient`.
-- **Quorum-based failover:** Three Sentinel processes in `docker-compose.ha.yml` profile.
-- **Transparent reconnect:** go-redis queries Sentinels for new master address after promotion.
-- **Health visibility:** Limiter `/health` reports `redis.mode`, `role`, `replication`.
-- **Metric:** `redis_failover_reconnects_total` on ping recovery.
+- Config-driven mode switch: `REDIS_MODE=standalone|sentinel` in `internal/redis/config.go`.
+- No code forks: Same `redis.UniversalClient` interface; Sentinel uses `redis.NewFailoverClient`.
+- Quorum-based failover: Three Sentinel processes in `docker-compose.ha.yml` profile.
+- Transparent reconnect: Go-redis queries Sentinels for new master address after promotion.
+- Health visibility: Limiter `/health` reports `redis.mode`, `role`, `replication`.
+- Metric: `redis_failover_reconnects_total` on ping recovery.
 
-## 4. Alternative approaches considered
+## Alternative approaches considered
 
 | Alternative | Why I rejected it |
 |-------------|-------------------|
@@ -33,7 +33,7 @@ This platform stores **live enforcement state** in Redis. Minutes of write unava
 | **Primary-replica with VIP + keepalived** | Extra moving parts outside Redis ecosystem. |
 | **Multi-master CRDT counters** | Overkill for rate limits; conflict resolution is hard. |
 
-## 5. Final architecture
+## Final architecture
 
 `internal/redis/client.go`:
 
@@ -50,7 +50,7 @@ case ModeSentinel:
 
 Startup validation:
 
-- Limiter: `redisclient.Ping` after `New` — fatal if unreachable.
+- Limiter: `redisclient.Ping` after `New`. fatal if unreachable.
 - Sidecar: `connectSidecarRedis` fatals if `REDIS_SENTINEL_ADDRS` empty when `REDIS_MODE=sentinel`.
 
 Failover sequence (documented in README):
@@ -63,7 +63,7 @@ Failover sequence (documented in README):
 
 Deploy: `docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --build`.
 
-## 6. Tradeoffs
+## Tradeoffs
 
 | Choice | Benefit | Cost |
 |--------|---------|------|
@@ -72,26 +72,26 @@ Deploy: `docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile
 | FailoverClient | App code unchanged | Brief write unavailability during election |
 | 2 replicas | Failover candidates + read scaling potential | 3× memory |
 
-## 7. Failure modes
+## Failure modes
 
-- **Split-brain (misconfigured quorum):** Two masters — rare with proper `sentinel monitor` and majority; ops must enforce odd Sentinel count.
-- **All Sentinels down:** Clients cannot discover master; same as Redis total outage.
-- **Promotion during write:** In-flight Lua scripts fail; circuit breaker opens on `TargetRedis`.
-- **Async replication lag:** Promoted replica may miss last writes — idempotency/limits may allow brief inconsistency.
+- Split-brain (misconfigured quorum): Two masters. rare with proper `sentinel monitor` and majority; ops must enforce odd Sentinel count.
+- All Sentinels down: Clients cannot discover master; same as Redis total outage.
+- Promotion during write: In-flight Lua scripts fail; circuit breaker opens on `TargetRedis`.
+- Async replication lag: Promoted replica may miss last writes. idempotency/limits may allow brief inconsistency.
 
-## 8. Operational concerns
+## Operational concerns
 
 - Env: `REDIS_MASTER_NAME`, `REDIS_SENTINEL_ADDRS`, `REDIS_SENTINEL_PASSWORD` (defaults to `REDIS_PASSWORD`).
 - Run chaos drills: `chaos/` scripts, `benchmarks/sentinel/`.
-- Watch `redis_failover_reconnects_total` spike during drills — confirms client recovery.
+- Watch `redis_failover_reconnects_total` spike during drills. confirms client recovery.
 - After failover, verify `/health` shows `role: master` on new primary.
 
-## 9. Performance implications
+## Performance implications
 
-Sentinel adds discovery overhead only on connect/reconnect, not steady-state EVAL latency. Failover window (typically 5–30s) dominates user-visible impact — circuit breakers trip, sidecars return 503. Read scaling from replicas is **not** used for limiter writes (`RouteByLatency: false`) — all enforcement hits master.
+Sentinel adds discovery overhead only on connect/reconnect, not steady-state EVAL latency. Failover window (typically 5 to 30s) dominates user-visible impact. circuit breakers trip, sidecars return 503. Read scaling from replicas is **not** used for limiter writes (`RouteByLatency: false`). all enforcement hits master.
 
-## 10. Lessons learned
+## Lessons learned
 
-The first version ran single Redis in Docker and I killed the container during a demo — entire stack froze. Sentinel taught me to separate **"Redis slow"** from **"Redis gone"** in metrics. I would still choose Sentinel for self-hosted deployments; for cloud I would likely use managed failover and keep `REDIS_MODE=standalone` pointed at the provider endpoint. The code path stays the same either way.
+The first version ran single Redis in Docker and I killed the container during a demo. entire stack froze. Sentinel taught me to separate **"Redis slow"** from **"Redis gone"** in metrics. I would still choose Sentinel for self-hosted deployments; for cloud I would likely use managed failover and keep `REDIS_MODE=standalone` pointed at the provider endpoint. The code path stays the same either way.
 
 **References:** `internal/redis/`, `deploy/redis/`, `docs/diagrams/sentinel-failover.mmd`, `docs/failure-modes/sentinel-failover.md`

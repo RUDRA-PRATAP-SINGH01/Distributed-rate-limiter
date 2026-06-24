@@ -1,4 +1,4 @@
-# Failure Mode: Redis Outage
+﻿# Failure Mode: Redis Outage
 
 **Status:** Documented  
 **Severity:** Critical  
@@ -6,22 +6,22 @@
 
 ---
 
-## 1. Problem Statement
+## Problem Statement
 
 When Redis is unreachable or refusing commands, the central limiter cannot execute quota Lua scripts, idempotency claims fail, routing cannot list gateways, and circuit breaker state reads error. I designed the system to **fail closed** by default so an outage does not become unbounded traffic amplification.
 
-## 2. Why the problem exists
+## Why the problem exists
 
-Redis is the authoritative store — not a cache. There is no local fallback that preserves fleet-wide correctness. Any "continue without Redis" path is an explicit policy decision (`FAIL_OPEN`, `IDEMPOTENCY_FAIL_OPEN`, `CIRCUIT_FAIL_OPEN`), not an accident.
+Redis is the authoritative store, not a cache. There is no local fallback that preserves fleet-wide correctness. Any "continue without Redis" path is an explicit policy decision (`FAIL_OPEN`, `IDEMPOTENCY_FAIL_OPEN`, `CIRCUIT_FAIL_OPEN`), not an accident.
 
-## 3. Design goals
+## Design goals
 
 - Return **503 Service Unavailable** for infrastructure failure, **429** only for quota exhaustion.
 - Trip `cb:redis` circuit after sustained Redis errors (`CB_FAILURE_RATE`, `CB_CONSECUTIVE_FAILURES`).
 - Surface health in limiter `/health` JSON (`redis.connected: false`).
 - Allow dev-only bypass via env flags with loud startup warnings.
 
-## 4. Alternative approaches considered
+## Alternative approaches considered
 
 | Alternative | Why I did not default to it |
 |-------------|----------------------------|
@@ -30,7 +30,7 @@ Redis is the authoritative store — not a cache. There is no local fallback tha
 | **Queue requests until Redis returns** | Unbounded memory; cascading latency. |
 | **Read from replica during master outage** | Writes still fail; stale reads break limits. |
 
-## 5. Final architecture
+## Final architecture
 
 **Limiter path** (`cmd/limiter/circuit.go`):
 
@@ -45,9 +45,9 @@ Redis is the authoritative store — not a cache. There is no local fallback tha
 - Idempotency claim `ErrStoreUnavailable` → 503 unless `IDEMPOTENCY_FAIL_OPEN=true`.
 - Routing `ListGateways` error → `Forward` returns error → 503 `all gateways unavailable`.
 
-**Startup:** Limiter fatals on initial `Ping` failure — process never serves false healthy.
+**Startup:** Limiter fatals on initial `Ping` failure. process never serves false healthy.
 
-## 6. Tradeoffs
+## Tradeoffs
 
 | Fail-closed | Fail-open (dev) |
 |-------------|-----------------|
@@ -55,7 +55,7 @@ Redis is the authoritative store — not a cache. There is no local fallback tha
 | User-visible 503 | Risk of unlimited traffic |
 | Clear ops signal | Masks Redis dependency in tests |
 
-## 7. Failure modes
+## Failure modes
 
 | Symptom | Likely cause | User impact |
 |---------|--------------|-------------|
@@ -65,7 +65,7 @@ Redis is the authoritative store — not a cache. There is no local fallback tha
 | Idempotency 503 | Redis down on sidecar | No dedup; safe vs double-charge |
 | Audit sync path errors | `append.lua` fails | Decision still returned; audit `error` decision logged if partial |
 
-## 8. Operational concerns
+## Operational concerns
 
 **Detect:**
 
@@ -83,11 +83,11 @@ Redis is the authoritative store — not a cache. There is no local fallback tha
 
 **Env vars:** `REDIS_ADDR`, `REDIS_PASSWORD`, `REDIS_MODE`, `CIRCUIT_FAIL_OPEN`, `FAIL_OPEN`, `IDEMPOTENCY_FAIL_OPEN`.
 
-## 9. Performance implications
+## Performance implications
 
-During partial Redis slowness (not hard down), latency EMA may trip `OutcomeLatencySpike` before hard errors — circuit opens preemptively. Recovery uses half-open probes (`CB_HALF_OPEN_MAX_PROBES`, `CB_HALF_OPEN_SUCCESS_REQUIRED`) — gradual traffic restoration, not instant flood.
+During partial Redis slowness (not hard down), latency EMA may trip `OutcomeLatencySpike` before hard errors. circuit opens preemptively. Recovery uses half-open probes (`CB_HALF_OPEN_MAX_PROBES`, `CB_HALF_OPEN_SUCCESS_REQUIRED`). gradual traffic restoration, not instant flood.
 
-## 10. Lessons learned
+## Lessons learned
 
 I deliberately mixed up 503 and 429 once in an early prototype and operators thought rate limits were "broken" during a Redis incident. Separating them made paging rules trivial: **503 pages infra, 429 pages product/quota**. The chaos script checking `FAIL_OPEN` exists because I forgot the flag during a demo and misread a healthy-looking 200.
 

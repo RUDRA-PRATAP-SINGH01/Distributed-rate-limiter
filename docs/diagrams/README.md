@@ -1,4 +1,4 @@
-# Diagrams
+﻿# Diagrams
 
 Mermaid sources for this repository. Render in GitHub, VS Code (Mermaid extension), or [mermaid.live](https://mermaid.live).
 
@@ -15,4 +15,4 @@ Mermaid sources for this repository. Render in GitHub, VS Code (Mermaid extensio
 | [tracing-flow.mmd](tracing-flow.mmd) | OTel spans across sidecar/limiter/Redis |
 | [redis-layout.mmd](redis-layout.mmd) | Key namespace map |
 
-Architecture docs embed or reference these files. When I change Lua key shapes, I update the matching diagram first — otherwise onboarding docs lie quietly.
+Architecture docs embed or reference these files. When I change Lua key shapes, I update the matching diagram first. otherwise onboarding docs lie quietly.
