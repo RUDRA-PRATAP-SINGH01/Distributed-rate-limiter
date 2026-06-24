@@ -202,4 +202,4 @@ Benchmarks under `benchmarks/` document saturation behavior; routing and idempot
 - [sidecar-architecture.md](./sidecar-architecture.md). cache, singleflight, identity
 - [redis-design.md](./redis-design.md). key layout and Lua patterns
 - [routing-architecture.md](./routing-architecture.md). scorer, failover, circuit integration
-- Diagram: [../diagrams/request-flow.mmd](../diagrams/request-flow.mmd)
+- Diagram: [../diagrams/request-flow.md](../diagrams/request-flow.md)

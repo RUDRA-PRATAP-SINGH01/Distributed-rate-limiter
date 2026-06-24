@@ -88,4 +88,4 @@ Each routed request: 1× `ListGateways` (N HGETALL), 1× circuit Allow per attem
 
 I first shipped strict priority failover and watched the secondary sit idle while primary degraded slowly (high latency, not hard errors). Combining **weight × health** let traffic drift naturally before circuits opened. During k6 (`benchmarks/routing/routing-test.js`), failover headers (`X-Gateway-Failover: true`) correlated with `routing_failovers_total`. validation I still use in demos. Weighted routing is the right default when gateways are **commercially weighted**, not just redundant clones.
 
-**References:** `internal/routing/router.go`, `internal/routing/scorer.go`, `internal/routing/selector.go`, `docs/diagrams/routing-flow.mmd`
+**References:** `internal/routing/router.go`, `internal/routing/scorer.go`, `internal/routing/selector.go`, `docs/diagrams/routing-flow.md`

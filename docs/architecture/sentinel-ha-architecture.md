@@ -225,7 +225,7 @@ Fail fast. An unhealthy fleet does not serve partial state.
 - `circuit_breaker_state{target="redis"}` spikes during failover. Expected.
 - AOF `appendfsync everysec`. Up to 1s write loss on catastrophic failure.
 - Chaos testing: see `chaos/README.md` for failure injection patterns.
-- Diagram: `docs/diagrams/sentinel-failover.mmd`.
+- Diagram: `docs/diagrams/sentinel-failover.md`.
 - Production: odd number of sentinels (3+), spread AZs, separate `requirepass` rotation procedure.
 
 ## Performance implications

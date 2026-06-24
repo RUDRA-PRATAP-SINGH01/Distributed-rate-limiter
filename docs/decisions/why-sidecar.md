@@ -79,4 +79,4 @@ Denial cache and singleflight dramatically cut limiter QPS during retry storms. 
 
 I built the limiter first and tried calling it directly from clients. that leaked user identity in query strings and made caching impossible. The sidecar forced clean headers (`identity.UserIDHeader`) and gave me a single choke point for idempotency and routing. The tradeoff I accepted: **one more network hop** for **operational uniformity**. In production I would run one sidecar per pod (or per VM), never one global sidecar. otherwise it becomes a hidden gateway SPOF.
 
-**References:** `cmd/sidecar/main.go`, `docs/diagrams/sidecar-flow.mmd`, `README.md` (Sidecar Architecture)
+**References:** `cmd/sidecar/main.go`, `docs/diagrams/sidecar-flow.md`, `README.md` (Sidecar Architecture)

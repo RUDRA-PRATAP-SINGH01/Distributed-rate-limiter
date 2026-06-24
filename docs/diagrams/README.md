@@ -1,18 +1,20 @@
 ﻿# Diagrams
 
-Mermaid sources for this repository. Render in GitHub, VS Code (Mermaid extension), or [mermaid.live](https://mermaid.live).
+GitHub renders Mermaid only inside markdown code fences, not standalone `.md` files. Each diagram below is a markdown page with an embedded `mermaid` block so it renders when you browse the repo on GitHub.
 
-| File | What it shows |
-|------|----------------|
-| [request-flow.mmd](request-flow.mmd) | End-to-end client → sidecar → limiter → upstream |
-| [sidecar-flow.mmd](sidecar-flow.mmd) | Sidecar internal branches (idempotent vs normal) |
-| [routing-flow.mmd](routing-flow.mmd) | Gateway scoring, circuit allow, failover loop |
-| [idempotency-flow.mmd](idempotency-flow.mmd) | Idempotency state machine |
-| [fencing-flow.mmd](fencing-flow.mmd) | Lease reclaim + stale worker rejection |
-| [circuit-breaker.mmd](circuit-breaker.mmd) | Three-state breaker transitions |
-| [sentinel-failover.mmd](sentinel-failover.mmd) | Sentinel quorum + client rediscovery |
-| [audit-flow.mmd](audit-flow.mmd) | Async append + Redis indexes + trim |
-| [tracing-flow.mmd](tracing-flow.mmd) | OTel spans across sidecar/limiter/Redis |
-| [redis-layout.mmd](redis-layout.mmd) | Key namespace map |
+| Diagram | Description |
+|---------|-------------|
+| [request-flow.md](request-flow.md) | Client through sidecar, limiter, Redis, and upstream |
+| [sidecar-flow.md](sidecar-flow.md) | Sidecar internal branches (idempotent vs normal) |
+| [routing-flow.md](routing-flow.md) | Gateway scoring, circuit allow, failover loop |
+| [idempotency-flow.md](idempotency-flow.md) | Idempotency state machine |
+| [fencing-flow.md](fencing-flow.md) | Lease reclaim and stale worker rejection |
+| [circuit-breaker.md](circuit-breaker.md) | Three state breaker transitions |
+| [sentinel-failover.md](sentinel-failover.md) | Sentinel quorum and client rediscovery |
+| [audit-flow.md](audit-flow.md) | Async append, Redis indexes, retention trim |
+| [tracing-flow.md](tracing-flow.md) | OpenTelemetry spans across services |
+| [redis-layout.md](redis-layout.md) | Redis key namespace map |
 
-Architecture docs embed or reference these files. When I change Lua key shapes, I update the matching diagram first. otherwise onboarding docs lie quietly.
+When I change Lua key shapes or request flow, I update the matching diagram page first so the docs stay honest.
+
+Local preview: VS Code with a Mermaid extension, or paste a diagram block into [mermaid.live](https://mermaid.live).

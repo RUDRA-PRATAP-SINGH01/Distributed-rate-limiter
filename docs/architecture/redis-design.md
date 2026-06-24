@@ -2,7 +2,7 @@
 
 When I chose Redis as the coordination layer, I was not picking a cache. I was picking a **single-threaded per shard execution model** where Lua scripts give me compare-and-swap semantics without inventing my own distributed lock service. Every invariant that must survive concurrent sidecars, limiter replicas, and Sentinel failover lives in a namespaced key with an embedded script.
 
-The layout is documented visually in [../diagrams/redis-layout.mmd](../diagrams/redis-layout.mmd). This document explains **why** each namespace exists and **why** I used HASH vs ZSET vs STRING.
+The layout is documented visually in [../diagrams/redis-layout.md](../diagrams/redis-layout.md). This document explains **why** each namespace exists and **why** I used HASH vs ZSET vs STRING.
 
 ---
 

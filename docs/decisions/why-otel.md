@@ -86,7 +86,7 @@ Env reference:
 - Deploy Jaeger or Grafana Tempo behind `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - Lower `OTEL_TRACES_SAMPLER_ARG` in production (e.g. 0.01) after validating pipelines.
 - Cross-reference traces with Prometheus: same request should show span `sidecar.intelligent_route` + metric `routing_failovers_total` increment on failover.
-- Diagram: `docs/diagrams/tracing-flow.mmd`.
+- Diagram: `docs/diagrams/tracing-flow.md`.
 
 ## Performance implications
 

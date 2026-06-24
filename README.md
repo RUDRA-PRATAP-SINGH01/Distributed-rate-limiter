@@ -4,7 +4,9 @@
 
 A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, production-grade idempotency layer, OpenTelemetry tracing (Jaeger), runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
 
-I started this project because I wanted to understand how production systems like API gateways and SaaS platforms actually enforce limits at scale — not just a single-process token bucket, but something that stays correct when you have ten sidecars and a million requests per minute.
+I started this project because I wanted to understand how production systems like API gateways and SaaS platforms actually enforce limits at scale, not just a single-process token bucket, but something that stays correct when you have ten sidecars and a million requests per minute.
+
+**Full engineering documentation:** [docs/README.md](docs/README.md) (architecture, failure modes, benchmarks, diagrams)
 
 ---
 
@@ -28,6 +30,7 @@ I started this project because I wanted to understand how production systems lik
 - [Chaos Engineering](#chaos-engineering)
 - [Trade-offs](#trade-offs)
 - [Project Structure](#project-structure)
+- [Documentation](#documentation)
 - [Running the System](#running-the-system)
 - [Running Tests](#running-tests)
 - [License](#license)
@@ -127,23 +130,23 @@ flowchart TB
     end
 
     subgraph sidecar_layer [Sidecar Layer]
-        SC[Sidecar Proxy :9090]
+        SC["Sidecar Proxy 9090"]
         CACHE[Denial Cache]
         SF[Singleflight]
     end
 
     subgraph limiter_layer [Limiter Layer]
-        LM[Central Limiter :8080]
-        ADM[Admin API :8082]
+        LM["Central Limiter 8080"]
+        ADM["Admin API 8082"]
     end
 
     subgraph state [State Layer]
-        RD[(Redis :6379)]
+        RD[(Redis 6379)]
         LUA[Lua Scripts]
     end
 
     subgraph upstream [Upstream]
-        BE[Demo Backend :8081]
+        BE["Demo Backend 8081"]
     end
 
     C --> SC
@@ -1074,9 +1077,9 @@ I separated the admin API onto port 8082 so it can be network-isolated from the 
 ```mermaid
 sequenceDiagram
     participant OP as Operator
-    participant ADM as Admin API :8082
+    participant ADM as "Admin API 8082"
     participant R as Redis
-    participant L as Limiter :8080
+    participant L as "Limiter 8080"
     participant S as Override Cache
 
     OP->>ADM: POST /admin/limits/user/alice {"capacity": 20}
@@ -1126,7 +1129,7 @@ Read-only inspection and manual purge of stuck keys. Uses the same `X-API-Key` a
 ```mermaid
 sequenceDiagram
     participant OP as Operator
-    participant ADM as Admin API :8082
+    participant ADM as "Admin API 8082"
     participant R as Redis
 
     OP->>ADM: GET /admin/idempotency?user=alice&key=pay-001
@@ -1164,12 +1167,12 @@ curl -X DELETE http://localhost:8082/admin/idempotency/{scope}/pay-001 \
 flowchart LR
     subgraph public [Public Facing]
         CLIENT[Client]
-        SIDECAR[Sidecar :9090]
+        SIDECAR["Sidecar 9090"]
     end
 
     subgraph internal [Internal Network]
-        LIMITER[Limiter :8080]
-        ADMIN[Admin :8082]
+        LIMITER["Limiter 8080"]
+        ADMIN["Admin 8082"]
         REDIS[(Redis)]
     end
 
@@ -1271,7 +1274,7 @@ flowchart TB
         R2["EVAL claim.lua"]
     end
 
-    subgraph jaeger [Jaeger :16686]
+    subgraph jaeger ["Jaeger 16686"]
         UI[Trace UI]
     end
 
@@ -1283,7 +1286,7 @@ flowchart TB
     S1 --> S4
     S4 --> R2
     S1 --> S3
-    S1 & L1 & R1 -->|OTLP :4318| UI
+    S1 & L1 & R1 -->|OTLP 4318| UI
 ```
 
 #### Trace Hierarchy (latency breakdown)
@@ -1483,7 +1486,10 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │   ├── saturation/          Fine-grained saturation sweep
 │   ├── hot-key/             Shared-key contention test
 │   ├── enforcement/         Single-user limit correctness test
-│   ├── idempotency/         Race + replay k6 tests, summary.md
+│   ├── idempotency/         Race + replay k6 tests
+│   ├── routing/             Gateway distribution tests
+│   ├── circuitbreaker/      Circuit breaker load tests
+│   ├── sentinel/            HA failover notes
 │   ├── metrics/             docker stats collection scripts
 │   └── graphs/              generate-graphs.py (PNG output gitignored)
 │
@@ -1493,36 +1499,67 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │   └── high_latency.py      Latency injection
 │
 ├── cmd/
-│   ├── limiter/             Central rate limiter binary
-│   ├── sidecar/             Sidecar proxy binary
-│   └── demo-backend/        Sample upstream API
+│   ├── limiter/             Central rate limiter + admin API (8080 / 8082)
+│   ├── sidecar/             Sidecar proxy (9090)
+│   ├── demo-backend/        Sample upstream API
+│   └── gateway-sim/           Simulated payment gateways for routing demos
 │
 ├── deploy/
-│   └── prometheus.yml       Prometheus scrape config
+│   ├── prometheus.yml       Prometheus scrape config
+│   └── redis/               Redis + Sentinel configs for HA profile
+│
+├── docs/                    Engineering documentation (start at docs/README.md)
+│   ├── architecture/        System design by subsystem
+│   ├── deep-dives/          Implementation journals
+│   ├── decisions/           ADRs (why Redis, Lua, sidecar, etc.)
+│   ├── failure-modes/       Outage and edge-case behavior
+│   ├── benchmarks/          Methodology and results writeups
+│   ├── operations/          Deployment, monitoring, runbooks
+│   ├── interviews/          System design interview prep
+│   └── diagrams/            Mermaid diagrams (render on GitHub)
 │
 ├── dockerfiles/
 │   ├── Dockerfile.limiter
 │   ├── Dockerfile.sidecar
-│   └── Dockerfile.demo
+│   ├── Dockerfile.demo
+│   └── Dockerfile.gateway
 │
 ├── internal/
+│   ├── audit/               Audit trail store + Lua
 │   ├── auth/                API key middleware
+│   ├── circuitbreaker/      Distributed circuit breaker
 │   ├── identity/            User ID resolution
 │   ├── idempotency/         Idempotency store + Lua scripts
 │   ├── routing/             Intelligent gateway routing + scoring
 │   ├── limiter/             Redis algorithms + Lua scripts
 │   ├── metrics/             Prometheus instrumentation
 │   ├── override/            Runtime override store
-│   ├── redis/               Redis client factory
+│   ├── redis/               Redis client (standalone + Sentinel)
 │   └── telemetry/           OpenTelemetry → Jaeger (OTLP)
 │
 ├── tests/
 │   └── legacy/              Race condition demo
 │
-├── docker-compose.yml
+├── docker-compose.yml       Default stack (Redis, limiter, sidecar, demo)
+├── docker-compose.ha.yml    Sentinel HA overlay (--profile ha)
+├── LICENSE
 ├── go.mod
 └── README.md
 ```
+
+---
+
+## Documentation
+
+The root README covers setup, APIs, and quick starts. The [`docs/`](docs/README.md) folder is the engineering record: architecture, ADRs, failure modes, benchmarks, runbooks, and diagrams.
+
+| Start here | Contents |
+|------------|----------|
+| [docs/README.md](docs/README.md) | Master index and reading order |
+| [docs/architecture/overview.md](docs/architecture/overview.md) | Data plane vs control plane |
+| [docs/diagrams/](docs/diagrams/README.md) | All Mermaid diagrams (GitHub-renderable) |
+| [docs/operations/deployment.md](docs/operations/deployment.md) | Docker Compose and HA deployment |
+| [docs/operations/runbooks.md](docs/operations/runbooks.md) | Incident response playbooks |
 
 ---
 

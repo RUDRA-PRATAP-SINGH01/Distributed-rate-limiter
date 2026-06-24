@@ -107,4 +107,4 @@ Every protected call adds 1× `allow.lua` RTT before work + 1× `record.lua` aft
 
 I conflated limiter HTTP errors with redis circuit early on. two targets matter. Separating `TargetRedis` vs `TargetCentralLimiter` let me partition a network split (`chaos/network_partition.py`) and see exactly which breaker opened. `StateUnknown` for routing was added after a bad deploy where GetState failed and traffic hit open circuits anyway. Breakers protect the system from dependencies. **mis-tuned breakers protect dependencies from the system** (wrongly). Tune with real `circuit_breaker_failure_rate` graphs, not defaults.
 
-**References:** `internal/circuitbreaker/`, `cmd/limiter/circuit.go`, `docs/diagrams/circuit-breaker.mmd`, `docs/decisions/why-lua.md`
+**References:** `internal/circuitbreaker/`, `cmd/limiter/circuit.go`, `docs/diagrams/circuit-breaker.md`, `docs/decisions/why-lua.md`

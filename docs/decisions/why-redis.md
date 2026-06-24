@@ -84,4 +84,4 @@ Every allowed `/check` costs at least one Redis round-trip (Lua `EVAL`). Hierarc
 
 I initially underestimated how much **operational clarity** mattered: separating 503 (infrastructure) from 429 (quota) forced me to treat Redis as a hard dependency with explicit circuit breaking, not a best-effort cache. Redis was the right call because every subsystem I added later. idempotency, routing, audit. already needed fast atomic scripts. If I rebuilt from scratch, I would still choose Redis; I would invest earlier in Sentinel drills and hot-key dashboards.
 
-**References:** `internal/redis/`, `cmd/limiter/main.go`, `cmd/sidecar/main.go`, `docs/diagrams/redis-layout.mmd`
+**References:** `internal/redis/`, `cmd/limiter/main.go`, `cmd/sidecar/main.go`, `docs/diagrams/redis-layout.md`

@@ -159,17 +159,17 @@ flowchart TB
         C[HTTP Client]
     end
 
-    subgraph edge [Edge Layer]
-        SC[Sidecar :9090]
+    subgraph edge ["Edge layer"]
+        SC["Sidecar 9090"]
         DC[Denial Cache]
         SF[Singleflight]
         IDEM[Idempotency]
         RT[Routing]
     end
 
-    subgraph core [Core Layer]
-        LM[Limiter :8080]
-        ADM[Admin :8082]
+    subgraph core ["Core layer"]
+        LM["Limiter 8080"]
+        ADM["Admin 8082"]
         CB[Circuit Guard]
         AU[Audit Workers]
     end
@@ -215,7 +215,7 @@ flowchart TB
 | `route:gw:{id}` | Gateway registry + EMA metrics |
 | `audit:event:{id}` | Immutable audit events + ZSET indexes |
 
-See [redis-layout.mmd](../diagrams/redis-layout.mmd).
+See [redis-layout.md](../diagrams/redis-layout.md).
 
 ### Phase: Request flow deep dive (10 minutes)
 
@@ -246,7 +246,7 @@ See [redis-layout.mmd](../diagrams/redis-layout.mmd).
 4. If claimed → forward, on success `complete.lua` with fence token
 5. Concurrent duplicate → 409 until complete
 
-See [request-flow.mmd](../diagrams/request-flow.mmd).
+See [request-flow.md](../diagrams/request-flow.md).
 
 ---
 

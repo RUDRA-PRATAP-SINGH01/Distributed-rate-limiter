@@ -177,7 +177,7 @@ Metrics endpoints: optional `METRICS_REQUIRE_AUTH` plus API key on both services
 
 ### Trace diagram reference
 
-See `docs/diagrams/tracing-flow.mmd` for a visual request flow.
+See `docs/diagrams/tracing-flow.md` for a visual request flow.
 
 ## Tradeoffs
 

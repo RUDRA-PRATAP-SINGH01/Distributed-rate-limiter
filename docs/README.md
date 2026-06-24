@@ -250,17 +250,17 @@ HA overlay: `docker compose -f docker-compose.yml -f docker-compose.ha.yml --pro
 
 | Resource | Description |
 |----------|-------------|
-| [diagrams/README.md](diagrams/README.md) | Index of all Mermaid sources |
-| [diagrams/request-flow.mmd](diagrams/request-flow.mmd) | Client → sidecar → limiter → upstream |
-| [diagrams/sidecar-flow.mmd](diagrams/sidecar-flow.mmd) | Sidecar internal branches |
-| [diagrams/routing-flow.mmd](diagrams/routing-flow.mmd) | Gateway scoring and failover |
-| [diagrams/idempotency-flow.mmd](diagrams/idempotency-flow.mmd) | Idempotency state machine |
-| [diagrams/fencing-flow.mmd](diagrams/fencing-flow.mmd) | Lease reclaim + stale rejection |
-| [diagrams/circuit-breaker.mmd](diagrams/circuit-breaker.mmd) | Breaker state transitions |
-| [diagrams/sentinel-failover.mmd](diagrams/sentinel-failover.mmd) | Sentinel quorum + rediscovery |
-| [diagrams/audit-flow.mmd](diagrams/audit-flow.mmd) | Async append + indexes |
-| [diagrams/tracing-flow.mmd](diagrams/tracing-flow.mmd) | OTel spans across services |
-| [diagrams/redis-layout.mmd](diagrams/redis-layout.mmd) | Key namespace map |
+| [diagrams/README.md](diagrams/README.md) | Index of all diagrams (render on GitHub) |
+| [diagrams/request-flow.md](diagrams/request-flow.md) | Client → sidecar → limiter → upstream |
+| [diagrams/sidecar-flow.md](diagrams/sidecar-flow.md) | Sidecar internal branches |
+| [diagrams/routing-flow.md](diagrams/routing-flow.md) | Gateway scoring and failover |
+| [diagrams/idempotency-flow.md](diagrams/idempotency-flow.md) | Idempotency state machine |
+| [diagrams/fencing-flow.md](diagrams/fencing-flow.md) | Lease reclaim + stale rejection |
+| [diagrams/circuit-breaker.md](diagrams/circuit-breaker.md) | Breaker state transitions |
+| [diagrams/sentinel-failover.md](diagrams/sentinel-failover.md) | Sentinel quorum + rediscovery |
+| [diagrams/audit-flow.md](diagrams/audit-flow.md) | Async append + indexes |
+| [diagrams/tracing-flow.md](diagrams/tracing-flow.md) | OTel spans across services |
+| [diagrams/redis-layout.md](diagrams/redis-layout.md) | Key namespace map |
 
 ### Interview preparation
 

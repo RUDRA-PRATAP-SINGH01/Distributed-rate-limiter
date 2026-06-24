@@ -87,4 +87,4 @@ Every mutating request with a key pays one Lua round-trip minimum; replays skip 
 
 During testing I fired 100 concurrent POSTs with one key (`benchmarks/idempotency/`). Before Lua, I saw multiple upstream executions. After `claim.lua`, exactly one forward. the rest got 409 or eventual replay. The lesson: **idempotency belongs at the edge** (sidecar), not buried in business logic, if you want fleet-wide guarantees without patching every service.
 
-**References:** `internal/idempotency/store.go`, `docs/diagrams/idempotency-flow.mmd`, `docs/failure-modes/duplicate-requests.md`
+**References:** `internal/idempotency/store.go`, `docs/diagrams/idempotency-flow.md`, `docs/failure-modes/duplicate-requests.md`

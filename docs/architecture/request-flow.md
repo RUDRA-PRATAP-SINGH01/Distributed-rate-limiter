@@ -2,7 +2,9 @@
 
 When I wired the first end-to-end demo. client → sidecar → limiter → Redis → demo backend. I assumed one code path would suffice. Then I added idempotency for POST retries, hierarchical limits for multi-tenant SaaS, and intelligent routing to three simulated gateways. The sidecar now branches into **normal** and **idempotent** flows that share limiter calls but diverge sharply around upstream execution and Redis idempotency keys.
 
-This document follows the canonical sequence in [../diagrams/request-flow.mmd](../diagrams/request-flow.mmd).
+This document follows the canonical sequence in [../diagrams/request-flow.md](../diagrams/request-flow.md).
+
+> **Diagram:** open [request-flow.md](../diagrams/request-flow.md) for the rendered sequence diagram on GitHub.
 
 ---
 
@@ -90,7 +92,7 @@ Path allowlist uses prefix matching: `/api` matches `/api/login` and `/api/v2/fo
 
 ### Normal path (`serveNormal`)
 
-Reference: diagram lines 36 to 46 in `request-flow.mmd`.
+Reference: diagram lines 36 to 46 in `request-flow.md`.
 
 1. Denial cache lookup: Key is `userID` or `tenant|user|path` in hierarchical mode. If entry exists, not expired, and `Allowed == false`, return 429 immediately.
 2. Allowed cache entries are ignored: I log "ignoring cache, will call central limiter" in debug mode.
@@ -107,7 +109,7 @@ Reference: diagram lines 36 to 46 in `request-flow.mmd`.
 
 ### Idempotent path (`serveIdempotent`)
 
-Reference: diagram lines 13 to 34 in `request-flow.mmd`.
+Reference: diagram lines 13 to 34 in `request-flow.md`.
 
 1. Validate key: Format rules in `idempotency.ValidateKey`.
 2. Read body: Up to `IDEMPOTENCY_MAX_BODY_BYTES` for fingerprinting and later proxy.
@@ -222,9 +224,9 @@ Default denial TTL 30 ms is aggressively short. I tuned it to catch burst abuse 
 
 ## Sequence reference
 
-The Mermaid source at [../diagrams/request-flow.mmd](../diagrams/request-flow.mmd) is the authoritative numbering:
+The Mermaid source at [../diagrams/request-flow.md](../diagrams/request-flow.md) is the authoritative numbering:
 
 - Steps 10 to 34: mutating + `Idempotency-Key`
 - Steps 36 to 46: normal path with denial cache
 
-For idempotency-only detail see [../diagrams/idempotency-flow.mmd](../diagrams/idempotency-flow.mmd). For routing after allow see [routing-architecture.md](./routing-architecture.md).
+For idempotency-only detail see [../diagrams/idempotency-flow.md](../diagrams/idempotency-flow.md). For routing after allow see [routing-architecture.md](./routing-architecture.md).

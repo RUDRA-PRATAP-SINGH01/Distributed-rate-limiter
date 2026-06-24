@@ -1,21 +1,26 @@
+# Sidecar Flow
+
+Internal branches inside the sidecar proxy on port 9090.
+
+```mermaid
 flowchart TB
-    subgraph ingress [Sidecar Ingress :9090]
+    subgraph ingress ["Sidecar ingress"]
         H[HTTP Handler ServeHTTP]
         P[pathAllowed]
         I[identity.ResolveUserID]
     end
 
-    subgraph idem [Idempotency Branch]
+    subgraph idem ["Idempotency branch"]
         V[Validate Idempotency-Key]
-        FP[Fingerprint method+path+query+body]
+        FP[Fingerprint method path query body]
         CL[Claim Lua]
         RP{Result?}
         RL2[checkRateLimit]
         FWD[forwardIdempotent]
-        CMP[Complete / Fail]
+        CMP[Complete or Fail]
     end
 
-    subgraph normal [Normal Branch]
+    subgraph normal ["Normal branch"]
         CACHE{Denial cache hit?}
         SF[singleflight on miss]
         RL[checkRateLimit]
@@ -23,15 +28,15 @@ flowchart TB
     end
 
     subgraph deps [Dependencies]
-        LIM[Central Limiter :8080]
+        LIM["Central Limiter (8080)"]
         CB[circuitbreaker Allow central-limiter]
         REDIS[(Redis)]
     end
 
     H --> P --> I
-    I -->|POST/PUT/PATCH + key| V --> FP --> CL --> RP
+    I -->|POST PUT PATCH with key| V --> FP --> CL --> RP
     RP -->|replay| OUT[Write cached response]
-    RP -->|in_progress / hash_mismatch| OUT
+    RP -->|in_progress or hash_mismatch| OUT
     RP -->|claimed| RL2 --> FWD --> CMP --> OUT
 
     I -->|no idempotency key| CACHE
@@ -43,3 +48,4 @@ flowchart TB
     CL --> REDIS
     CMP --> REDIS
     LIM --> REDIS
+```

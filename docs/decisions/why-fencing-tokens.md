@@ -66,7 +66,7 @@ Sidecar paths: `completeIdempotent`, `failIdempotent` in `cmd/sidecar/main.go` a
 
 - Correlate logs: `Idempotency claimed key` vs `ErrStaleFence`. indicates lease too short or upstream too slow.
 - Test coverage: `internal/idempotency/store_test.go` asserts `ErrStaleFence` for stale owner.
-- Diagram: `docs/diagrams/fencing-flow.mmd`.
+- Diagram: `docs/diagrams/fencing-flow.md`.
 - Do not disable fencing in Lua; it is the correctness backbone for reclaim.
 
 ## Performance implications

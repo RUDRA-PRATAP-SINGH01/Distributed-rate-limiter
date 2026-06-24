@@ -94,4 +94,4 @@ Sentinel adds discovery overhead only on connect/reconnect, not steady-state EVA
 
 The first version ran single Redis in Docker and I killed the container during a demo. entire stack froze. Sentinel taught me to separate **"Redis slow"** from **"Redis gone"** in metrics. I would still choose Sentinel for self-hosted deployments; for cloud I would likely use managed failover and keep `REDIS_MODE=standalone` pointed at the provider endpoint. The code path stays the same either way.
 
-**References:** `internal/redis/`, `deploy/redis/`, `docs/diagrams/sentinel-failover.mmd`, `docs/failure-modes/sentinel-failover.md`
+**References:** `internal/redis/`, `deploy/redis/`, `docs/diagrams/sentinel-failover.md`, `docs/failure-modes/sentinel-failover.md`

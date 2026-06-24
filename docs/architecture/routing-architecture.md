@@ -320,4 +320,4 @@ Benchmark summary in `benchmarks/routing/summary.md`. failover adds RTT linear i
 - [request-flow.md](./request-flow.md). routing after rate limit allow
 - [sidecar-architecture.md](./sidecar-architecture.md). sidecar integration
 - [redis-design.md](./redis-design.md). `route:gw:*` and `cb:*` keys
-- Diagram: [../diagrams/routing-flow.mmd](../diagrams/routing-flow.mmd)
+- Diagram: [../diagrams/routing-flow.md](../diagrams/routing-flow.md)

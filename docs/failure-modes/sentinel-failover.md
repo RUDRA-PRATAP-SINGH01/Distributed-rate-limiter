@@ -90,4 +90,4 @@ Steady-state: no Sentinel overhead on each command. Failover window: 100% error 
 
 During my first HA demo I killed only the master container and expected instant recovery. clients errored for ~15s and I had not wired `redis_failover_reconnects_total` yet, so I could not prove reconnection in Grafana. The lesson: **measure failover time in benchmarks**, not assumptions. Sentinel is correct for self-hosted; managed Redis is correct when you want someone else to run the election.
 
-**References:** `docs/decisions/why-sentinel.md`, `docs/diagrams/sentinel-failover.mmd`, `deploy/redis/`, `benchmarks/sentinel/summary.md`
+**References:** `docs/decisions/why-sentinel.md`, `docs/diagrams/sentinel-failover.md`, `deploy/redis/`, `benchmarks/sentinel/summary.md`
