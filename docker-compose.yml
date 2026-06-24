@@ -74,6 +74,45 @@ services:
     networks:
       - rate-net
 
+  gateway-a:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.gateway
+    container_name: gateway-a
+    environment:
+      - PORT=8081
+      - GATEWAY_ID=gateway-a
+      - SIMULATED_LATENCY_MS=15
+      - SIMULATED_ERROR_RATE=0.01
+    networks:
+      - rate-net
+
+  gateway-b:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.gateway
+    container_name: gateway-b
+    environment:
+      - PORT=8081
+      - GATEWAY_ID=gateway-b
+      - SIMULATED_LATENCY_MS=50
+      - SIMULATED_ERROR_RATE=0.05
+    networks:
+      - rate-net
+
+  gateway-c:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.gateway
+    container_name: gateway-c
+    environment:
+      - PORT=8081
+      - GATEWAY_ID=gateway-c
+      - SIMULATED_LATENCY_MS=120
+      - SIMULATED_ERROR_RATE=0.35
+    networks:
+      - rate-net
+
   sidecar:
     build:
       context: .
@@ -83,6 +122,12 @@ services:
       - PORT=9090
       - UPSTREAM_URL=http://demo:8081
       - RATE_LIMITER_URL=http://limiter:8080
+      - ENABLE_ROUTING=true
+      - GATEWAYS=gateway-a|http://gateway-a:8081|100,gateway-b|http://gateway-b:8081|80,gateway-c|http://gateway-c:8081|60
+      - ROUTING_TARGET_LATENCY_MS=100
+      - ROUTING_CIRCUIT_ERROR_RATE=0.5
+      - ROUTING_CIRCUIT_MIN_SAMPLES=10
+      - ROUTING_PROBE_INTERVAL_SEC=15
       - RATE_LIMIT=10
       - USE_HIERARCHICAL=false
       - FAIL_OPEN=false
@@ -109,7 +154,11 @@ services:
         condition: service_healthy
       limiter:
         condition: service_healthy
-      demo:
+      gateway-a:
+        condition: service_started
+      gateway-b:
+        condition: service_started
+      gateway-c:
         condition: service_started
       jaeger:
         condition: service_started

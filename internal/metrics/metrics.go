@@ -5,6 +5,8 @@
 package metrics
 
 import (
+	"strconv"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -70,6 +72,63 @@ var (
 			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
 		},
 	)
+
+	RoutingDecisions = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "routing_decisions_total",
+			Help: "Gateway routing decisions",
+		},
+		[]string{"gateway", "failover"},
+	)
+
+	RoutingOutcomes = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "routing_outcomes_total",
+			Help: "Per-gateway upstream outcomes",
+		},
+		[]string{"gateway", "result"},
+	)
+
+	RoutingFailovers = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "routing_failovers_total",
+			Help: "Failover attempts to alternate gateways",
+		},
+		[]string{"gateway"},
+	)
+
+	RoutingScores = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "routing_gateway_health_score",
+			Help: "Current computed health score per gateway",
+		},
+		[]string{"gateway"},
+	)
+
+	RoutingLatency = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "routing_gateway_latency_seconds",
+			Help:    "Observed upstream latency per gateway",
+			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5},
+		},
+		[]string{"gateway"},
+	)
+
+	RoutingRedisDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "routing_redis_duration_seconds",
+			Help:    "Routing Redis Lua operation latency",
+			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1},
+		},
+	)
+
+	RoutingCircuitOpen = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "routing_circuit_open",
+			Help: "1 if gateway circuit is open",
+		},
+		[]string{"gateway"},
+	)
 )
 
 func RecordRequest(handler string, allowed bool) {
@@ -106,4 +165,36 @@ func RecordIdempotencyComplete() {
 
 func RecordIdempotencyRedisDuration(duration float64) {
 	IdempotencyRedisDuration.Observe(duration)
+}
+
+func RecordRoutingDecision(gateway string, failover bool) {
+	RoutingDecisions.WithLabelValues(gateway, strconv.FormatBool(failover)).Inc()
+}
+
+func RecordRoutingOutcome(gateway, result string) {
+	RoutingOutcomes.WithLabelValues(gateway, result).Inc()
+}
+
+func RecordRoutingFailover(gateway string) {
+	RoutingFailovers.WithLabelValues(gateway).Inc()
+}
+
+func RecordRoutingScore(gateway string, score float64) {
+	RoutingScores.WithLabelValues(gateway).Set(score)
+}
+
+func RecordRoutingLatency(gateway string, seconds float64) {
+	RoutingLatency.WithLabelValues(gateway).Observe(seconds)
+}
+
+func RecordRoutingRedisDuration(duration float64) {
+	RoutingRedisDuration.Observe(duration)
+}
+
+func RecordRoutingCircuitState(gateway string, open bool) {
+	val := 0.0
+	if open {
+		val = 1
+	}
+	RoutingCircuitOpen.WithLabelValues(gateway).Set(val)
 }

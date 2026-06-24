@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/idempotency"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/routing"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -66,6 +68,7 @@ type Sidecar struct {
 	proxy            *httputil.ReverseProxy // created once — reusing per request would leak goroutines
 	idempotency      idempotency.Store
 	idempotencyCfg   idempotency.Config
+	router           *routing.Router
 }
 
 func NewSidecar(
@@ -103,6 +106,10 @@ func NewSidecar(
 func (s *Sidecar) SetIdempotency(store idempotency.Store, cfg idempotency.Config) {
 	s.idempotency = store
 	s.idempotencyCfg = cfg
+}
+
+func (s *Sidecar) SetRouter(router *routing.Router) {
+	s.router = router
 }
 
 func (s *Sidecar) tenantID(r *http.Request) string {
@@ -256,14 +263,20 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 
 func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scope, idemKey string) {
 	capturer := idempotency.NewResponseCapturer(w)
-	target, _ := url.Parse(s.upstreamURL)
-	r.Host = target.Host
-	s.proxy.ServeHTTP(capturer, r)
-	captured := capturer.Commit()
-
-	if err := s.completeIdempotent(r.Context(), scope, idemKey, captured.StatusCode, captured.Headers, captured.Body); err != nil {
-		log.Printf("Idempotency complete error (response still returned): %v", err)
+	if s.router != nil {
+		body, _ := readRequestBody(r)
+		if err := s.router.Forward(r.Context(), capturer, r, body); err != nil {
+			log.Printf("Routing forward error: %v", err)
+			http.Error(w, "all gateways unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	} else {
+		target, _ := url.Parse(s.upstreamURL)
+		r.Host = target.Host
+		s.proxy.ServeHTTP(capturer, r)
 	}
+	captured := capturer.Commit()
+	_ = s.completeIdempotent(r.Context(), scope, idemKey, captured.StatusCode, captured.Headers, captured.Body)
 }
 
 func (s *Sidecar) completeIdempotent(ctx context.Context, scope, key string, status int, headers map[string]string, body []byte) error {
@@ -450,9 +463,31 @@ func (s *Sidecar) forwardRequest(w http.ResponseWriter, r *http.Request) {
 	defer span.End()
 	r = r.WithContext(ctx)
 
+	if s.router != nil {
+		body, _ := readRequestBody(r)
+		if err := s.router.Forward(ctx, w, r, body); err != nil {
+			log.Printf("Routing forward error: %v", err)
+			telemetry.RecordError(span, err)
+			http.Error(w, "all gateways unavailable", http.StatusServiceUnavailable)
+		}
+		return
+	}
+
 	target, _ := url.Parse(s.upstreamURL)
 	r.Host = target.Host
 	s.proxy.ServeHTTP(w, r)
+}
+
+func readRequestBody(r *http.Request) ([]byte, error) {
+	if r.Body == nil {
+		return nil, nil
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
 }
 
 func parseAllowedPaths(raw string) []string {
@@ -480,8 +515,11 @@ func sidecarMetricsAuthKey(internalKey, metricsKey string) string {
 func main() {
 	upstream := os.Getenv("UPSTREAM_URL")
 	limiter := os.Getenv("RATE_LIMITER_URL")
-	if upstream == "" || limiter == "" {
-		log.Fatal("UPSTREAM_URL and RATE_LIMITER_URL must be set")
+	if limiter == "" {
+		log.Fatal("RATE_LIMITER_URL must be set")
+	}
+	if upstream == "" && os.Getenv("ENABLE_ROUTING") != "true" {
+		log.Fatal("UPSTREAM_URL must be set when ENABLE_ROUTING is false")
 	}
 
 	otelCfg := telemetry.LoadConfigFromEnv("rate-sidecar")
@@ -572,6 +610,33 @@ func main() {
 		}
 		sidecar.SetIdempotency(idempotency.NewRedisStore(rdb, idemCfg), idemCfg)
 		log.Printf("Idempotency layer enabled (lock_ttl=%dms, completed_ttl=%dms)", idemCfg.LockTTL, idemCfg.CompletedTTL)
+	}
+
+	if os.Getenv("ENABLE_ROUTING") == "true" {
+		redisAddr := os.Getenv("REDIS_ADDR")
+		if redisAddr == "" {
+			log.Fatal("ENABLE_ROUTING=true requires REDIS_ADDR")
+		}
+		rdb := redisclient.NewClient(redisAddr, os.Getenv("REDIS_PASSWORD"))
+		if err := redisclient.Ping(rdb); err != nil {
+			log.Fatalf("Routing Redis unreachable: %v", err)
+		}
+		if otelCfg.Enabled {
+			_ = telemetry.InstrumentRedis(rdb)
+		}
+		routeCfg := routing.LoadConfigFromEnv()
+		store := routing.NewRedisStore(rdb, routeCfg)
+		router := routing.NewRouter(store, sidecar.httpClient, routeCfg)
+		gateways := routing.GatewaysFromEnv()
+		if len(gateways) == 0 {
+			log.Fatal("ENABLE_ROUTING=true requires GATEWAYS env")
+		}
+		if err := router.Seed(context.Background(), gateways); err != nil {
+			log.Fatalf("gateway seed failed: %v", err)
+		}
+		router.StartHealthProbes(context.Background())
+		sidecar.SetRouter(router)
+		log.Printf("Intelligent routing enabled with %d gateways", len(gateways))
 	}
 
 	mux := http.NewServeMux()

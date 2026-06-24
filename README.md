@@ -19,6 +19,7 @@ I started this project because I wanted to understand how production systems lik
 - [Hierarchical Quota Enforcement](#hierarchical-quota-enforcement)
 - [Sidecar Proxy](#sidecar-proxy)
 - [Idempotency Layer](#idempotency-layer)
+- [Intelligent Traffic Routing](#intelligent-traffic-routing)
 - [Admin API and Runtime Overrides](#admin-api-and-runtime-overrides)
 - [Security Model](#security-model)
 - [Observability](#observability)
@@ -668,6 +669,110 @@ See `internal/idempotency/` and `benchmarks/idempotency/summary.md` for implemen
 
 ---
 
+## Intelligent Traffic Routing
+
+Juspay-style payment gateway routing: the sidecar continuously scores Gateway A/B/C on latency, error rate, and health, then routes traffic with weighted selection and automatic failover.
+
+```mermaid
+flowchart TB
+    subgraph sidecar [Sidecar]
+        RQ[Incoming Payment]
+        SEL[Score + Weighted Pick]
+        FO[Failover Chain]
+    end
+
+    subgraph redis [Redis]
+        GA["route:gw:gateway-a"]
+        GB["route:gw:gateway-b"]
+        GC["route:gw:gateway-c"]
+    end
+
+    subgraph gateways [Payment Gateways]
+        A[Gateway A — fast, 1% errors]
+        B[Gateway B — medium, 5% errors]
+        C[Gateway C — slow, 35% errors]
+    end
+
+    RQ --> SEL
+    SEL --> GA & GB & GC
+    SEL -->|primary| A
+    FO -->|on 5xx| B
+    FO -->|on 5xx| C
+    A & B & C -->|outcome| redis
+```
+
+### Routing Algorithm
+
+1. **Collect** — every upstream response records latency + success/failure in Redis (Lua atomic)
+2. **Score** — composite routing score per gateway
+3. **Select** — weighted random among healthy gateways
+4. **Failover** — on 5xx/timeout, try next-highest score (up to `ROUTING_MAX_FAILOVER_TRIES`)
+5. **Circuit break** — gateway excluded when error rate exceeds threshold
+
+### Scoring Model
+
+```
+routing_score = weight × latency_factor × health_factor × error_factor
+
+latency_factor = min(2.0, target_latency_ms / latency_ema_ms)
+health_factor  = health_score / 100
+error_factor   = max(0.05, 1 - error_rate × 2.0)
+```
+
+| Signal | Source | Effect |
+|--------|--------|--------|
+| Latency EMA | Per-request measurement | Faster gateways score higher |
+| Error rate | Sliding window in Redis | High errors reduce score / open circuit |
+| Health score | Computed 0–100 | Below 20 → excluded |
+| Static weight | Config | Merchant/PG preference |
+
+### Redis Schema
+
+```
+route:index                    SET of gateway IDs
+route:gw:{id}                  HASH
+  id, url, weight, enabled
+  latency_ema_ms, success_count, error_count
+  health_score, circuit_open, circuit_opened_at
+  updated_at, total_requests
+```
+
+### Example
+
+```bash
+# Route payment (sidecar picks best gateway)
+curl -X POST http://localhost:9090/api/payments \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: merchant-1" \
+  -d '{"amount": 500}'
+
+# Response headers:
+# X-Gateway-ID: gateway-a
+# X-Gateway-Score: 142.50
+# X-Gateway-Failover: true   (if failover occurred)
+
+# Admin: view live scores
+curl http://localhost:8082/admin/routing/gateways \
+  -H "X-API-Key: dev-key-change-in-prod"
+```
+
+### Environment
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_ROUTING` | `false` | Enable intelligent routing |
+| `GATEWAYS` | — | `id\|url\|weight,...` |
+| `ROUTING_TARGET_LATENCY_MS` | `100` | Latency target for scoring |
+| `ROUTING_CIRCUIT_ERROR_RATE` | `0.5` | Open circuit above this error rate |
+| `ROUTING_CIRCUIT_MIN_SAMPLES` | `10` | Min samples before circuit trips |
+| `ROUTING_PROBE_INTERVAL_SEC` | `15` | Background health probe interval |
+
+Docker Compose runs `gateway-a`, `gateway-b`, `gateway-c` simulators with routing enabled.
+
+See `internal/routing/` and `benchmarks/routing/summary.md`.
+
+---
+
 ## Admin API and Runtime Overrides
 
 I separated the admin API onto port 8082 so it can be network-isolated from the hot `/check` path in production.
@@ -812,6 +917,10 @@ I intentionally kept label cardinality low. No per-user labels — that would OO
 | `idempotency_claims_total` | Counter | `result` (claimed, replay, in_progress, hash_mismatch, error) |
 | `idempotency_completes_total` | Counter | — |
 | `idempotency_redis_duration_seconds` | Histogram | — |
+| `routing_decisions_total` | Counter | `gateway`, `failover` |
+| `routing_outcomes_total` | Counter | `gateway`, `result` |
+| `routing_gateway_health_score` | Gauge | `gateway` |
+| `routing_failovers_total` | Counter | `gateway` |
 
 Scrape endpoints:
 - Limiter: `http://localhost:8080/metrics`
@@ -1097,6 +1206,7 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │   ├── auth/                API key middleware
 │   ├── identity/            User ID resolution
 │   ├── idempotency/         Idempotency store + Lua scripts
+│   ├── routing/             Intelligent gateway routing + scoring
 │   ├── limiter/             Redis algorithms + Lua scripts
 │   ├── metrics/             Prometheus instrumentation
 │   ├── override/            Runtime override store
