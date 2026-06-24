@@ -125,9 +125,65 @@ var (
 	RoutingCircuitOpen = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "routing_circuit_open",
-			Help: "1 if gateway circuit is open",
+			Help: "1 if gateway circuit is open (legacy; see circuit_breaker_state)",
 		},
 		[]string{"gateway"},
+	)
+
+	CircuitBreakerState = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "circuit_breaker_state",
+			Help: "Circuit breaker state: 0=closed, 1=open, 2=half_open",
+		},
+		[]string{"target"},
+	)
+
+	CircuitBreakerTransitions = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "circuit_breaker_transitions_total",
+			Help: "Circuit breaker state transitions",
+		},
+		[]string{"target", "from", "to"},
+	)
+
+	CircuitBreakerRejections = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "circuit_breaker_rejections_total",
+			Help: "Requests rejected by open or exhausted half-open circuit",
+		},
+		[]string{"target", "state"},
+	)
+
+	CircuitBreakerOutcomes = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "circuit_breaker_outcomes_total",
+			Help: "Recorded outcomes per protected target",
+		},
+		[]string{"target", "outcome"},
+	)
+
+	CircuitBreakerFailureRate = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "circuit_breaker_failure_rate",
+			Help: "Rolling failure rate per target",
+		},
+		[]string{"target"},
+	)
+
+	CircuitBreakerLatencyEMA = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "circuit_breaker_latency_ema_ms",
+			Help: "Exponential moving average latency in milliseconds",
+		},
+		[]string{"target"},
+	)
+
+	CircuitBreakerRedisDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "circuit_breaker_redis_duration_seconds",
+			Help:    "Circuit breaker Redis Lua operation latency",
+			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1},
+		},
 	)
 )
 
@@ -197,4 +253,33 @@ func RecordRoutingCircuitState(gateway string, open bool) {
 		val = 1
 	}
 	RoutingCircuitOpen.WithLabelValues(gateway).Set(val)
+}
+
+func RecordCircuitState(target string, state interface{ Code() int }) {
+	CircuitBreakerState.WithLabelValues(target).Set(float64(state.Code()))
+	RecordRoutingCircuitState(target, state.Code() == 1)
+}
+
+func RecordCircuitTransition(target, from, to string) {
+	CircuitBreakerTransitions.WithLabelValues(target, from, to).Inc()
+}
+
+func RecordCircuitRejection(target, state string) {
+	CircuitBreakerRejections.WithLabelValues(target, state).Inc()
+}
+
+func RecordCircuitOutcome(target, outcome string) {
+	CircuitBreakerOutcomes.WithLabelValues(target, outcome).Inc()
+}
+
+func RecordCircuitFailureRate(target string, rate float64) {
+	CircuitBreakerFailureRate.WithLabelValues(target).Set(rate)
+}
+
+func RecordCircuitLatencyEMA(target string, ms float64) {
+	CircuitBreakerLatencyEMA.WithLabelValues(target).Set(ms)
+}
+
+func RecordCircuitRedisDuration(seconds float64) {
+	CircuitBreakerRedisDuration.Observe(seconds)
 }

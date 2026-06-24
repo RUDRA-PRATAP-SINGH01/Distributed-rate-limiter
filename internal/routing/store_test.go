@@ -5,22 +5,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
-func setupRoutingStore(t *testing.T) (*RedisStore, *miniredis.Miniredis) {
+func setupRoutingStore(t *testing.T) (*RedisStore, *circuitbreaker.Breaker, *miniredis.Miniredis) {
 	t.Helper()
 	mr, err := miniredis.Run()
 	if err != nil {
 		t.Fatal(err)
 	}
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	return NewRedisStore(rdb, DefaultConfig()), mr
+	cbCfg := circuitbreaker.DefaultConfig()
+	cbCfg.MinSamples = 5
+	cbCfg.FailureRateThreshold = 0.5
+	breaker := circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
+	store := NewRedisStore(rdb, DefaultConfig())
+	store.SetBreaker(breaker)
+	return store, breaker, mr
 }
 
 func TestRegisterAndRecordOutcome(t *testing.T) {
-	store, _ := setupRoutingStore(t)
+	store, _, _ := setupRoutingStore(t)
 	ctx := context.Background()
 
 	if err := store.RegisterGateway(ctx, Gateway{ID: "gateway-a", URL: "http://a:8081", Weight: 100}); err != nil {
@@ -55,10 +62,7 @@ func TestRegisterAndRecordOutcome(t *testing.T) {
 }
 
 func TestCircuitOpensOnHighErrors(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CircuitMinSamples = 5
-	cfg.CircuitErrorRate = 0.5
-	store, _ := setupRoutingStore(t)
+	store, breaker, _ := setupRoutingStore(t)
 	ctx := context.Background()
 	_ = store.RegisterGateway(ctx, Gateway{ID: "gateway-c", URL: "http://c:8081", Weight: 60})
 
@@ -71,7 +75,11 @@ func TestCircuitOpensOnHighErrors(t *testing.T) {
 	}
 
 	gw, _ := store.GetGateway(ctx, "gateway-c")
-	if gw == nil || !gw.CircuitOpen {
+	if gw == nil || gw.CircuitState != circuitbreaker.StateOpen {
 		t.Fatalf("expected circuit open, got %+v", gw)
+	}
+	snap, _ := breaker.GetState(ctx, "gateway-c")
+	if snap.State != circuitbreaker.StateOpen {
+		t.Fatalf("breaker state: %+v", snap)
 	}
 }

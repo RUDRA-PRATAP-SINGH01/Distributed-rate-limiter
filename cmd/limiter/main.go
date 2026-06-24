@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/limiter"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
@@ -30,6 +31,7 @@ import (
 var limiterInstance RateLimiter
 var hierarchicalLimiter *limiter.HierarchicalLimiter
 var overrideStore *override.Store
+var redisCircuit *circuitbreaker.Breaker
 
 func main() {
 	cfg := LoadConfig()
@@ -57,6 +59,11 @@ func main() {
 		}
 	}
 	log.Printf("Redis connection verified at %s", cfg.RedisAddr)
+
+	cbCfg := circuitbreaker.LoadConfigFromEnv()
+	redisCircuit = circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
+	log.Printf("Redis circuit breaker enabled (failure_rate=%.2f, cooldown=%dms)",
+		cbCfg.FailureRateThreshold, cbCfg.OpenCooldownMs)
 
 	// Override store sits beside the algorithm layer: limits can be tuned at runtime
 	// without redeploying binaries. Local TTL cache avoids a Redis round-trip per check.
@@ -128,7 +135,6 @@ func main() {
 		span.SetAttributes(attribute.String("user.id", userID))
 
 		if r.URL.Query().Get("idempotent_replay") == "true" {
-			metrics.RecordRequest("check", true)
 			metrics.RecordRequestDuration("check", time.Since(start).Seconds())
 			w.Header().Set("Content-Type", "application/json")
 			setRateLimitHeaders(w, rateLimitLimitHeader(cfg), cfg.Capacity)
@@ -141,7 +147,13 @@ func main() {
 			return
 		}
 
+		if !checkRedisCircuit(ctx, w, span) {
+			telemetry.SetHTTPStatus(span, http.StatusServiceUnavailable)
+			return
+		}
+
 		allowed, remaining, err := limiterInstance.Allow(ctx, userID)
+		recordRedisCircuit(ctx, err, start)
 		if err != nil {
 			telemetry.RecordError(span, err)
 			w.Header().Set("Content-Type", "application/json")
@@ -226,6 +238,10 @@ func main() {
 				return
 			}
 
+			if !checkRedisCircuit(ctx, w, span) {
+				return
+			}
+
 			// Keys are namespaced so tenants and endpoints never share Redis state accidentally.
 			globalKey := "rate:global"
 			tenantKey := fmt.Sprintf("rate:tenant:%s", tenantID)
@@ -244,6 +260,7 @@ func main() {
 				capacities,
 				refillRates,
 			)
+			recordRedisCircuit(ctx, err, start)
 			if err != nil {
 				telemetry.RecordError(span, err)
 				w.Header().Set("Content-Type", "application/json")

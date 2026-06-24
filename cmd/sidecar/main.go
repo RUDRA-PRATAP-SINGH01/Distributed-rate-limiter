@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/idempotency"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
@@ -69,6 +70,7 @@ type Sidecar struct {
 	idempotency      idempotency.Store
 	idempotencyCfg   idempotency.Config
 	router           *routing.Router
+	limiterCircuit   *circuitbreaker.Breaker
 }
 
 func NewSidecar(
@@ -110,6 +112,10 @@ func (s *Sidecar) SetIdempotency(store idempotency.Store, cfg idempotency.Config
 
 func (s *Sidecar) SetRouter(router *routing.Router) {
 	s.router = router
+}
+
+func (s *Sidecar) SetLimiterCircuit(b *circuitbreaker.Breaker) {
+	s.limiterCircuit = b
 }
 
 func (s *Sidecar) tenantID(r *http.Request) string {
@@ -375,6 +381,28 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 	)
 	defer span.End()
 
+	if s.limiterCircuit != nil {
+		allow, err := s.limiterCircuit.Allow(ctx, circuitbreaker.TargetCentralLimiter)
+		if err == nil && !allow.Allowed {
+			err := fmt.Errorf("central limiter circuit %s", allow.State)
+			telemetry.RecordError(span, err)
+			return limitResult{}, err
+		}
+	}
+
+	start := time.Now()
+	var (
+		callErr    error
+		statusCode int
+	)
+	defer func() {
+		if s.limiterCircuit == nil {
+			return
+		}
+		input := circuitbreaker.ClassifyHTTP(callErr, statusCode, time.Since(start), s.limiterCircuit.Config().LatencyThresholdMs)
+		_ = s.limiterCircuit.Record(ctx, circuitbreaker.TargetCentralLimiter, input)
+	}()
+
 	var req *http.Request
 	var err error
 
@@ -403,6 +431,7 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 		req, err = http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	}
 	if err != nil {
+		callErr = err
 		return limitResult{}, err
 	}
 
@@ -419,11 +448,13 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
+		callErr = err
 		telemetry.RecordError(span, err)
 		return limitResult{}, err
 	}
 	defer resp.Body.Close()
 
+	statusCode = resp.StatusCode
 	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
 
 	limit := s.defaultLimit
@@ -442,6 +473,7 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("limiter returned %d", resp.StatusCode)
+		callErr = err
 		telemetry.RecordError(span, err)
 		return limitResult{}, err
 	}
@@ -609,6 +641,10 @@ func main() {
 			}
 		}
 		sidecar.SetIdempotency(idempotency.NewRedisStore(rdb, idemCfg), idemCfg)
+		if os.Getenv("ENABLE_CIRCUIT_BREAKER") != "false" {
+			cbCfg := circuitbreaker.LoadConfigFromEnv()
+			sidecar.SetLimiterCircuit(circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg)))
+		}
 		log.Printf("Idempotency layer enabled (lock_ttl=%dms, completed_ttl=%dms)", idemCfg.LockTTL, idemCfg.CompletedTTL)
 	}
 
@@ -625,8 +661,12 @@ func main() {
 			_ = telemetry.InstrumentRedis(rdb)
 		}
 		routeCfg := routing.LoadConfigFromEnv()
+		cbCfg := circuitbreaker.LoadConfigFromEnv()
+		breaker := circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
 		store := routing.NewRedisStore(rdb, routeCfg)
-		router := routing.NewRouter(store, sidecar.httpClient, routeCfg)
+		store.SetBreaker(breaker)
+		router := routing.NewRouter(store, sidecar.httpClient, routeCfg, breaker)
+		sidecar.SetLimiterCircuit(breaker)
 		gateways := routing.GatewaysFromEnv()
 		if len(gateways) == 0 {
 			log.Fatal("ENABLE_ROUTING=true requires GATEWAYS env")

@@ -669,6 +669,121 @@ See `internal/idempotency/` and `benchmarks/idempotency/summary.md` for implemen
 
 ---
 
+## Distributed Circuit Breaker
+
+Production-grade three-state circuit breaker protecting Redis, the central limiter, and payment gateways. State is shared in Redis so every sidecar and limiter instance sees the same health picture.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Open: failure_rate / consecutive_failures / latency_spike / timeout_rate
+    Open --> HalfOpen: cooldown elapsed (probe)
+    HalfOpen --> Closed: enough probe successes
+    HalfOpen --> Open: any probe failure
+    Open --> Closed: manual admin reset
+```
+
+### State Machine
+
+| State | Traffic | Behavior |
+|-------|---------|----------|
+| **Closed** | Normal | Track failure rate, timeouts, latency EMA |
+| **Open** | Blocked | Fast-fail; no upstream/Redis calls |
+| **Half-Open** | Probe only | Limited requests test recovery |
+
+### Trip Conditions (Closed → Open)
+
+Any of:
+
+- Rolling **failure rate** ≥ `CB_FAILURE_RATE` (after `CB_MIN_SAMPLES`)
+- **Consecutive failures** ≥ `CB_CONSECUTIVE_FAILURES`
+- **Latency spike** — request latency and EMA both ≥ `CB_LATENCY_THRESHOLD_MS`
+- **Timeout rate** ≥ `CB_TIMEOUT_RATE`
+
+### Recovery (Open → Half-Open → Closed)
+
+1. After `CB_OPEN_COOLDOWN_MS`, the next `Allow()` transitions to **half-open**
+2. Up to `CB_HALF_OPEN_MAX_PROBES` probe requests permitted
+3. `CB_HALF_OPEN_SUCCESS_REQUIRED` successes → **closed**
+4. Any probe failure → **open** again
+
+### Redis Schema
+
+```
+cb:{target}                    HASH
+  state                        closed | open | half_open
+  success_count, failure_count, timeout_count, latency_spike_count
+  total_count, consecutive_failures
+  latency_ema_ms
+  opened_at, half_open_at
+  half_open_calls, half_open_successes
+  updated_at
+```
+
+**Targets:** `redis` (limiter→Redis), `central-limiter` (sidecar→limiter), `gateway-a|b|c` (routing)
+
+### Integration Points
+
+| Component | Target | When |
+|-----------|--------|------|
+| Limiter `/check` | `redis` | Before/after Redis Lua |
+| Sidecar | `central-limiter` | Before/after limiter HTTP |
+| Gateway router | `gateway-{id}` | Before/after upstream call |
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CB_FAILURE_RATE` | `0.5` | Open above this failure rate |
+| `CB_MIN_SAMPLES` | `10` | Min samples before rate-based trip |
+| `CB_CONSECUTIVE_FAILURES` | `5` | Trip after N failures in a row |
+| `CB_LATENCY_THRESHOLD_MS` | `500` | Latency spike threshold |
+| `CB_TIMEOUT_RATE` | `0.3` | Open above this timeout rate |
+| `CB_OPEN_COOLDOWN_MS` | `30000` | Wait before half-open probes |
+| `CB_HALF_OPEN_MAX_PROBES` | `3` | Max concurrent probes |
+| `CB_HALF_OPEN_SUCCESS_REQUIRED` | `2` | Successes needed to close |
+| `CB_EMA_ALPHA` | `0.2` | Latency EMA smoothing |
+| `ENABLE_CIRCUIT_BREAKER` | `true` | Sidecar limiter CB (needs `REDIS_ADDR`) |
+
+### Observability
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `circuit_breaker_state` | `target` | 0=closed, 1=open, 2=half_open |
+| `circuit_breaker_transitions_total` | `target, from, to` | State changes |
+| `circuit_breaker_rejections_total` | `target, state` | Fast-fail count |
+| `circuit_breaker_outcomes_total` | `target, outcome` | success/failure/timeout/latency_spike |
+| `circuit_breaker_failure_rate` | `target` | Rolling failure ratio |
+| `circuit_breaker_latency_ema_ms` | `target` | Latency EMA |
+| `circuit_breaker_redis_duration_seconds` | — | Lua latency histogram |
+
+### Admin API
+
+```bash
+# List all circuits
+curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/circuit
+
+# Inspect one target
+curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/circuit/redis
+
+# Force close (ops recovery)
+curl -X DELETE -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/circuit/gateway-c
+```
+
+### Production Tradeoffs
+
+| Choice | Benefit | Cost |
+|--------|---------|------|
+| **Redis-backed state** | Consistent across fleet | Extra Redis round-trip per Allow/Record |
+| **Lua atomicity** | No race on transitions | Script maintenance |
+| **Half-open probes** | Gradual recovery | Brief risk window on flaky deps |
+| **Sliding window decay** | Adapts to changing traffic | Can delay trip on intermittent errors |
+| **Separate targets** | Isolated blast radius | More keys to monitor |
+
+See `internal/circuitbreaker/` and `benchmarks/circuitbreaker/summary.md`.
+
+---
+
 ## Intelligent Traffic Routing
 
 Juspay-style payment gateway routing: the sidecar continuously scores Gateway A/B/C on latency, error rate, and health, then routes traffic with weighted selection and automatic failover.
@@ -707,7 +822,7 @@ flowchart TB
 2. **Score** — composite routing score per gateway
 3. **Select** — weighted random among healthy gateways
 4. **Failover** — on 5xx/timeout, try next-highest score (up to `ROUTING_MAX_FAILOVER_TRIES`)
-5. **Circuit break** — gateway excluded when error rate exceeds threshold
+5. **Circuit break** — three-state breaker (`closed`/`open`/`half_open`) via `internal/circuitbreaker`
 
 ### Scoring Model
 
@@ -722,7 +837,7 @@ error_factor   = max(0.05, 1 - error_rate × 2.0)
 | Signal | Source | Effect |
 |--------|--------|--------|
 | Latency EMA | Per-request measurement | Faster gateways score higher |
-| Error rate | Sliding window in Redis | High errors reduce score / open circuit |
+| Error rate | Sliding window in Redis | High errors reduce score; circuit breaker trips separately |
 | Health score | Computed 0–100 | Below 20 → excluded |
 | Static weight | Config | Merchant/PG preference |
 
@@ -733,8 +848,9 @@ route:index                    SET of gateway IDs
 route:gw:{id}                  HASH
   id, url, weight, enabled
   latency_ema_ms, success_count, error_count
-  health_score, circuit_open, circuit_opened_at
-  updated_at, total_requests
+  health_score, updated_at, total_requests
+
+cb:{gateway-id}                HASH (circuit breaker — see Circuit Breaker section)
 ```
 
 ### Example

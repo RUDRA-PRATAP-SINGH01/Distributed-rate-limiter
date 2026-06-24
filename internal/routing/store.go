@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
@@ -16,9 +17,10 @@ var recordOutcomeLua string
 
 // RedisStore persists gateway definitions and live metrics in Redis.
 type RedisStore struct {
-	rdb    *redis.Client
-	cfg    Config
-	script *redis.Script
+	rdb     *redis.Client
+	cfg     Config
+	script  *redis.Script
+	breaker *circuitbreaker.Breaker
 }
 
 func NewRedisStore(rdb *redis.Client, cfg Config) *RedisStore {
@@ -27,6 +29,11 @@ func NewRedisStore(rdb *redis.Client, cfg Config) *RedisStore {
 		cfg:    cfg,
 		script: redis.NewScript(recordOutcomeLua),
 	}
+}
+
+// SetBreaker attaches the distributed circuit breaker for gateway targets.
+func (s *RedisStore) SetBreaker(b *circuitbreaker.Breaker) {
+	s.breaker = b
 }
 
 func gwKey(id string) string {
@@ -49,7 +56,6 @@ func (s *RedisStore) RegisterGateway(ctx context.Context, gw Gateway) error {
 			"id": gw.ID, "url": gw.URL, "weight": gw.Weight,
 			"enabled": 1, "health_score": 100, "latency_ema_ms": 0,
 			"success_count": 0, "error_count": 0, "total_requests": 0,
-			"circuit_open": 0, "circuit_opened_at": 0,
 			"updated_at": time.Now().UnixMilli(),
 		}).Err()
 	} else {
@@ -74,10 +80,23 @@ func (s *RedisStore) ListGateways(ctx context.Context) ([]GatewayState, error) {
 			return nil, err
 		}
 		if st != nil {
+			s.enrichCircuit(ctx, st)
 			out = append(out, *st)
 		}
 	}
 	return out, nil
+}
+
+func (s *RedisStore) enrichCircuit(ctx context.Context, st *GatewayState) {
+	if s.breaker == nil || st == nil {
+		return
+	}
+	snap, err := s.breaker.GetState(ctx, st.ID)
+	if err != nil {
+		return
+	}
+	st.CircuitState = snap.State
+	st.CircuitOpenedAt = snap.OpenedAtMs
 }
 
 // GetGateway reads one gateway state.
@@ -89,7 +108,9 @@ func (s *RedisStore) GetGateway(ctx context.Context, id string) (*GatewayState, 
 	if len(fields) == 0 {
 		return nil, nil
 	}
-	return parseGatewayState(fields), nil
+	st := parseGatewayState(fields)
+	s.enrichCircuit(ctx, st)
+	return st, nil
 }
 
 // RecordOutcome atomically updates metrics via Lua.
@@ -99,9 +120,6 @@ func (s *RedisStore) RecordOutcome(ctx context.Context, outcome Outcome) error {
 		boolToInt(outcome.Success),
 		outcome.Latency.Milliseconds(),
 		s.cfg.EMAAlpha,
-		s.cfg.CircuitErrorRate,
-		s.cfg.CircuitMinSamples,
-		s.cfg.CircuitCooldownMs,
 		time.Now().UnixMilli(),
 	).Result()
 	metrics.RecordRoutingRedisDuration(time.Since(start).Seconds())
@@ -123,13 +141,22 @@ func (s *RedisStore) RecordOutcome(ctx context.Context, outcome Outcome) error {
 	metrics.RecordRoutingOutcome(outcome.GatewayID, resultLabel)
 	metrics.RecordRoutingLatency(outcome.GatewayID, outcome.Latency.Seconds())
 
-	if len(values) >= 5 {
+	if len(values) >= 2 {
 		health, _ := strconv.ParseFloat(luaString(values[1]), 64)
-		circuit := luaInt(values[4]) == 1
 		metrics.RecordRoutingScore(outcome.GatewayID, health)
-		if circuit {
-			metrics.RecordRoutingCircuitState(outcome.GatewayID, true)
+	}
+
+	if s.breaker != nil {
+		kind := circuitbreaker.OutcomeFailure
+		if outcome.Success {
+			kind = circuitbreaker.OutcomeSuccess
+		} else if outcome.Timeout {
+			kind = circuitbreaker.OutcomeTimeout
 		}
+		_ = s.breaker.Record(ctx, outcome.GatewayID, circuitbreaker.RecordInput{
+			Kind:    kind,
+			Latency: outcome.Latency,
+		})
 	}
 	return nil
 }
@@ -150,7 +177,10 @@ func (s *RedisStore) SetWeight(ctx context.Context, id string, weight int) error
 
 // ResetCircuit manually closes circuit breaker (ops recovery).
 func (s *RedisStore) ResetCircuit(ctx context.Context, id string) error {
-	return s.rdb.HSet(ctx, gwKey(id), "circuit_open", 0, "error_count", 0).Err()
+	if s.breaker != nil {
+		return s.breaker.Reset(ctx, id)
+	}
+	return nil
 }
 
 // UpdateHealthProbe sets health from passive /health probe.
@@ -172,9 +202,8 @@ func parseGatewayState(fields map[string]string) *GatewayState {
 		SuccessCount:   luaInt(fields["success_count"]),
 		TotalRequests:  luaInt(fields["total_requests"]),
 		HealthScore:    parseFloat(fields["health_score"]),
-		CircuitOpen:    fields["circuit_open"] == "1",
-		CircuitOpenedAt: luaInt(fields["circuit_opened_at"]),
 		UpdatedAt:      luaInt(fields["updated_at"]),
+		CircuitState:   circuitbreaker.StateClosed,
 	}
 	if st.Weight == 0 {
 		st.Weight = 100

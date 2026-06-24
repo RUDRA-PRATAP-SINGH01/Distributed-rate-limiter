@@ -23,17 +23,17 @@ func TestComputeScore_HealthyGateway(t *testing.T) {
 func TestComputeScore_CircuitOpenExcluded(t *testing.T) {
 	cfg := DefaultConfig()
 	state := GatewayState{
-		Gateway:     Gateway{ID: "gateway-c", Weight: 100},
-		Enabled:     true,
-		CircuitOpen: true,
-		HealthScore: 10,
+		Gateway:      Gateway{ID: "gateway-c", Weight: 100},
+		Enabled:      true,
+		CircuitState: "open",
+		HealthScore:  10,
 	}
 	if ComputeScore(state, cfg) != 0 {
 		t.Fatal("circuit open gateway should score 0")
 	}
 }
 
-func TestComputeScore_HighErrorRateExcluded(t *testing.T) {
+func TestComputeScore_HighErrorRateStillScores(t *testing.T) {
 	cfg := DefaultConfig()
 	state := GatewayState{
 		Gateway:      Gateway{ID: "gateway-c", Weight: 100},
@@ -42,8 +42,8 @@ func TestComputeScore_HighErrorRateExcluded(t *testing.T) {
 		ErrorCount:   18,
 		HealthScore:  30,
 	}
-	if ComputeScore(state, cfg) != 0 {
-		t.Fatal("high error rate should score 0")
+	if ComputeScore(state, cfg) <= 0 {
+		t.Fatal("high error rate lowers score but circuit breaker handles trip")
 	}
 }
 

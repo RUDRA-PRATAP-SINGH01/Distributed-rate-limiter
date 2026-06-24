@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -28,9 +29,10 @@ type Router struct {
 	selector *Selector
 	client   *http.Client
 	cfg      Config
+	breaker  *circuitbreaker.Breaker
 }
 
-func NewRouter(store *RedisStore, client *http.Client, cfg Config) *Router {
+func NewRouter(store *RedisStore, client *http.Client, cfg Config, breaker *circuitbreaker.Breaker) *Router {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
@@ -39,6 +41,7 @@ func NewRouter(store *RedisStore, client *http.Client, cfg Config) *Router {
 		selector: NewSelector(cfg),
 		client:   client,
 		cfg:      cfg,
+		breaker:  breaker,
 	}
 }
 
@@ -127,15 +130,33 @@ func (r *Router) Forward(ctx context.Context, w http.ResponseWriter, req *http.R
 			metrics.RecordRoutingFailover(candidate.State.ID)
 		}
 
+		if r.breaker != nil {
+			allow, err := r.breaker.Allow(ctx, candidate.State.ID)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if !allow.Allowed {
+				lastErr = fmt.Errorf("circuit %s for gateway %s", allow.State, candidate.State.ID)
+				continue
+			}
+		}
+
 		start := time.Now()
 		resp, err := r.execute(ctx, req, body, candidate.State)
 		latency := time.Since(start)
 		success := err == nil && resp != nil && resp.StatusCode < 500
+		timeout := false
+		if r.breaker != nil {
+			latencyThreshold := r.breaker.Config().LatencyThresholdMs
+			timeout = circuitbreaker.ClassifyHTTP(err, statusCodeOrZero(resp), latency, latencyThreshold).Kind == circuitbreaker.OutcomeTimeout
+		}
 
 		_ = r.store.RecordOutcome(ctx, Outcome{
 			GatewayID: candidate.State.ID,
 			Latency:   latency,
 			Success:   success,
+			Timeout:   timeout,
 		})
 
 		if !success {
@@ -215,4 +236,11 @@ func copyResponse(w http.ResponseWriter, resp *http.Response) {
 // Store exposes the Redis store for admin APIs.
 func (r *Router) Store() *RedisStore {
 	return r.store
+}
+
+func statusCodeOrZero(resp *http.Response) int {
+	if resp == nil {
+		return 0
+	}
+	return resp.StatusCode
 }

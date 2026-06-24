@@ -1,0 +1,151 @@
+package circuitbreaker
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
+)
+
+func setupCB(t *testing.T) (*Breaker, *miniredis.Miniredis) {
+	t.Helper()
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := DefaultConfig()
+	cfg.MinSamples = 5
+	cfg.ConsecutiveFailures = 6
+	cfg.FailureRateThreshold = 0.5
+	cfg.OpenCooldownMs = 100
+	cfg.HalfOpenMaxProbes = 2
+	cfg.HalfOpenSuccessRequired = 2
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	return NewBreaker(NewRedisStore(rdb, cfg)), mr
+}
+
+func TestClosedToOpenOnFailures(t *testing.T) {
+	b, _ := setupCB(t)
+	ctx := context.Background()
+	target := "gateway-c"
+
+	for i := 0; i < 5; i++ {
+		allow, err := b.Allow(ctx, target)
+		if err != nil || !allow.Allowed {
+			t.Fatalf("iter %d: expected allowed, got %+v %v", i, allow, err)
+		}
+		_ = b.Record(ctx, target, RecordInput{Kind: OutcomeFailure, Latency: 50 * time.Millisecond})
+	}
+
+	st, _ := b.GetState(ctx, target)
+	if st.State != StateOpen {
+		t.Fatalf("expected open, got %s (%+v)", st.State, st)
+	}
+
+	allow, _ := b.Allow(ctx, target)
+	if allow.Allowed {
+		t.Fatal("open circuit should block traffic")
+	}
+}
+
+func TestOpenToHalfOpenToClosed(t *testing.T) {
+	b, _ := setupCB(t)
+	ctx := context.Background()
+	target := "redis"
+
+	for i := 0; i < 6; i++ {
+		_, _ = b.Allow(ctx, target)
+		_ = b.Record(ctx, target, RecordInput{Kind: OutcomeFailure, Latency: 10 * time.Millisecond})
+	}
+	st, _ := b.GetState(ctx, target)
+	if st.State != StateOpen {
+		t.Fatalf("expected open, got %s", st.State)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+
+	allow, _ := b.Allow(ctx, target)
+	if !allow.Allowed || allow.State != StateHalfOpen {
+		t.Fatalf("expected half-open probe allowed, got %+v", allow)
+	}
+	_ = b.Record(ctx, target, RecordInput{Kind: OutcomeSuccess, Latency: 5 * time.Millisecond})
+
+	allow2, _ := b.Allow(ctx, target)
+	if !allow2.Allowed {
+		t.Fatal("second half-open probe should be allowed")
+	}
+	_ = b.Record(ctx, target, RecordInput{Kind: OutcomeSuccess, Latency: 5 * time.Millisecond})
+
+	st, _ = b.GetState(ctx, target)
+	if st.State != StateClosed {
+		t.Fatalf("expected closed after successful probes, got %s", st.State)
+	}
+}
+
+func TestHalfOpenFailureReopens(t *testing.T) {
+	b, _ := setupCB(t)
+	ctx := context.Background()
+	target := "gw"
+
+	for i := 0; i < 6; i++ {
+		_, _ = b.Allow(ctx, target)
+		_ = b.Record(ctx, target, RecordInput{Kind: OutcomeFailure, Latency: 1 * time.Millisecond})
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	_, _ = b.Allow(ctx, target)
+	_ = b.Record(ctx, target, RecordInput{Kind: OutcomeFailure, Latency: 1 * time.Millisecond})
+
+	st, _ := b.GetState(ctx, target)
+	if st.State != StateOpen {
+		t.Fatalf("expected reopened, got %s", st.State)
+	}
+}
+
+func TestTimeoutTripsCircuit(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MinSamples = 3
+	cfg.TimeoutRateThreshold = 0.3
+	cfg.ConsecutiveFailures = 100
+	b := NewBreaker(NewRedisStore(redis.NewClient(&redis.Options{Addr: setupMini(t)}), cfg))
+	ctx := context.Background()
+	target := "limiter"
+
+	for i := 0; i < 4; i++ {
+		_, _ = b.Allow(ctx, target)
+		_ = b.Record(ctx, target, RecordInput{Kind: OutcomeTimeout, Latency: 5 * time.Second})
+	}
+	st, _ := b.GetState(ctx, target)
+	if st.State != StateOpen {
+		t.Fatalf("expected open on timeouts, got %s (rate=%.2f)", st.State, st.TimeoutRate)
+	}
+}
+
+func TestReset(t *testing.T) {
+	b, _ := setupCB(t)
+	ctx := context.Background()
+	target := "x"
+	for i := 0; i < 6; i++ {
+		_, _ = b.Allow(ctx, target)
+		_ = b.Record(ctx, target, RecordInput{Kind: OutcomeFailure, Latency: 1 * time.Millisecond})
+	}
+	if err := b.Reset(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := b.GetState(ctx, target)
+	if st.State != StateClosed || st.TotalCount != 0 {
+		t.Fatalf("expected clean closed state, got %+v", st)
+	}
+}
+
+func setupMini(t *testing.T) string {
+	t.Helper()
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mr.Close)
+	return mr.Addr()
+}

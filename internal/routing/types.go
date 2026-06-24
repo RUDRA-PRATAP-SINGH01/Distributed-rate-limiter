@@ -1,6 +1,10 @@
 package routing
 
-import "time"
+import (
+	"time"
+
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
+)
 
 // Gateway is a payment processor / upstream endpoint definition.
 type Gateway struct {
@@ -12,15 +16,20 @@ type Gateway struct {
 // GatewayState is live routing state stored in Redis.
 type GatewayState struct {
 	Gateway
-	Enabled        bool    `json:"enabled"`
-	LatencyEMAMs   float64 `json:"latency_ema_ms"`
-	ErrorCount     int64   `json:"error_count"`
-	SuccessCount   int64   `json:"success_count"`
-	TotalRequests  int64   `json:"total_requests"`
-	HealthScore    float64 `json:"health_score"`
-	CircuitOpen    bool    `json:"circuit_open"`
-	CircuitOpenedAt int64  `json:"circuit_opened_at_ms,omitempty"`
-	UpdatedAt      int64   `json:"updated_at_ms"`
+	Enabled         bool                    `json:"enabled"`
+	LatencyEMAMs    float64                 `json:"latency_ema_ms"`
+	ErrorCount      int64                   `json:"error_count"`
+	SuccessCount    int64                   `json:"success_count"`
+	TotalRequests   int64                   `json:"total_requests"`
+	HealthScore     float64                 `json:"health_score"`
+	CircuitState    circuitbreaker.State    `json:"circuit_state"`
+	CircuitOpenedAt int64                   `json:"circuit_opened_at_ms,omitempty"`
+	UpdatedAt       int64                   `json:"updated_at_ms"`
+}
+
+// CircuitOpen reports whether the breaker is fully open (blocks traffic).
+func (s GatewayState) CircuitOpen() bool {
+	return s.CircuitState == circuitbreaker.StateOpen
 }
 
 // ScoredGateway pairs a gateway with its computed routing score.
@@ -34,22 +43,19 @@ type Outcome struct {
 	GatewayID string
 	Latency   time.Duration
 	Success   bool
+	Timeout   bool
 }
 
 // Selectable returns true when the gateway can receive traffic.
 func (s GatewayState) Selectable(cfg Config) bool {
-	if !s.Enabled || s.CircuitOpen {
+	if !s.Enabled {
+		return false
+	}
+	if s.CircuitState == circuitbreaker.StateOpen {
 		return false
 	}
 	if s.HealthScore < cfg.MinHealthScore {
 		return false
-	}
-	total := s.SuccessCount + s.ErrorCount
-	if total >= cfg.CircuitMinSamples {
-		errRate := float64(s.ErrorCount) / float64(total)
-		if errRate >= cfg.CircuitErrorRate {
-			return false
-		}
 	}
 	return true
 }

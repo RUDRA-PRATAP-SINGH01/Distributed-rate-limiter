@@ -28,6 +28,7 @@ func startAdminServer(cfg Config, store *override.Store, rdb *redis.Client) *htt
 	registerLimitRoutes(mux, cfg, store, "global", cfg.GlobalCapacity, cfg.GlobalRefillRate)
 	registerIdempotencyRoutes(mux, cfg, rdb)
 	registerRoutingRoutes(mux, cfg, rdb)
+	registerCircuitRoutes(mux, cfg, rdb)
 
 	srv := &http.Server{
 		Addr:         cfg.AdminAddr(),

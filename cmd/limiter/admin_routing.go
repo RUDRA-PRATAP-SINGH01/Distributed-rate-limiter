@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/routing"
 	"github.com/redis/go-redis/v9"
 )
@@ -14,7 +15,11 @@ func registerRoutingRoutes(mux *http.ServeMux, cfg Config, rdb *redis.Client) {
 	if rdb == nil {
 		return
 	}
-	store := routing.NewRedisStore(rdb, routing.LoadConfigFromEnv())
+	routeCfg := routing.LoadConfigFromEnv()
+	cbCfg := circuitbreaker.LoadConfigFromEnv()
+	breaker := circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
+	store := routing.NewRedisStore(rdb, routeCfg)
+	store.SetBreaker(breaker)
 	prefix := "/admin/routing/gateways/"
 
 	mux.HandleFunc("/admin/routing/gateways", func(w http.ResponseWriter, r *http.Request) {
