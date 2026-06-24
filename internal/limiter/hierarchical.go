@@ -48,9 +48,11 @@ func NewHierarchicalLimiter(
 }
 
 func (hl *HierarchicalLimiter) Allow(
+	ctx context.Context,
 	globalKey, tenantKey, userKey, endpointKey string,
 ) (allowed bool, remaining int, err error) {
 	return hl.AllowWithParams(
+		ctx,
 		[]string{globalKey, tenantKey, userKey, endpointKey},
 		[]int{hl.globalCap, hl.tenantCap, hl.userCap, hl.endpointCap},
 		[]float64{hl.globalRate, hl.tenantRate, hl.userRate, hl.endpointRate},
@@ -60,6 +62,7 @@ func (hl *HierarchicalLimiter) Allow(
 // AllowWithParams accepts dynamic capacities (from admin overrides) while keeping
 // the same atomic multi-key Lua evaluation.
 func (hl *HierarchicalLimiter) AllowWithParams(
+	ctx context.Context,
 	keys []string,
 	capacities []int,
 	refillRates []float64,
@@ -68,7 +71,6 @@ func (hl *HierarchicalLimiter) AllowWithParams(
 		return false, 0, fmt.Errorf("expected 4 keys, capacities, and refill rates")
 	}
 
-	ctx := context.Background()
 	now := time.Now().Unix()
 
 	args := []interface{}{

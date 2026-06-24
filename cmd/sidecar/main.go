@@ -26,8 +26,10 @@ import (
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/idempotency"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -90,7 +92,10 @@ func NewSidecar(
 		failOpen:         failOpen,
 		defaultLimit:     defaultLimit,
 		useHierarchical:  useHierarchical,
-		httpClient:       &http.Client{Timeout: 5 * time.Second},
+		httpClient: &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: telemetry.NewHTTPTransport(nil),
+		},
 		proxy:            httputil.NewSingleHostReverseProxy(target),
 	}
 }
@@ -171,6 +176,14 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID, idemKey string) {
+	ctx := r.Context()
+	ctx, span := telemetry.StartSpan(ctx, "sidecar.idempotency",
+		attribute.String("idempotency.key", idemKey),
+		attribute.String("user.id", userID),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	if err := idempotency.ValidateKey(idemKey); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -189,7 +202,7 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 	scope := idempotency.BuildScope(s.tenantID(r), userID)
 	reqHash := idempotency.Fingerprint(r.Method, r.URL.Path, body)
 
-	claim, err := s.idempotency.Claim(r.Context(), scope, idemKey, reqHash)
+	claim, err := s.idempotency.Claim(ctx, scope, idemKey, reqHash)
 	if err != nil {
 		log.Printf("Idempotency claim error: %v", err)
 		if s.idempotencyCfg.FailOpen {
@@ -216,7 +229,7 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 		return
 	}
 
-	result, err := s.checkRateLimit(r, userID, false)
+	result, err := s.checkRateLimit(ctx, r, userID, false)
 	if err != nil {
 		log.Printf("Rate limiter error (idempotent): %v", err)
 		if s.failOpen {
@@ -264,6 +277,14 @@ func (s *Sidecar) completeIdempotent(ctx context.Context, scope, key string, sta
 }
 
 func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID string) {
+	ctx := r.Context()
+	ctx, span := telemetry.StartSpan(ctx, "sidecar.proxy",
+		attribute.String("user.id", userID),
+		attribute.String("http.path", r.URL.Path),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	cacheKey := s.cacheKey(r, userID)
 	s.debugf("Request for user %s (cache key: %s)", userID, cacheKey)
 
@@ -290,7 +311,7 @@ func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID str
 
 	// singleflight: 100 concurrent requests for the same user share one limiter round-trip.
 	resultAny, err, _ := s.limitFlight.Do(cacheKey, func() (interface{}, error) {
-		return s.checkRateLimit(r, userID, false)
+		return s.checkRateLimit(ctx, r, userID, false)
 	})
 	if err != nil {
 		log.Printf("Rate limiter error: %v", err)
@@ -334,7 +355,13 @@ func (s *Sidecar) writeDenial(w http.ResponseWriter, limit, remaining int, retry
 	http.Error(w, "Too many requests", http.StatusTooManyRequests)
 }
 
-func (s *Sidecar) checkRateLimit(r *http.Request, userID string, idempotentReplay bool) (limitResult, error) {
+func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID string, idempotentReplay bool) (limitResult, error) {
+	ctx, span := telemetry.StartSpan(ctx, "sidecar.rate_limit_check",
+		attribute.String("user.id", userID),
+		attribute.Bool("hierarchical", s.useHierarchical),
+	)
+	defer span.End()
+
 	var req *http.Request
 	var err error
 
@@ -354,13 +381,13 @@ func (s *Sidecar) checkRateLimit(r *http.Request, userID string, idempotentRepla
 			url.QueryEscape(endpoint),
 			replayParam,
 		)
-		req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, checkURL, nil)
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	} else {
 		checkURL := fmt.Sprintf("%s/check", s.limiterURL)
 		if idempotentReplay {
 			checkURL += "?idempotent_replay=true"
 		}
-		req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, checkURL, nil)
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	}
 	if err != nil {
 		return limitResult{}, err
@@ -379,9 +406,12 @@ func (s *Sidecar) checkRateLimit(r *http.Request, userID string, idempotentRepla
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
+		telemetry.RecordError(span, err)
 		return limitResult{}, err
 	}
 	defer resp.Body.Close()
+
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
 
 	limit := s.defaultLimit
 	if val := resp.Header.Get("X-RateLimit-Limit"); val != "" {
@@ -394,10 +424,13 @@ func (s *Sidecar) checkRateLimit(r *http.Request, userID string, idempotentRepla
 	retryAfter := resp.Header.Get("Retry-After")
 
 	if resp.StatusCode == http.StatusTooManyRequests {
+		span.SetAttributes(attribute.Bool("rate_limit.allowed", false))
 		return limitResult{allowed: false, remaining: remaining, limit: limit, retryAfter: retryAfter}, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return limitResult{}, fmt.Errorf("limiter returned %d", resp.StatusCode)
+		err := fmt.Errorf("limiter returned %d", resp.StatusCode)
+		telemetry.RecordError(span, err)
+		return limitResult{}, err
 	}
 
 	var body struct {
@@ -406,10 +439,17 @@ func (s *Sidecar) checkRateLimit(r *http.Request, userID string, idempotentRepla
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return limitResult{}, err
 	}
+	span.SetAttributes(attribute.Bool("rate_limit.allowed", body.Allowed))
 	return limitResult{allowed: body.Allowed, remaining: remaining, limit: limit, retryAfter: retryAfter}, nil
 }
 
 func (s *Sidecar) forwardRequest(w http.ResponseWriter, r *http.Request) {
+	ctx, span := telemetry.StartSpan(r.Context(), "sidecar.upstream_proxy",
+		attribute.String("http.path", r.URL.Path),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	target, _ := url.Parse(s.upstreamURL)
 	r.Host = target.Host
 	s.proxy.ServeHTTP(w, r)
@@ -443,6 +483,17 @@ func main() {
 	if upstream == "" || limiter == "" {
 		log.Fatal("UPSTREAM_URL and RATE_LIMITER_URL must be set")
 	}
+
+	otelCfg := telemetry.LoadConfigFromEnv("rate-sidecar")
+	otelShutdown, err := telemetry.Init(context.Background(), otelCfg)
+	if err != nil {
+		log.Fatalf("OpenTelemetry init failed: %v", err)
+	}
+	defer func() {
+		if err := otelShutdown(context.Background()); err != nil {
+			log.Printf("OpenTelemetry shutdown error: %v", err)
+		}
+	}()
 
 	ttl := 30 * time.Millisecond
 	if raw := os.Getenv("CACHE_TTL_MS"); raw != "" {
@@ -497,6 +548,11 @@ func main() {
 		if err := redisclient.Ping(rdb); err != nil {
 			log.Fatalf("Idempotency Redis unreachable at %s: %v", redisAddr, err)
 		}
+		if otelCfg.Enabled {
+			if err := telemetry.InstrumentRedis(rdb); err != nil {
+				log.Fatalf("Idempotency Redis tracing failed: %v", err)
+			}
+		}
 		idemCfg := idempotency.DefaultConfig()
 		idemCfg.FailOpen = os.Getenv("IDEMPOTENCY_FAIL_OPEN") == "true"
 		if raw := os.Getenv("IDEMPOTENCY_LOCK_TTL_MS"); raw != "" {
@@ -543,8 +599,10 @@ func main() {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "9090"
 	}
+
+	handler := telemetry.WrapHandler(mux, otelCfg.ServiceName)
 
 	mode := "simple /check"
 	if useHierarchical {
@@ -553,7 +611,7 @@ func main() {
 	log.Printf("Sidecar starting on :%s, forwarding to %s, limiter mode: %s", port, upstream, mode)
 
 	if tlsCert != "" {
-		log.Fatal(http.ListenAndServeTLS(":"+port, tlsCert, tlsKey, mux))
+		log.Fatal(http.ListenAndServeTLS(":"+port, tlsCert, tlsKey, handler))
 	}
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	log.Fatal(http.ListenAndServe(":"+port, handler))
 }

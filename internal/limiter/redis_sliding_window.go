@@ -32,8 +32,7 @@ func NewRedisSlidingWindow(rdb *redis.Client, limit int, window time.Duration) *
 	}
 }
 
-func (rw *RedisSlidingWindow) Allow(userID string) (bool, int, error) {
-	ctx := context.Background()
+func (rw *RedisSlidingWindow) Allow(ctx context.Context, userID string) (bool, int, error) {
 	key := fmt.Sprintf("sw:%s", userID)
 	now := time.Now().UnixMilli()
 	windowStart := now - rw.window.Milliseconds()

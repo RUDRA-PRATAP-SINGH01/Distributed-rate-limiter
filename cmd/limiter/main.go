@@ -21,8 +21,10 @@ import (
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/limiter"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var limiterInstance RateLimiter
@@ -32,11 +34,27 @@ var overrideStore *override.Store
 func main() {
 	cfg := LoadConfig()
 
+	otelCfg := telemetry.LoadConfigFromEnv("rate-limiter")
+	otelShutdown, err := telemetry.Init(context.Background(), otelCfg)
+	if err != nil {
+		log.Fatalf("OpenTelemetry init failed: %v", err)
+	}
+	defer func() {
+		if err := otelShutdown(context.Background()); err != nil {
+			log.Printf("OpenTelemetry shutdown error: %v", err)
+		}
+	}()
+
 	// Fail fast if Redis is down. A limiter that starts without verified connectivity
 	// would either panic on first request or silently mis-report health.
 	rdb := redisclient.NewClient(cfg.RedisAddr, cfg.RedisPassword)
 	if err := redisclient.Ping(rdb); err != nil {
 		log.Fatalf("Redis unreachable at %s: %v", cfg.RedisAddr, err)
+	}
+	if otelCfg.Enabled {
+		if err := telemetry.InstrumentRedis(rdb); err != nil {
+			log.Fatalf("Redis OpenTelemetry instrumentation failed: %v", err)
+		}
 	}
 	log.Printf("Redis connection verified at %s", cfg.RedisAddr)
 
@@ -93,13 +111,21 @@ func main() {
 	// trusted sidecars (or internal services) can consume quota on behalf of users.
 	mux.HandleFunc("/check", auth.RequireAPIKey(cfg.InternalAPIKey, func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		ctx := r.Context()
+		ctx, span := telemetry.StartSpan(ctx, "limiter.check",
+			attribute.String("limiter.handler", "check"),
+		)
+		defer span.End()
+
 		userID, err := identity.ResolveUserID(r, cfg.AllowQueryUserID)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			telemetry.SetHTTPStatus(span, http.StatusBadRequest)
 			return
 		}
+		span.SetAttributes(attribute.String("user.id", userID))
 
 		if r.URL.Query().Get("idempotent_replay") == "true" {
 			metrics.RecordRequest("check", true)
@@ -111,12 +137,13 @@ func main() {
 				"remaining": cfg.Capacity,
 				"replay":    true,
 			})
+			span.SetAttributes(attribute.Bool("idempotent.replay", true))
 			return
 		}
 
-		allowed, remaining, err := limiterInstance.Allow(userID)
+		allowed, remaining, err := limiterInstance.Allow(ctx, userID)
 		if err != nil {
-			// Redis/Lua failure is 503, not 429. Mixing them would hide outages as "rate limited".
+			telemetry.RecordError(span, err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]string{
@@ -127,6 +154,10 @@ func main() {
 
 		metrics.RecordRequest("check", allowed)
 		metrics.RecordRequestDuration("check", time.Since(start).Seconds())
+		span.SetAttributes(
+			attribute.Bool("rate_limit.allowed", allowed),
+			attribute.Int("rate_limit.remaining", remaining),
+		)
 
 		w.Header().Set("Content-Type", "application/json")
 		setRateLimitHeaders(w, rateLimitLimitHeader(cfg), remaining)
@@ -135,6 +166,7 @@ func main() {
 			w.Header().Set("Retry-After", retryAfterForCheck(cfg))
 			w.WriteHeader(http.StatusTooManyRequests)
 			json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests"})
+			telemetry.SetHTTPStatus(span, http.StatusTooManyRequests)
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -148,6 +180,11 @@ func main() {
 		// A request must pass every level; remaining reflects the tightest constraint.
 		mux.HandleFunc("/check_hierarchical", auth.RequireAPIKey(cfg.InternalAPIKey, func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
+			ctx := r.Context()
+			ctx, span := telemetry.StartSpan(ctx, "limiter.check_hierarchical",
+				attribute.String("limiter.handler", "hierarchical"),
+			)
+			defer span.End()
 
 			userID, err := identity.ResolveUserID(r, cfg.AllowQueryUserID)
 			if err != nil {
@@ -196,12 +233,19 @@ func main() {
 			endpointKey := fmt.Sprintf("rate:endpoint:%s:%s", tenantID, endpoint)
 
 			capacities, refillRates := effectiveHierarchicalLimits(cfg, overrideStore, tenantID, userID, endpoint)
+			span.SetAttributes(
+				attribute.String("user.id", userID),
+				attribute.String("tenant.id", tenantID),
+				attribute.String("endpoint", endpoint),
+			)
 			allowed, remaining, err := hierarchicalLimiter.AllowWithParams(
+				ctx,
 				[]string{globalKey, tenantKey, userKey, endpointKey},
 				capacities,
 				refillRates,
 			)
 			if err != nil {
+				telemetry.RecordError(span, err)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusServiceUnavailable)
 				json.NewEncoder(w).Encode(map[string]string{
@@ -212,6 +256,10 @@ func main() {
 
 			metrics.RecordRequest("hierarchical", allowed)
 			metrics.RecordRequestDuration("hierarchical", time.Since(start).Seconds())
+			span.SetAttributes(
+				attribute.Bool("rate_limit.allowed", allowed),
+				attribute.Int("rate_limit.remaining", remaining),
+			)
 
 			w.Header().Set("Content-Type", "application/json")
 			setRateLimitHeaders(w, effectiveHierarchicalLimitHeader(capacities), remaining)
@@ -232,7 +280,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      mux,
+		Handler:      telemetry.WrapHandler(mux, otelCfg.ServiceName),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,

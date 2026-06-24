@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, production-grade idempotency layer, runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
+A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, production-grade idempotency layer, OpenTelemetry tracing (Jaeger), runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
 
 I started this project because I wanted to understand how production systems like API gateways and SaaS platforms actually enforce limits at scale — not just a single-process token bucket, but something that stays correct when you have ten sidecars and a million requests per minute.
 
@@ -22,6 +22,7 @@ I started this project because I wanted to understand how production systems lik
 - [Admin API and Runtime Overrides](#admin-api-and-runtime-overrides)
 - [Security Model](#security-model)
 - [Observability](#observability)
+  - [OpenTelemetry Tracing](#opentelemetry-tracing)
 - [Benchmark Suite](#benchmark-suite)
 - [Chaos Engineering](#chaos-engineering)
 - [Trade-offs](#trade-offs)
@@ -244,6 +245,7 @@ A minimal HTTP server that returns `{"message": "Hello from backend"}`. It also 
 | `metrics` | Prometheus counters and histograms |
 | `override` | Runtime limit override store with local TTL cache |
 | `redis` | Redis client factory (pool size 100, min idle 10) |
+| `telemetry` | OpenTelemetry provider, HTTP middleware, Redis tracing |
 
 ---
 
@@ -830,6 +832,104 @@ curl http://localhost:9090/health
 
 Docker Compose runs health checks on Redis and the limiter. The sidecar waits for the limiter to be healthy before starting.
 
+### OpenTelemetry Tracing
+
+Distributed traces flow across the full request path and export to Jaeger via OTLP HTTP.
+
+```mermaid
+flowchart TB
+    subgraph client [Client]
+        C[HTTP Request]
+    end
+
+    subgraph sidecar [rate-sidecar]
+        S1["GET / (http.request)"]
+        S2[sidecar.rate_limit_check]
+        S3[sidecar.upstream_proxy]
+        S4[idempotency.claim]
+    end
+
+    subgraph limiter [rate-limiter]
+        L1["GET /check (http.request)"]
+        L2[limiter.check]
+    end
+
+    subgraph redis [Redis]
+        R1["EVAL token_bucket.lua"]
+        R2["EVAL claim.lua"]
+    end
+
+    subgraph jaeger [Jaeger :16686]
+        UI[Trace UI]
+    end
+
+    C --> S1
+    S1 --> S2
+    S2 -->|W3C traceparent| L1
+    L1 --> L2
+    L2 --> R1
+    S1 --> S4
+    S4 --> R2
+    S1 --> S3
+    S1 & L1 & R1 -->|OTLP :4318| UI
+```
+
+#### Trace Hierarchy (latency breakdown)
+
+| Span | Service | What it measures |
+|------|---------|------------------|
+| `GET /{path}` | sidecar / limiter | Total HTTP handler time |
+| `sidecar.rate_limit_check` | sidecar | Outbound call to central limiter |
+| `GET /check` | limiter | Limiter HTTP handler |
+| `limiter.check` | limiter | Algorithm + Redis Lua |
+| `redis.eval` | limiter / sidecar | Redis command (via redisotel) |
+| `sidecar.upstream_proxy` | sidecar | Reverse proxy to backend |
+| `idempotency.claim` / `complete` | sidecar | Idempotency Lua round-trip |
+
+#### Correlation Headers
+
+Every traced response includes:
+
+| Header | Description |
+|--------|-------------|
+| `X-Request-ID` | Client correlation ID (generated if missing) |
+| `X-Trace-ID` | OpenTelemetry trace ID (32-char hex) |
+| `X-Span-ID` | Current span ID (16-char hex) |
+
+W3C `traceparent` / `tracestate` propagate automatically between sidecar and limiter.
+
+#### Folder Structure
+
+```
+internal/telemetry/
+├── config.go       # OTEL_ENABLED, OTLP endpoint, sampling
+├── provider.go     # TracerProvider + OTLP exporter (Jaeger)
+├── middleware.go   # HTTP middleware, request IDs, child spans
+└── redis.go        # redisotel instrumentation hook
+```
+
+#### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_ENABLED` | `false` | Enable tracing |
+| `OTEL_SERVICE_NAME` | `rate-limiter` / `rate-sidecar` | Service name in Jaeger |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | OTLP HTTP collector |
+| `OTEL_EXPORTER_OTLP_INSECURE` | `true` | Skip TLS for local Jaeger |
+| `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Trace sampling ratio (0.0–1.0) |
+
+#### Run with Jaeger
+
+```bash
+docker compose up --build -d
+# Generate traffic
+curl -H "X-User-ID: alice" http://localhost:9090/
+# Open Jaeger UI
+# http://localhost:16686  →  Search service: rate-sidecar
+```
+
+Docker Compose starts Jaeger (`:16686` UI, `:4318` OTLP) with tracing enabled on limiter and sidecar.
+
 ---
 
 ## Benchmark Suite
@@ -958,6 +1058,7 @@ Every design decision in this project has a cost. Here is an honest accounting.
 | **Redis idempotency store** | Fleet-wide dedup without app changes | Extra Redis memory per key; 24h TTL |
 | **409 for in-progress** | Simple client retry contract | Clients must backoff and retry |
 | **Denial-only idempotency scope** | Tenant + user isolation | Keys not global across tenants |
+| **OTLP tracing to Jaeger** | End-to-end latency breakdown | Extra network hop per span batch; sampling required at scale |
 
 ---
 
@@ -999,7 +1100,8 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │   ├── limiter/             Redis algorithms + Lua scripts
 │   ├── metrics/             Prometheus instrumentation
 │   ├── override/            Runtime override store
-│   └── redis/               Redis client factory
+│   ├── redis/               Redis client factory
+│   └── telemetry/           OpenTelemetry → Jaeger (OTLP)
 │
 ├── tests/
 │   └── legacy/              Race condition demo
@@ -1022,7 +1124,7 @@ Every design decision in this project has a cost. Here is an honest accounting.
 
 ### Option 1: Docker Compose (Recommended)
 
-This starts Redis, limiter, sidecar, and demo backend together.
+This starts Redis, Jaeger, limiter, sidecar, and demo backend together.
 
 ```bash
 git clone https://github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter.git
@@ -1048,6 +1150,9 @@ curl http://localhost:8080/health
 
 # Check Prometheus metrics
 curl http://localhost:8080/metrics
+
+# View distributed traces (Jaeger UI)
+# http://localhost:16686
 ```
 
 Shutdown and clean up:

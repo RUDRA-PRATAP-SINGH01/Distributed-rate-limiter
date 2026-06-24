@@ -22,6 +22,10 @@ services:
       - PORT=8080
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
+      - OTEL_ENABLED=true
+      - OTEL_SERVICE_NAME=rate-limiter
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_EXPORTER_OTLP_INSECURE=true
       - ALGORITHM=sliding
       - CAPACITY=10
       - REFILL_RATE=1.0
@@ -49,6 +53,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
@@ -90,6 +96,10 @@ services:
       - IDEMPOTENCY_LOCK_TTL_MS=60000
       - IDEMPOTENCY_COMPLETED_TTL_MS=86400000
       - IDEMPOTENCY_FAIL_OPEN=false
+      - OTEL_ENABLED=true
+      - OTEL_SERVICE_NAME=rate-sidecar
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     ports:
       - "9090:9090"
     networks:
@@ -101,6 +111,19 @@ services:
         condition: service_healthy
       demo:
         condition: service_started
+      jaeger:
+        condition: service_started
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.58
+    container_name: jaeger
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4318:4318"     # OTLP HTTP
+    networks:
+      - rate-net
 
   # prometheus:
   #   image: prom/prometheus:latest
