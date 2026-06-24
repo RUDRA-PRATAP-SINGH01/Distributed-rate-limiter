@@ -13,10 +13,11 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/audit"
 	"github.com/redis/go-redis/v9"
 )
 
-func startAdminServer(cfg Config, store *override.Store, rdb *redis.Client) *http.Server {
+func startAdminServer(cfg Config, store *override.Store, rdb redis.UniversalClient, auditTrail *audit.Store) *http.Server {
 	if !cfg.EnableAdminAPI {
 		return nil
 	}
@@ -29,6 +30,7 @@ func startAdminServer(cfg Config, store *override.Store, rdb *redis.Client) *htt
 	registerIdempotencyRoutes(mux, cfg, rdb)
 	registerRoutingRoutes(mux, cfg, rdb)
 	registerCircuitRoutes(mux, cfg, rdb)
+	registerAuditRoutes(mux, cfg, auditTrail)
 
 	srv := &http.Server{
 		Addr:         cfg.AdminAddr(),

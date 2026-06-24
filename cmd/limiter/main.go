@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/audit"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
@@ -32,6 +33,8 @@ var limiterInstance RateLimiter
 var hierarchicalLimiter *limiter.HierarchicalLimiter
 var overrideStore *override.Store
 var redisCircuit *circuitbreaker.Breaker
+var auditStore *audit.Store
+var redisCfg redisclient.Config
 
 func main() {
 	cfg := LoadConfig()
@@ -49,16 +52,23 @@ func main() {
 
 	// Fail fast if Redis is down. A limiter that starts without verified connectivity
 	// would either panic on first request or silently mis-report health.
-	rdb := redisclient.NewClient(cfg.RedisAddr, cfg.RedisPassword)
+	redisCfg = redisclient.LoadConfigFromEnv()
+	rdb := redisclient.New(redisCfg)
 	if err := redisclient.Ping(rdb); err != nil {
-		log.Fatalf("Redis unreachable at %s: %v", cfg.RedisAddr, err)
+		log.Fatalf("Redis unreachable (%s): %v", redisclient.Describe(redisCfg), err)
 	}
 	if otelCfg.Enabled {
 		if err := telemetry.InstrumentRedis(rdb); err != nil {
 			log.Fatalf("Redis OpenTelemetry instrumentation failed: %v", err)
 		}
 	}
-	log.Printf("Redis connection verified at %s", cfg.RedisAddr)
+	log.Printf("Redis connection verified (%s)", redisclient.Describe(redisCfg))
+
+	auditCfg := audit.LoadConfigFromEnv()
+	auditStore = audit.NewStore(rdb, auditCfg)
+	if auditCfg.Enabled {
+		log.Printf("Audit trail enabled (retention=%s, max_events=%d)", auditCfg.Retention, auditCfg.MaxEvents)
+	}
 
 	cbCfg := circuitbreaker.LoadConfigFromEnv()
 	redisCircuit = circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
@@ -103,15 +113,21 @@ func main() {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if err := rdb.Ping(context.Background()).Err(); err != nil {
-			// Deliberately vague body: external callers get status only, not infra details.
-			log.Printf("health check failed: %v", err)
+		h := redisclient.CheckHealth(r.Context(), rdb, redisCfg)
+		if !h.Connected {
+			log.Printf("health check failed: %s", h.Error)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy"})
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status": "unhealthy",
+				"redis":  h,
+			})
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "healthy",
+			"redis":  h,
+		})
 	})
 
 	// /check is the flat per-user limiter path. Protected by INTERNAL_API_KEY so only
@@ -161,6 +177,10 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]string{
 				"error": "Rate limiter unavailable",
 			})
+			recordAudit(ctx, auditStore, audit.RecordInput{
+				UserID: userID, Decision: audit.DecisionError,
+				Reason: "check: redis unavailable", Handler: "check",
+			})
 			return
 		}
 
@@ -179,8 +199,16 @@ func main() {
 			w.WriteHeader(http.StatusTooManyRequests)
 			json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests"})
 			telemetry.SetHTTPStatus(span, http.StatusTooManyRequests)
+			recordAudit(ctx, auditStore, audit.RecordInput{
+				UserID: userID, Decision: audit.DecisionDenied,
+				Reason: audit.ReasonFor(false, "check"), Handler: "check", Remaining: remaining,
+			})
 			return
 		}
+		recordAudit(ctx, auditStore, audit.RecordInput{
+			UserID: userID, Decision: audit.DecisionAllowed,
+			Reason: audit.ReasonFor(true, "check"), Handler: "check", Remaining: remaining,
+		})
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"allowed":   true,
 			"remaining": remaining,
@@ -268,6 +296,10 @@ func main() {
 				json.NewEncoder(w).Encode(map[string]string{
 					"error": "Hierarchical rate limiter unavailable",
 				})
+				recordAudit(ctx, auditStore, audit.RecordInput{
+					TenantID: tenantID, UserID: userID, Decision: audit.DecisionError,
+					Reason: "hierarchical: redis unavailable", Handler: "hierarchical",
+				})
 				return
 			}
 
@@ -285,8 +317,16 @@ func main() {
 				w.Header().Set("Retry-After", retryAfterForHierarchical(cfg))
 				w.WriteHeader(http.StatusTooManyRequests)
 				json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests (hierarchical limit)"})
+				recordAudit(ctx, auditStore, audit.RecordInput{
+					TenantID: tenantID, UserID: userID, Decision: audit.DecisionDenied,
+					Reason: audit.ReasonFor(false, "hierarchical"), Handler: "hierarchical", Remaining: remaining,
+				})
 				return
 			}
+			recordAudit(ctx, auditStore, audit.RecordInput{
+				TenantID: tenantID, UserID: userID, Decision: audit.DecisionAllowed,
+				Reason: audit.ReasonFor(true, "hierarchical"), Handler: "hierarchical", Remaining: remaining,
+			})
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"allowed":   true,
 				"remaining": remaining,
@@ -305,7 +345,7 @@ func main() {
 
 	// Admin API runs on a separate port so override CRUD can be network-isolated from
 	// the hot /check path in production (e.g. internal-only on Railway/K8s).
-	adminSrv := startAdminServer(cfg, overrideStore, rdb)
+	adminSrv := startAdminServer(cfg, overrideStore, rdb, auditStore)
 
 	go func() {
 		log.Printf("Server starting on :%d", cfg.Port)

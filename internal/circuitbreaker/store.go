@@ -19,13 +19,13 @@ var recordLua string
 
 // RedisStore persists distributed circuit state in Redis.
 type RedisStore struct {
-	rdb         *redis.Client
+	rdb         redis.UniversalClient
 	cfg         Config
 	allowScript *redis.Script
 	recScript   *redis.Script
 }
 
-func NewRedisStore(rdb *redis.Client, cfg Config) *RedisStore {
+func NewRedisStore(rdb redis.UniversalClient, cfg Config) *RedisStore {
 	return &RedisStore{
 		rdb:         rdb,
 		cfg:         cfg,

@@ -23,13 +23,13 @@ var completeLua string
 
 // RedisStore is the production idempotency backend.
 type RedisStore struct {
-	rdb           *redis.Client
+	rdb           redis.UniversalClient
 	cfg           Config
 	claimScript   *redis.Script
 	completeScript *redis.Script
 }
 
-func NewRedisStore(rdb *redis.Client, cfg Config) *RedisStore {
+func NewRedisStore(rdb redis.UniversalClient, cfg Config) *RedisStore {
 	return &RedisStore{
 		rdb:            rdb,
 		cfg:            cfg,

@@ -1,0 +1,114 @@
+# Redis Sentinel HA overlay — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --build
+#
+# Switches limiter/sidecar to Sentinel mode. Standalone `redis` service is disabled.
+
+services:
+  redis:
+    profiles: ["standalone"]
+
+  redis-master:
+    image: redis:7-alpine
+    container_name: redis-master
+    profiles: ["ha"]
+    command: redis-server /etc/redis/master.conf
+    volumes:
+      - ./deploy/redis/master.conf:/etc/redis/master.conf:ro
+    networks:
+      - rate-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "dev-redis-password", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-replica-1:
+    image: redis:7-alpine
+    container_name: redis-replica-1
+    profiles: ["ha"]
+    command: redis-server /etc/redis/replica.conf --replicaof redis-master 6379
+    volumes:
+      - ./deploy/redis/replica.conf:/etc/redis/replica.conf:ro
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - rate-net
+
+  redis-replica-2:
+    image: redis:7-alpine
+    container_name: redis-replica-2
+    profiles: ["ha"]
+    command: redis-server /etc/redis/replica.conf --replicaof redis-master 6379
+    volumes:
+      - ./deploy/redis/replica.conf:/etc/redis/replica.conf:ro
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - rate-net
+
+  redis-sentinel-1:
+    image: redis:7-alpine
+    container_name: redis-sentinel-1
+    profiles: ["ha"]
+    command: redis-sentinel /etc/redis/sentinel.conf
+    volumes:
+      - ./deploy/redis/sentinel.conf:/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+    networks:
+      - rate-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    container_name: redis-sentinel-2
+    profiles: ["ha"]
+    command: redis-sentinel /etc/redis/sentinel.conf
+    volumes:
+      - ./deploy/redis/sentinel.conf:/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+    networks:
+      - rate-net
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    container_name: redis-sentinel-3
+    profiles: ["ha"]
+    command: redis-sentinel /etc/redis/sentinel.conf
+    volumes:
+      - ./deploy/redis/sentinel.conf:/etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+    networks:
+      - rate-net
+
+  limiter:
+    environment:
+      - REDIS_MODE=sentinel
+      - REDIS_MASTER_NAME=mymaster
+      - REDIS_SENTINEL_ADDRS=redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
+      - ENABLE_AUDIT_TRAIL=true
+      - AUDIT_RETENTION_HOURS=168
+    depends_on:
+      redis-sentinel-1:
+        condition: service_healthy
+
+  sidecar:
+    environment:
+      - REDIS_MODE=sentinel
+      - REDIS_MASTER_NAME=mymaster
+      - REDIS_SENTINEL_ADDRS=redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
+    depends_on:
+      redis-sentinel-1:
+        condition: service_healthy

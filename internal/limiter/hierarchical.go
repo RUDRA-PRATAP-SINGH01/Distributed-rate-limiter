@@ -16,7 +16,7 @@ var hierarchicalLua string
 // HierarchicalLimiter enforces four stacked token buckets in a single Lua script.
 // All levels must approve before any token is deducted — partial commits are impossible.
 type HierarchicalLimiter struct {
-	rdb          *redis.Client
+	rdb          redis.UniversalClient
 	script       *redis.Script
 	globalCap    int
 	globalRate   float64
@@ -29,7 +29,7 @@ type HierarchicalLimiter struct {
 }
 
 func NewHierarchicalLimiter(
-	rdb *redis.Client,
+	rdb redis.UniversalClient,
 	globalCap, tenantCap, userCap, endpointCap int,
 	globalRate, tenantRate, userRate, endpointRate float64,
 ) *HierarchicalLimiter {

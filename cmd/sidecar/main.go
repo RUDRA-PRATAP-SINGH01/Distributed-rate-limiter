@@ -32,6 +32,7 @@ import (
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/singleflight"
 )
@@ -609,20 +610,14 @@ func main() {
 		ttl, failOpen, defaultLimit, useHierarchical, allowQueryUserID, debug, allowedPaths,
 	)
 
+	var sharedRdb redis.UniversalClient
+	needsRedis := os.Getenv("ENABLE_IDEMPOTENCY") == "true" || os.Getenv("ENABLE_ROUTING") == "true"
+	if needsRedis {
+		sharedRdb = connectSidecarRedis(otelCfg)
+	}
+
 	if os.Getenv("ENABLE_IDEMPOTENCY") == "true" {
-		redisAddr := os.Getenv("REDIS_ADDR")
-		if redisAddr == "" {
-			log.Fatal("ENABLE_IDEMPOTENCY=true requires REDIS_ADDR")
-		}
-		rdb := redisclient.NewClient(redisAddr, os.Getenv("REDIS_PASSWORD"))
-		if err := redisclient.Ping(rdb); err != nil {
-			log.Fatalf("Idempotency Redis unreachable at %s: %v", redisAddr, err)
-		}
-		if otelCfg.Enabled {
-			if err := telemetry.InstrumentRedis(rdb); err != nil {
-				log.Fatalf("Idempotency Redis tracing failed: %v", err)
-			}
-		}
+		rdb := sharedRdb
 		idemCfg := idempotency.DefaultConfig()
 		idemCfg.FailOpen = os.Getenv("IDEMPOTENCY_FAIL_OPEN") == "true"
 		if raw := os.Getenv("IDEMPOTENCY_LOCK_TTL_MS"); raw != "" {
@@ -649,17 +644,7 @@ func main() {
 	}
 
 	if os.Getenv("ENABLE_ROUTING") == "true" {
-		redisAddr := os.Getenv("REDIS_ADDR")
-		if redisAddr == "" {
-			log.Fatal("ENABLE_ROUTING=true requires REDIS_ADDR")
-		}
-		rdb := redisclient.NewClient(redisAddr, os.Getenv("REDIS_PASSWORD"))
-		if err := redisclient.Ping(rdb); err != nil {
-			log.Fatalf("Routing Redis unreachable: %v", err)
-		}
-		if otelCfg.Enabled {
-			_ = telemetry.InstrumentRedis(rdb)
-		}
+		rdb := sharedRdb
 		routeCfg := routing.LoadConfigFromEnv()
 		cbCfg := circuitbreaker.LoadConfigFromEnv()
 		breaker := circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
@@ -719,4 +704,25 @@ func main() {
 		log.Fatal(http.ListenAndServeTLS(":"+port, tlsCert, tlsKey, handler))
 	}
 	log.Fatal(http.ListenAndServe(":"+port, handler))
+}
+
+func connectSidecarRedis(otelCfg telemetry.Config) redis.UniversalClient {
+	cfg := redisclient.LoadConfigFromEnv()
+	if cfg.Mode == redisclient.ModeStandalone && cfg.Addr == "" {
+		log.Fatal("REDIS_ADDR is required when ENABLE_IDEMPOTENCY or ENABLE_ROUTING is true")
+	}
+	if cfg.Mode == redisclient.ModeSentinel && len(cfg.SentinelAddrs) == 0 {
+		log.Fatal("REDIS_SENTINEL_ADDRS is required when REDIS_MODE=sentinel")
+	}
+	rdb := redisclient.New(cfg)
+	if err := redisclient.Ping(rdb); err != nil {
+		log.Fatalf("Redis unreachable (%s): %v", redisclient.Describe(cfg), err)
+	}
+	if otelCfg.Enabled {
+		if err := telemetry.InstrumentRedis(rdb); err != nil {
+			log.Fatalf("Redis OpenTelemetry instrumentation failed: %v", err)
+		}
+	}
+	log.Printf("Sidecar Redis connected (%s)", redisclient.Describe(cfg))
+	return rdb
 }

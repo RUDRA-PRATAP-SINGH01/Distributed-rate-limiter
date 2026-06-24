@@ -20,7 +20,7 @@ type Config struct {
 }
 
 type Store struct {
-	rdb   *redis.Client
+	rdb   redis.UniversalClient
 	cache sync.Map // keyed by full Redis key; safe for concurrent readers
 	ttl   time.Duration
 }
@@ -30,7 +30,7 @@ type cachedEntry struct {
 	expiry time.Time
 }
 
-func NewStore(rdb *redis.Client, ttl time.Duration) *Store {
+func NewStore(rdb redis.UniversalClient, ttl time.Duration) *Store {
 	return &Store{rdb: rdb, ttl: ttl}
 }
 

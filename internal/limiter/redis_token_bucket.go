@@ -14,12 +14,12 @@ import (
 // Kept for reference and race-condition demos — production uses RedisAtomicTokenBucket instead.
 // Two concurrent Allow() calls can both observe the same token count and both succeed.
 type RedisTokenBucket struct {
-	rdb        *redis.Client
+	rdb        redis.UniversalClient
 	capacity   int
 	refillRate float64
 }
 
-func NewRedisTokenBucket(rdb *redis.Client, capacity int, refillRate float64) *RedisTokenBucket {
+func NewRedisTokenBucket(rdb redis.UniversalClient, capacity int, refillRate float64) *RedisTokenBucket {
 	return &RedisTokenBucket{
 		rdb:        rdb,
 		capacity:   capacity,

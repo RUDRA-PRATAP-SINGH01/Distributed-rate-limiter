@@ -17,13 +17,13 @@ var recordOutcomeLua string
 
 // RedisStore persists gateway definitions and live metrics in Redis.
 type RedisStore struct {
-	rdb     *redis.Client
+	rdb     redis.UniversalClient
 	cfg     Config
 	script  *redis.Script
 	breaker *circuitbreaker.Breaker
 }
 
-func NewRedisStore(rdb *redis.Client, cfg Config) *RedisStore {
+func NewRedisStore(rdb redis.UniversalClient, cfg Config) *RedisStore {
 	return &RedisStore{
 		rdb:    rdb,
 		cfg:    cfg,

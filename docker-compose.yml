@@ -45,6 +45,9 @@ services:
       - INTERNAL_API_KEY=dev-internal-key-change-in-prod
       - ALLOW_QUERY_USER_ID=true
       - OVERRIDE_CACHE_TTL_MS=5000
+      - ENABLE_AUDIT_TRAIL=true
+      - AUDIT_RETENTION_HOURS=168
+      - AUDIT_MAX_EVENTS=100000
     ports:
       - "8080:8080"
       - "8082:8082"

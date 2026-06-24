@@ -784,6 +784,167 @@ See `internal/circuitbreaker/` and `benchmarks/circuitbreaker/summary.md`.
 
 ---
 
+## Redis Sentinel High Availability
+
+Automatic failover for Redis using Sentinel quorum, master election, replica promotion, and go-redis `FailoverClient` reconnection.
+
+```mermaid
+flowchart TB
+    subgraph apps [Application Tier]
+        L[Limiter]
+        SC[Sidecar]
+    end
+
+    subgraph sentinel [Sentinel Quorum]
+        S1[Sentinel 1]
+        S2[Sentinel 2]
+        S3[Sentinel 3]
+    end
+
+    subgraph redis [Redis Tier]
+        M[(Master)]
+        R1[(Replica 1)]
+        R2[(Replica 2)]
+    end
+
+    L & SC -->|discover master| S1 & S2 & S3
+    S1 & S2 & S3 -->|monitor| M
+    M -->|replicate| R1 & R2
+    S1 -.->|failover promote| R1
+```
+
+### Failure & Recovery Flow
+
+| Step | What happens |
+|------|----------------|
+| 1. Detection | Sentinels mark master down after `down-after-milliseconds` (5s) |
+| 2. Election | Quorum (2/3) elects a leader sentinel |
+| 3. Promotion | Best replica promoted to master |
+| 4. Client | `FailoverClient` queries Sentinels, reconnects to new master |
+| 5. Recovery | Old master rejoins as replica when restarted |
+
+### Docker HA Stack
+
+```bash
+# Dev (single Redis)
+docker compose up --build
+
+# Production-like Sentinel HA
+docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --build
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_MODE` | `standalone` | `standalone` or `sentinel` |
+| `REDIS_ADDR` | `localhost:6379` | Standalone address |
+| `REDIS_MASTER_NAME` | `mymaster` | Sentinel master name |
+| `REDIS_SENTINEL_ADDRS` | — | Comma-separated sentinel hosts |
+| `REDIS_PASSWORD` | — | Master/replica password |
+| `REDIS_SENTINEL_PASSWORD` | same as password | Sentinel auth |
+
+### Health & Observability
+
+`GET /health` returns Redis role and replication:
+
+```json
+{
+  "status": "healthy",
+  "redis": {
+    "mode": "sentinel",
+    "connected": true,
+    "role": "master",
+    "replication": "role=master slaves=2"
+  }
+}
+```
+
+Metrics: `redis_failover_reconnects_total`
+
+See `deploy/redis/`, `internal/redis/`, `benchmarks/sentinel/summary.md`.
+
+### Operational Tradeoffs
+
+| Choice | Benefit | Cost |
+|--------|---------|------|
+| **Sentinel (3+)** | Automatic failover, no K8s required | Extra processes to operate |
+| **2 replicas** | Read scaling + failover candidates | Memory ×3 |
+| **AOF everysec** | Durability with low overhead | Sub-second data loss window on crash |
+| **FailoverClient** | Transparent reconnect | Brief write unavailability during election |
+
+---
+
+## Audit Trail
+
+Immutable log of every rate-limit decision for compliance, debugging, and replay analysis.
+
+### Stored Fields
+
+| Field | Description |
+|-------|-------------|
+| `request_id` | `X-Request-ID` correlation |
+| `tenant_id` | `X-Tenant-ID` or `default` |
+| `user_id` | Authenticated user |
+| `decision` | `allowed`, `denied`, `error` |
+| `reason` | Human-readable cause |
+| `handler` | `check` or `hierarchical` |
+| `timestamp_ms` | Unix epoch ms |
+
+### Redis Schema
+
+```
+audit:event:{id}           HASH — full event payload
+audit:idx:ts               ZSET — global time index
+audit:idx:tenant:{tenant}  ZSET — per-tenant index
+audit:idx:user:{user}      ZSET — per-user index
+audit:idx:req:{request_id} STRING — latest event for request
+```
+
+Retention: `AUDIT_RETENTION_HOURS` (default 168h) + `AUDIT_MAX_EVENTS` cap with Lua trim.
+
+### Admin API (`:8082`)
+
+```bash
+# Search with filters
+curl -H "X-API-Key: $ADMIN_API_KEY" \
+  "http://localhost:8082/admin/audit?tenant_id=default&decision=denied&limit=50"
+
+# Get one event
+curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/audit/{id}
+
+# Replay / forensic payload
+curl -H "X-API-Key: $ADMIN_API_KEY" \
+  "http://localhost:8082/admin/audit/replay?id={id}"
+
+# Index stats
+curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/audit/stats
+```
+
+### Observability
+
+| Metric | Description |
+|--------|-------------|
+| `audit_events_total{decision,handler}` | Recorded decisions |
+| `audit_append_duration_seconds` | Write latency |
+| `audit_search_duration_seconds` | Query latency |
+
+### Scalability Considerations
+
+| Aspect | Approach |
+|--------|----------|
+| **Write path** | Async append (default) — no hot-path blocking |
+| **Indexes** | ZSET per dimension — O(log N) range queries |
+| **Retention** | TTL on events + ZSET trim in Lua |
+| **Cardinality** | Per-tenant/user indexes grow with tenants — shard by tenant prefix at scale |
+| **Replay** | Returns stored decision + hint; does not re-execute Lua |
+
+Env: `ENABLE_AUDIT_TRAIL`, `AUDIT_RETENTION_HOURS`, `AUDIT_MAX_EVENTS`, `AUDIT_ASYNC`
+
+See `internal/audit/` and `benchmarks/audit/summary.md`.
+
+---
+
 ## Intelligent Traffic Routing
 
 Juspay-style payment gateway routing: the sidecar continuously scores Gateway A/B/C on latency, error rate, and health, then routes traffic with weighted selection and automatic failover.

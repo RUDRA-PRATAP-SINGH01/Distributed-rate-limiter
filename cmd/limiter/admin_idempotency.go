@@ -10,7 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func registerIdempotencyRoutes(mux *http.ServeMux, cfg Config, rdb *redis.Client) {
+func registerIdempotencyRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalClient) {
 	if rdb == nil {
 		return
 	}

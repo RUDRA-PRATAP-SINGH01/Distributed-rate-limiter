@@ -8,7 +8,7 @@ import (
 )
 
 // InstrumentRedis adds OpenTelemetry tracing to all Redis commands that receive a context.
-func InstrumentRedis(rdb *redis.Client) error {
+func InstrumentRedis(rdb redis.UniversalClient) error {
 	if err := redisotel.InstrumentTracing(rdb); err != nil {
 		return fmt.Errorf("redis tracing: %w", err)
 	}

@@ -19,13 +19,13 @@ var luaScript string
 // Why Lua: a naive GET-then-SET from Go has a race — two sidecars can both read
 // "1 token left" and both allow. EVAL runs refill + deduct atomically on the Redis primary.
 type RedisAtomicTokenBucket struct {
-	rdb        *redis.Client
+	rdb        redis.UniversalClient
 	capacity   int
 	refillRate float64
 	script     *redis.Script
 }
 
-func NewRedisAtomicTokenBucket(rdb *redis.Client, capacity int, refillRate float64) *RedisAtomicTokenBucket {
+func NewRedisAtomicTokenBucket(rdb redis.UniversalClient, capacity int, refillRate float64) *RedisAtomicTokenBucket {
 	return &RedisAtomicTokenBucket{
 		rdb:        rdb,
 		capacity:   capacity,

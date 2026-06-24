@@ -185,6 +185,37 @@ var (
 			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1},
 		},
 	)
+
+	AuditEventsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "audit_events_total",
+			Help: "Audit trail events recorded",
+		},
+		[]string{"decision", "handler"},
+	)
+
+	AuditAppendDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "audit_append_duration_seconds",
+			Help:    "Audit append latency",
+			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1},
+		},
+	)
+
+	AuditSearchDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "audit_search_duration_seconds",
+			Help:    "Audit search latency",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5},
+		},
+	)
+
+	RedisFailoverTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "redis_failover_reconnects_total",
+			Help: "Redis client reconnections after Sentinel failover (incremented on ping recovery)",
+		},
+	)
 )
 
 func RecordRequest(handler string, allowed bool) {
@@ -282,4 +313,23 @@ func RecordCircuitLatencyEMA(target string, ms float64) {
 
 func RecordCircuitRedisDuration(seconds float64) {
 	CircuitBreakerRedisDuration.Observe(seconds)
+}
+
+func RecordAuditEvent(decision, handler string) {
+	AuditEventsTotal.WithLabelValues(decision, handler).Inc()
+}
+
+func RecordAuditAppend(seconds float64, ok bool) {
+	AuditAppendDuration.Observe(seconds)
+	if !ok {
+		AuditEventsTotal.WithLabelValues("error", "append").Inc()
+	}
+}
+
+func RecordAuditSearch(seconds float64) {
+	AuditSearchDuration.Observe(seconds)
+}
+
+func RecordRedisFailoverReconnect() {
+	RedisFailoverTotal.Inc()
 }

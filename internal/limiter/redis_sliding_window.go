@@ -17,13 +17,13 @@ var slidingWindowLua string
 // RedisSlidingWindow implements a fixed-window counter in Redis sorted sets.
 // Better when you need "max N requests per 60s" rather than smooth token refill.
 type RedisSlidingWindow struct {
-	rdb    *redis.Client
+	rdb    redis.UniversalClient
 	limit  int
 	window time.Duration
 	script *redis.Script
 }
 
-func NewRedisSlidingWindow(rdb *redis.Client, limit int, window time.Duration) *RedisSlidingWindow {
+func NewRedisSlidingWindow(rdb redis.UniversalClient, limit int, window time.Duration) *RedisSlidingWindow {
 	return &RedisSlidingWindow{
 		rdb:    rdb,
 		limit:  limit,
