@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
+A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, production-grade idempotency layer, runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
 
 I started this project because I wanted to understand how production systems like API gateways and SaaS platforms actually enforce limits at scale — not just a single-process token bucket, but something that stays correct when you have ten sidecars and a million requests per minute.
 
@@ -18,6 +18,7 @@ I started this project because I wanted to understand how production systems lik
 - [Rate Limiting Algorithms](#rate-limiting-algorithms)
 - [Hierarchical Quota Enforcement](#hierarchical-quota-enforcement)
 - [Sidecar Proxy](#sidecar-proxy)
+- [Idempotency Layer](#idempotency-layer)
 - [Admin API and Runtime Overrides](#admin-api-and-runtime-overrides)
 - [Security Model](#security-model)
 - [Observability](#observability)
@@ -215,6 +216,8 @@ This is the authoritative source of truth for all quota decisions. Sidecars call
 | GET | `/check_hierarchical` | 8080 | Internal API key | Four-level hierarchical check |
 | GET | `/metrics` | 8080 | Optional API key | Prometheus scrape endpoint |
 | POST/GET/DELETE | `/admin/limits/{level}/{id}` | 8082 | Admin API key | Runtime override CRUD |
+| GET/DELETE | `/admin/idempotency/{scope}/{key}` | 8082 | Admin API key | Idempotency record inspect/purge |
+| GET | `/admin/idempotency?user=&key=` | 8082 | Admin API key | Idempotency lookup by tenant+user |
 
 ### Sidecar Proxy (`cmd/sidecar/`)
 
@@ -228,7 +231,7 @@ I chose a separate binary instead of middleware because:
 
 ### Demo Backend (`cmd/demo-backend/`)
 
-A minimal HTTP server that returns `{"message": "Hello from backend"}`. It exists to prove the full proxy path works end-to-end. Replace it with your real API.
+A minimal HTTP server that returns `{"message": "Hello from backend"}`. It also exposes `POST /api/orders` with an execution counter (`GET /api/orders/count`) for idempotency demos. Replace it with your real API.
 
 ### Internal Packages (`internal/`)
 
@@ -236,6 +239,7 @@ A minimal HTTP server that returns `{"message": "Hello from backend"}`. It exist
 |---------|---------|
 | `auth` | API key middleware for internal and admin endpoints |
 | `identity` | User ID resolution from `X-User-ID` header or query param |
+| `idempotency` | Atomic claim/complete Lua scripts, fingerprinting, response capture |
 | `limiter` | Redis-backed algorithms with embedded Lua scripts |
 | `metrics` | Prometheus counters and histograms |
 | `override` | Runtime limit override store with local TTL cache |
@@ -502,6 +506,166 @@ The sidecar only proxies paths matching `ALLOWED_PATHS` (default: `/`). Everythi
 
 ---
 
+## Idempotency Layer
+
+I added a Stripe-style idempotency layer on the sidecar so client retries never double-execute upstream work or burn quota twice. State lives in Redis and every claim runs through atomic Lua — the same correctness model as the rate limiter.
+
+### Why Sidecar, Not the App?
+
+```mermaid
+flowchart LR
+    subgraph clients [Clients]
+        C[POST + Idempotency-Key]
+    end
+
+    subgraph sidecar [Sidecar]
+        IDEM[Idempotency Middleware]
+        RL[Rate Limit Check]
+        PX[Reverse Proxy]
+    end
+
+    subgraph state [Redis]
+        IDK["idem:{scope}:{key}"]
+        RATE["rate:{user}"]
+    end
+
+    subgraph upstream [Upstream]
+        API[Demo / Your API]
+    end
+
+    C --> IDEM
+    IDEM -->|claim.lua| IDK
+    IDEM -->|new request| RL
+    RL --> RATE
+    IDEM -->|allowed| PX
+    PX --> API
+    IDEM -->|replay| C
+```
+
+The backend stays unchanged. Any sidecar in the fleet shares the same Redis idempotency state, so retries hit any instance and still get the cached response.
+
+### Request State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Missing: Key not in Redis
+    Missing --> Processing: SET claim (Lua)
+    Processing --> Completed: Upstream OK + store response
+    Processing --> InProgress409: Concurrent duplicate
+    Processing --> Expired: Lock TTL elapsed
+    Expired --> Processing: Reclaim lease
+    Completed --> Completed: Replay cached response
+    InProgress409 --> Completed: First request finishes
+```
+
+### Client Contract
+
+Send `Idempotency-Key` on `POST`, `PUT`, or `PATCH`:
+
+```http
+POST /api/orders HTTP/1.1
+Idempotency-Key: pay_7f3a9c2e-4b11
+X-User-ID: alice
+X-Tenant-ID: acme
+Content-Type: application/json
+
+{"amount": 1000, "currency": "INR"}
+```
+
+| Outcome | HTTP | `X-Idempotency-Status` | Upstream Called? | Quota Consumed? |
+|---------|------|------------------------|------------------|-----------------|
+| First request | upstream status | `created` | Yes | Yes |
+| Duplicate (completed) | cached status | `replayed` | No | No |
+| In progress | `409 Conflict` | `in_progress` | No | No |
+| Same key, different body | `422` | `hash_mismatch` | No | No |
+
+Request bodies are fingerprinted with `SHA256(method + path + body)` so a key cannot be reused with a different payload.
+
+### Redis Schema
+
+```
+idem:{scope}:{key}        # HASH — status, hash, headers, metadata
+idem:body:{scope}:{key}   # STRING — response body when > 64 KB
+scope = SHA256(tenant|user)[:32]
+```
+
+| Field | Description |
+|-------|-------------|
+| `status` | `processing` \| `completed` |
+| `request_hash` | Fingerprint of method + path + body |
+| `http_status` | Cached response code |
+| `resp_headers` | JSON (whitelisted headers only) |
+| `lock_until` | Processing lease deadline (ms) |
+
+| TTL Phase | Default | Purpose |
+|-----------|---------|---------|
+| Processing lock | 60s | Recover if worker crashes mid-request |
+| Completed record | 24h | Client retry window (Stripe-style) |
+
+### 100-Way Race Handling
+
+```mermaid
+sequenceDiagram
+    participant C1 as Client 1
+    participant C99 as Clients 2-100
+    participant SC as Sidecar
+    participant R as Redis Lua
+    participant U as Upstream
+
+    par Same Idempotency-Key
+        C1->>SC: POST
+        C99->>SC: POST
+    end
+    SC->>R: claim.lua (atomic)
+    R-->>SC: C1 wins → claimed
+    R-->>SC: C99 → in_progress
+    SC-->>C99: 409 + Retry-After
+    SC->>U: forward (C1 only)
+    U-->>SC: 201 + body
+    SC->>R: complete.lua
+    Note over C99: Retry after completion
+    C99->>SC: POST (retry)
+    SC->>R: claim.lua
+    R-->>SC: replay cached 201
+    SC-->>C99: 201 cached (no upstream)
+```
+
+### Example
+
+```bash
+# First call — upstream executes once
+curl -X POST http://localhost:9090/api/orders \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: alice" \
+  -H "Idempotency-Key: pay-001" \
+  -d '{"amount": 1000}'
+
+# Duplicate — replayed from Redis (check execution count stays at 1)
+curl -X POST http://localhost:9090/api/orders \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: alice" \
+  -H "Idempotency-Key: pay-001" \
+  -d '{"amount": 1000}'
+
+curl http://localhost:8081/api/orders/count
+```
+
+### Sidecar Environment
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ENABLE_IDEMPOTENCY` | `false` | Turn on idempotency middleware |
+| `REDIS_ADDR` | — | Required when idempotency enabled |
+| `IDEMPOTENCY_LOCK_TTL_MS` | `60000` | Processing lease |
+| `IDEMPOTENCY_COMPLETED_TTL_MS` | `86400000` | 24h retention |
+| `IDEMPOTENCY_FAIL_OPEN` | `false` | Redis down → proceed without dedup |
+
+Docker Compose enables idempotency by default on the sidecar.
+
+See `internal/idempotency/` and `benchmarks/idempotency/summary.md` for implementation and benchmark details.
+
+---
+
 ## Admin API and Runtime Overrides
 
 I separated the admin API onto port 8082 so it can be network-isolated from the hot `/check` path in production.
@@ -556,6 +720,43 @@ curl -X DELETE http://localhost:8082/admin/limits/user/alice \
   -H "X-API-Key: dev-key-change-in-prod"
 ```
 
+### Idempotency Admin (Debug)
+
+Read-only inspection and manual purge of stuck keys. Uses the same `X-API-Key` as limit overrides.
+
+```mermaid
+sequenceDiagram
+    participant OP as Operator
+    participant ADM as Admin API :8082
+    participant R as Redis
+
+    OP->>ADM: GET /admin/idempotency?user=alice&key=pay-001
+    ADM->>ADM: scope = SHA256(tenant|user)
+    ADM->>R: HGETALL idem:{scope}:{key}
+    R-->>ADM: status, hash, ttl, body preview
+    ADM-->>OP: JSON record + lock_remaining_ms
+```
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/admin/idempotency?user={id}&key={key}&tenant={id}` | Lookup by tenant + user (scope computed) |
+| GET | `/admin/idempotency/{scope}/{key}` | Direct lookup by Redis scope |
+| DELETE | `/admin/idempotency/{scope}/{key}` | Purge stuck processing key |
+
+```bash
+# Lookup by user (tenant defaults to "default")
+curl "http://localhost:8082/admin/idempotency?user=alice&key=pay-001" \
+  -H "X-API-Key: dev-key-change-in-prod"
+
+# Direct scope lookup
+curl http://localhost:8082/admin/idempotency/{scope}/pay-001 \
+  -H "X-API-Key: dev-key-change-in-prod"
+
+# Delete stuck key (ops recovery)
+curl -X DELETE http://localhost:8082/admin/idempotency/{scope}/pay-001 \
+  -H "X-API-Key: dev-key-change-in-prod"
+```
+
 ---
 
 ## Security Model
@@ -606,6 +807,9 @@ I intentionally kept label cardinality low. No per-user labels — that would OO
 | `rate_limiter_redis_duration_seconds` | Histogram | — |
 | `rate_limiter_sidecar_cache_hits_total` | Counter | — |
 | `rate_limiter_sidecar_cache_misses_total` | Counter | — |
+| `idempotency_claims_total` | Counter | `result` (claimed, replay, in_progress, hash_mismatch, error) |
+| `idempotency_completes_total` | Counter | — |
+| `idempotency_redis_duration_seconds` | Histogram | — |
 
 Scrape endpoints:
 - Limiter: `http://localhost:8080/metrics`
@@ -641,6 +845,8 @@ flowchart LR
         T2[Saturation<br/>1500-4000 RPS]
         T3[Hot-Key<br/>10 users @ 5000 RPS]
         T4[Enforcement<br/>single user 500/min]
+        T5[Idempotency Race<br/>100 VUs, 1 key]
+        T6[Idempotency Replay<br/>50 VUs, cached key]
     end
 
     subgraph output [Analysis]
@@ -653,6 +859,8 @@ flowchart LR
     T2 --> JSON
     T3 --> JSON
     T4 --> JSON
+    T5 --> JSON
+    T6 --> JSON
     JSON --> PARSE
     PARSE --> GRAPHS
 ```
@@ -663,8 +871,25 @@ flowchart LR
 | Saturation | `benchmarks/saturation/saturation-test.js` | Exact point where system collapses |
 | Hot-key | `benchmarks/hot-key/hot-key-test.js` | Redis contention under shared keys |
 | Enforcement | `benchmarks/enforcement/enforcement-test.js` | Limits are actually enforced |
+| Idempotency race | `benchmarks/idempotency/idempotency-race.js` | 100 concurrent same key → 1 execution |
+| Idempotency replay | `benchmarks/idempotency/idempotency-replay.js` | Cached replay throughput |
 
-### Results on My Machine (i9-14900HX, 32GB RAM)
+### Idempotency Results (Docker Compose, local)
+
+| Test | Scenario | Key Result |
+|------|----------|------------|
+| Race | 100 VUs, 1 `Idempotency-Key` | **1 upstream execution**, p95 claim **14.9 ms**, 14% `409` in-progress |
+| Replay | 50 VUs, 30s, pre-seeded key | **~942 RPS**, p95 **5.7 ms**, **0% errors**, no upstream calls |
+
+```bash
+k6 run benchmarks/idempotency/idempotency-race.js
+k6 run benchmarks/idempotency/idempotency-replay.js
+go test ./internal/idempotency/... -v
+```
+
+See `benchmarks/idempotency/summary.md` for full numbers.
+
+### Rate Limiter Results on My Machine (i9-14900HX, 32GB RAM)
 
 | Target RPS | Actual RPS | p99 | Error Rate | Verdict |
 |------------|------------|-----|------------|---------|
@@ -730,6 +955,9 @@ Every design decision in this project has a cost. Here is an honest accounting.
 | **Low-cardinality metrics** | Prometheus stays stable under load | No per-user observability |
 | **Runtime overrides with TTL cache** | Fast admin changes without redeploy | Up to 5s propagation delay |
 | **Query param user ID (dev only)** | Easy local testing | Spoofable if left enabled in production |
+| **Redis idempotency store** | Fleet-wide dedup without app changes | Extra Redis memory per key; 24h TTL |
+| **409 for in-progress** | Simple client retry contract | Clients must backoff and retry |
+| **Denial-only idempotency scope** | Tenant + user isolation | Keys not global across tenants |
 
 ---
 
@@ -742,6 +970,7 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │   ├── saturation/          Fine-grained saturation sweep
 │   ├── hot-key/             Shared-key contention test
 │   ├── enforcement/         Single-user limit correctness test
+│   ├── idempotency/         Race + replay k6 tests, summary.md
 │   ├── metrics/             docker stats collection scripts
 │   └── graphs/              generate-graphs.py (PNG output gitignored)
 │
@@ -766,6 +995,7 @@ Every design decision in this project has a cost. Here is an honest accounting.
 ├── internal/
 │   ├── auth/                API key middleware
 │   ├── identity/            User ID resolution
+│   ├── idempotency/         Idempotency store + Lua scripts
 │   ├── limiter/             Redis algorithms + Lua scripts
 │   ├── metrics/             Prometheus instrumentation
 │   ├── override/            Runtime override store

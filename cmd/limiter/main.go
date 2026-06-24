@@ -101,6 +101,19 @@ func main() {
 			return
 		}
 
+		if r.URL.Query().Get("idempotent_replay") == "true" {
+			metrics.RecordRequest("check", true)
+			metrics.RecordRequestDuration("check", time.Since(start).Seconds())
+			w.Header().Set("Content-Type", "application/json")
+			setRateLimitHeaders(w, rateLimitLimitHeader(cfg), cfg.Capacity)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"allowed":   true,
+				"remaining": cfg.Capacity,
+				"replay":    true,
+			})
+			return
+		}
+
 		allowed, remaining, err := limiterInstance.Allow(userID)
 		if err != nil {
 			// Redis/Lua failure is 503, not 429. Mixing them would hide outages as "rate limited".
@@ -155,6 +168,27 @@ func main() {
 				endpoint = "default"
 			}
 
+			if r.URL.Query().Get("idempotent_replay") == "true" {
+				capacities, _ := effectiveHierarchicalLimits(cfg, overrideStore, tenantID, userID, endpoint)
+				limitHeader := effectiveHierarchicalLimitHeader(capacities)
+				remaining := capacities[0]
+				for _, cap := range capacities[1:] {
+					if cap < remaining {
+						remaining = cap
+					}
+				}
+				metrics.RecordRequest("hierarchical", true)
+				metrics.RecordRequestDuration("hierarchical", time.Since(start).Seconds())
+				w.Header().Set("Content-Type", "application/json")
+				setRateLimitHeaders(w, limitHeader, remaining)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"allowed":   true,
+					"remaining": remaining,
+					"replay":    true,
+				})
+				return
+			}
+
 			// Keys are namespaced so tenants and endpoints never share Redis state accidentally.
 			globalKey := "rate:global"
 			tenantKey := fmt.Sprintf("rate:tenant:%s", tenantID)
@@ -206,7 +240,7 @@ func main() {
 
 	// Admin API runs on a separate port so override CRUD can be network-isolated from
 	// the hot /check path in production (e.g. internal-only on Railway/K8s).
-	adminSrv := startAdminServer(cfg, overrideStore)
+	adminSrv := startAdminServer(cfg, overrideStore, rdb)
 
 	go func() {
 		log.Printf("Server starting on :%d", cfg.Port)

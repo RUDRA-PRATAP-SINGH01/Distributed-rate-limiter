@@ -13,9 +13,10 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
+	"github.com/redis/go-redis/v9"
 )
 
-func startAdminServer(cfg Config, store *override.Store) *http.Server {
+func startAdminServer(cfg Config, store *override.Store, rdb *redis.Client) *http.Server {
 	if !cfg.EnableAdminAPI {
 		return nil
 	}
@@ -25,6 +26,7 @@ func startAdminServer(cfg Config, store *override.Store) *http.Server {
 	registerLimitRoutes(mux, cfg, store, "tenant", cfg.TenantCapacity, cfg.TenantRefillRate)
 	registerLimitRoutes(mux, cfg, store, "endpoint", cfg.EndpointCapacity, cfg.EndpointRefillRate)
 	registerLimitRoutes(mux, cfg, store, "global", cfg.GlobalCapacity, cfg.GlobalRefillRate)
+	registerIdempotencyRoutes(mux, cfg, rdb)
 
 	srv := &http.Server{
 		Addr:         cfg.AdminAddr(),

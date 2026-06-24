@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,8 +23,10 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/idempotency"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/singleflight"
 )
@@ -59,6 +62,8 @@ type Sidecar struct {
 	useHierarchical  bool
 	httpClient       *http.Client
 	proxy            *httputil.ReverseProxy // created once — reusing per request would leak goroutines
+	idempotency      idempotency.Store
+	idempotencyCfg   idempotency.Config
 }
 
 func NewSidecar(
@@ -88,6 +93,21 @@ func NewSidecar(
 		httpClient:       &http.Client{Timeout: 5 * time.Second},
 		proxy:            httputil.NewSingleHostReverseProxy(target),
 	}
+}
+
+func (s *Sidecar) SetIdempotency(store idempotency.Store, cfg idempotency.Config) {
+	s.idempotency = store
+	s.idempotencyCfg = cfg
+}
+
+func (s *Sidecar) tenantID(r *http.Request) string {
+	if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
+		return tenantID
+	}
+	if tenantID := r.URL.Query().Get("tenant_id"); tenantID != "" {
+		return tenantID
+	}
+	return "default"
 }
 
 func (s *Sidecar) debugf(format string, args ...interface{}) {
@@ -141,6 +161,109 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	idemKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if s.idempotency != nil && idemKey != "" && idempotency.IsMutatingMethod(r.Method) {
+		s.serveIdempotent(w, r, userID, idemKey)
+		return
+	}
+
+	s.serveNormal(w, r, userID)
+}
+
+func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID, idemKey string) {
+	if err := idempotency.ValidateKey(idemKey); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	body, err := idempotency.ReadBody(r, s.idempotencyCfg.MaxBodyBytes)
+	if err != nil {
+		if err == idempotency.ErrBodyTooLarge {
+			http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	scope := idempotency.BuildScope(s.tenantID(r), userID)
+	reqHash := idempotency.Fingerprint(r.Method, r.URL.Path, body)
+
+	claim, err := s.idempotency.Claim(r.Context(), scope, idemKey, reqHash)
+	if err != nil {
+		log.Printf("Idempotency claim error: %v", err)
+		if s.idempotencyCfg.FailOpen {
+			log.Printf("WARNING: idempotency FAIL_OPEN — proceeding without dedup")
+			s.serveNormal(w, r, userID)
+			return
+		}
+		http.Error(w, "Idempotency store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch claim.Result {
+	case idempotency.ResultReplay:
+		s.debugf("Idempotency replay for key %s", idemKey)
+		idempotency.WriteClaimResponse(w, claim)
+		return
+	case idempotency.ResultInProgress, idempotency.ResultHashMismatch:
+		idempotency.WriteClaimResponse(w, claim)
+		return
+	case idempotency.ResultClaimed:
+		s.debugf("Idempotency claimed key %s", idemKey)
+	default:
+		http.Error(w, "idempotency error", http.StatusInternalServerError)
+		return
+	}
+
+	result, err := s.checkRateLimit(r, userID, false)
+	if err != nil {
+		log.Printf("Rate limiter error (idempotent): %v", err)
+		if s.failOpen {
+			s.forwardIdempotent(w, r, scope, idemKey)
+			return
+		}
+		s.completeIdempotent(r.Context(), scope, idemKey, http.StatusServiceUnavailable, map[string]string{"Content-Type": "application/json"}, []byte(`{"error":"Rate limiter unavailable"}`))
+		http.Error(w, "Rate limiter unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if !result.allowed {
+		body := []byte(`{"error":"Too many requests"}`)
+		_ = s.completeIdempotent(r.Context(), scope, idemKey, http.StatusTooManyRequests, map[string]string{"Content-Type": "application/json"}, body)
+		w.Header().Set("X-Idempotency-Status", "created")
+		s.writeDenial(w, result.limit, result.remaining, result.retryAfter)
+		return
+	}
+
+	idempotency.SetCreatedHeader(w)
+	s.writeRateLimitHeaders(w, result.limit, result.remaining)
+	s.forwardIdempotent(w, r, scope, idemKey)
+}
+
+func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scope, idemKey string) {
+	capturer := idempotency.NewResponseCapturer(w)
+	target, _ := url.Parse(s.upstreamURL)
+	r.Host = target.Host
+	s.proxy.ServeHTTP(capturer, r)
+	captured := capturer.Commit()
+
+	if err := s.completeIdempotent(r.Context(), scope, idemKey, captured.StatusCode, captured.Headers, captured.Body); err != nil {
+		log.Printf("Idempotency complete error (response still returned): %v", err)
+	}
+}
+
+func (s *Sidecar) completeIdempotent(ctx context.Context, scope, key string, status int, headers map[string]string, body []byte) error {
+	return s.idempotency.Complete(ctx, idempotency.CompleteRequest{
+		Scope:      scope,
+		Key:        key,
+		HTTPStatus: status,
+		Headers:    headers,
+		Body:       body,
+	})
+}
+
+func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID string) {
 	cacheKey := s.cacheKey(r, userID)
 	s.debugf("Request for user %s (cache key: %s)", userID, cacheKey)
 
@@ -167,7 +290,7 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// singleflight: 100 concurrent requests for the same user share one limiter round-trip.
 	resultAny, err, _ := s.limitFlight.Do(cacheKey, func() (interface{}, error) {
-		return s.checkRateLimit(r, userID)
+		return s.checkRateLimit(r, userID, false)
 	})
 	if err != nil {
 		log.Printf("Rate limiter error: %v", err)
@@ -211,9 +334,14 @@ func (s *Sidecar) writeDenial(w http.ResponseWriter, limit, remaining int, retry
 	http.Error(w, "Too many requests", http.StatusTooManyRequests)
 }
 
-func (s *Sidecar) checkRateLimit(r *http.Request, userID string) (limitResult, error) {
+func (s *Sidecar) checkRateLimit(r *http.Request, userID string, idempotentReplay bool) (limitResult, error) {
 	var req *http.Request
 	var err error
+
+	replayParam := ""
+	if idempotentReplay {
+		replayParam = "&idempotent_replay=true"
+	}
 
 	if s.useHierarchical {
 		endpoint := r.URL.Path
@@ -221,13 +349,17 @@ func (s *Sidecar) checkRateLimit(r *http.Request, userID string) (limitResult, e
 			endpoint = "/"
 		}
 		checkURL := fmt.Sprintf(
-			"%s/check_hierarchical?endpoint=%s",
+			"%s/check_hierarchical?endpoint=%s%s",
 			s.limiterURL,
 			url.QueryEscape(endpoint),
+			replayParam,
 		)
 		req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, checkURL, nil)
 	} else {
 		checkURL := fmt.Sprintf("%s/check", s.limiterURL)
+		if idempotentReplay {
+			checkURL += "?idempotent_replay=true"
+		}
 		req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, checkURL, nil)
 	}
 	if err != nil {
@@ -355,6 +487,36 @@ func main() {
 		upstream, limiter, internalAPIKey, metricsAPIKey,
 		ttl, failOpen, defaultLimit, useHierarchical, allowQueryUserID, debug, allowedPaths,
 	)
+
+	if os.Getenv("ENABLE_IDEMPOTENCY") == "true" {
+		redisAddr := os.Getenv("REDIS_ADDR")
+		if redisAddr == "" {
+			log.Fatal("ENABLE_IDEMPOTENCY=true requires REDIS_ADDR")
+		}
+		rdb := redisclient.NewClient(redisAddr, os.Getenv("REDIS_PASSWORD"))
+		if err := redisclient.Ping(rdb); err != nil {
+			log.Fatalf("Idempotency Redis unreachable at %s: %v", redisAddr, err)
+		}
+		idemCfg := idempotency.DefaultConfig()
+		idemCfg.FailOpen = os.Getenv("IDEMPOTENCY_FAIL_OPEN") == "true"
+		if raw := os.Getenv("IDEMPOTENCY_LOCK_TTL_MS"); raw != "" {
+			if ms, err := strconv.ParseInt(raw, 10, 64); err == nil && ms > 0 {
+				idemCfg.LockTTL = ms
+			}
+		}
+		if raw := os.Getenv("IDEMPOTENCY_COMPLETED_TTL_MS"); raw != "" {
+			if ms, err := strconv.ParseInt(raw, 10, 64); err == nil && ms > 0 {
+				idemCfg.CompletedTTL = ms
+			}
+		}
+		if raw := os.Getenv("IDEMPOTENCY_MAX_BODY_BYTES"); raw != "" {
+			if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+				idemCfg.MaxBodyBytes = n
+			}
+		}
+		sidecar.SetIdempotency(idempotency.NewRedisStore(rdb, idemCfg), idemCfg)
+		log.Printf("Idempotency layer enabled (lock_ttl=%dms, completed_ttl=%dms)", idemCfg.LockTTL, idemCfg.CompletedTTL)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", auth.RequireAPIKey(metricsKey, promhttp.Handler().ServeHTTP))

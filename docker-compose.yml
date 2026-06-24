@@ -84,11 +84,19 @@ services:
       - ALLOW_QUERY_USER_ID=true
       - ALLOWED_PATHS=/
       - DEBUG=false
+      - ENABLE_IDEMPOTENCY=true
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
+      - IDEMPOTENCY_LOCK_TTL_MS=60000
+      - IDEMPOTENCY_COMPLETED_TTL_MS=86400000
+      - IDEMPOTENCY_FAIL_OPEN=false
     ports:
       - "9090:9090"
     networks:
       - rate-net
     depends_on:
+      redis:
+        condition: service_healthy
       limiter:
         condition: service_healthy
       demo:

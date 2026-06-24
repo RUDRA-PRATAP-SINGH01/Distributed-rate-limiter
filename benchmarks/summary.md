@@ -37,6 +37,20 @@ Example format once metrics are collected:
 | Hot-key (5,000 target) | 4,940 | 99.9% rejected (429) | Correct — 10 users hammered |
 | Enforcement (500/min) | 8 | 98% rejected (429) | Correct — ~10 allowed per window |
 
+## Idempotency Tests
+
+See [idempotency/summary.md](idempotency/summary.md).
+
+| Test | Scenario | Result |
+|------|----------|--------|
+| Race | 100 VUs, 1 key | 1 upstream execution, p95 14.9 ms |
+| Replay | 50 VUs, 30s | ~942 RPS, p95 5.7 ms, 0% errors |
+
+```bash
+k6 run benchmarks/idempotency/idempotency-race.js
+k6 run benchmarks/idempotency/idempotency-replay.js
+```
+
 ## Graphs
 
 | Graph | Shows |
