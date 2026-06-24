@@ -12,6 +12,8 @@ type Config struct {
 	Retention      time.Duration
 	MaxEvents      int64
 	Async          bool
+	QueueSize      int
+	Workers        int
 }
 
 func DefaultConfig() Config {
@@ -20,6 +22,8 @@ func DefaultConfig() Config {
 		Retention: 7 * 24 * time.Hour,
 		MaxEvents: 100_000,
 		Async:     true,
+		QueueSize: 4096,
+		Workers:   4,
 	}
 }
 
@@ -40,6 +44,16 @@ func LoadConfigFromEnv() Config {
 	}
 	if os.Getenv("AUDIT_ASYNC") == "false" {
 		cfg.Async = false
+	}
+	if raw := os.Getenv("AUDIT_QUEUE_SIZE"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			cfg.QueueSize = n
+		}
+	}
+	if raw := os.Getenv("AUDIT_WORKERS"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			cfg.Workers = n
+		}
 	}
 	return cfg
 }

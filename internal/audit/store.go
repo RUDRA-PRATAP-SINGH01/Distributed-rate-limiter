@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
@@ -18,9 +19,11 @@ var appendLua string
 
 // Store persists audit events in Redis with searchable indexes.
 type Store struct {
-	rdb    redis.UniversalClient
-	cfg    Config
-	script *redis.Script
+	rdb     redis.UniversalClient
+	cfg     Config
+	script  *redis.Script
+	queue   chan RecordInput
+	started sync.Once
 }
 
 func NewStore(rdb redis.UniversalClient, cfg Config) *Store {
@@ -31,22 +34,41 @@ func NewStore(rdb redis.UniversalClient, cfg Config) *Store {
 	}
 }
 
+func (s *Store) startWorkers() {
+	s.started.Do(func() {
+		if !s.cfg.Async || s.cfg.Workers <= 0 {
+			return
+		}
+		s.queue = make(chan RecordInput, s.cfg.QueueSize)
+		for i := 0; i < s.cfg.Workers; i++ {
+			go func() {
+				for in := range s.queue {
+					_, _ = s.record(context.Background(), in)
+				}
+			}()
+		}
+	})
+}
+
 func eventKey(id string) string       { return fmt.Sprintf("audit:event:%s", id) }
 func tsIndexKey() string              { return "audit:idx:ts" }
 func tenantIndexKey(tenant string) string { return fmt.Sprintf("audit:idx:tenant:%s", tenant) }
 func userIndexKey(user string) string     { return fmt.Sprintf("audit:idx:user:%s", user) }
 func requestIndexKey(req string) string   { return fmt.Sprintf("audit:idx:req:%s", req) }
 
-// Record appends one audit event (optionally async).
+// Record appends one audit event (optionally via bounded worker pool).
 func (s *Store) Record(ctx context.Context, in RecordInput) (Event, error) {
 	if !s.cfg.Enabled {
 		return Event{}, nil
 	}
 	if s.cfg.Async {
-		go func() {
-			_, _ = s.record(context.Background(), in)
-		}()
-		return Event{Decision: in.Decision, RequestID: in.RequestID}, nil
+		s.startWorkers()
+		select {
+		case s.queue <- in:
+			return Event{Decision: in.Decision, RequestID: in.RequestID}, nil
+		default:
+			metrics.RecordAuditDropped()
+		}
 	}
 	return s.record(ctx, in)
 }

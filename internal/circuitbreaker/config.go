@@ -16,6 +16,7 @@ type Config struct {
 	HalfOpenMaxProbes       int64
 	HalfOpenSuccessRequired int64
 	EMAAlpha                float64
+	FailOpen                bool // when true, Redis errors allow traffic (dangerous)
 }
 
 func DefaultConfig() Config {
@@ -60,6 +61,9 @@ func LoadConfigFromEnv() Config {
 	}
 	if v := parseFloatEnv("CB_EMA_ALPHA", cfg.EMAAlpha); v > 0 && v <= 1 {
 		cfg.EMAAlpha = v
+	}
+	if os.Getenv("CIRCUIT_FAIL_OPEN") == "true" {
+		cfg.FailOpen = true
 	}
 	return cfg
 }

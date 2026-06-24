@@ -109,4 +109,5 @@ func NowMillis() int64 {
 type Store interface {
 	Claim(ctx context.Context, scope, key, requestHash string) (*ClaimResponse, error)
 	Complete(ctx context.Context, req CompleteRequest) error
+	Fail(ctx context.Context, req FailRequest) error
 }

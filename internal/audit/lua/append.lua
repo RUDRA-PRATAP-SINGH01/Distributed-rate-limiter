@@ -29,6 +29,23 @@ local max_events = tonumber(ARGV[11])
 local ttl_sec = math.ceil(retention_ms / 1000)
 if ttl_sec < 60 then ttl_sec = 60 end
 
+local function purge_event(eid)
+  local evkey = 'audit:event:' .. eid
+  local t = redis.call('HGET', evkey, 'tenant_id')
+  local u = redis.call('HGET', evkey, 'user_id')
+  local rid = redis.call('HGET', evkey, 'request_id')
+  if t and t ~= '' then
+    redis.call('ZREM', 'audit:idx:tenant:' .. t, eid)
+  end
+  if u and u ~= '' then
+    redis.call('ZREM', 'audit:idx:user:' .. u, eid)
+  end
+  if rid and rid ~= '' then
+    redis.call('DEL', 'audit:idx:req:' .. rid)
+  end
+  redis.call('DEL', evkey)
+end
+
 redis.call('HSET', event_key,
   'id', id,
   'request_id', request_id,
@@ -52,7 +69,7 @@ end
 local cutoff = ts - retention_ms
 local stale = redis.call('ZRANGEBYSCORE', ts_idx, 0, cutoff)
 for _, eid in ipairs(stale) do
-  redis.call('DEL', 'audit:event:' .. eid)
+  purge_event(eid)
 end
 if #stale > 0 then
   redis.call('ZREMRANGEBYSCORE', ts_idx, 0, cutoff)
@@ -61,7 +78,7 @@ end
 while redis.call('ZCARD', ts_idx) > max_events do
   local old = redis.call('ZRANGE', ts_idx, 0, 0)
   if #old == 0 then break end
-  redis.call('DEL', 'audit:event:' .. old[1])
+  purge_event(old[1])
   redis.call('ZREM', ts_idx, old[1])
 end
 

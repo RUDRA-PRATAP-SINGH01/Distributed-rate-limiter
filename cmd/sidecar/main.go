@@ -214,7 +214,7 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 	}
 
 	scope := idempotency.BuildScope(s.tenantID(r), userID)
-	reqHash := idempotency.Fingerprint(r.Method, r.URL.Path, body)
+	reqHash := idempotency.Fingerprint(r.Method, r.URL.Path, r.URL.RawQuery, body)
 
 	claim, err := s.idempotency.Claim(ctx, scope, idemKey, reqHash)
 	if err != nil {
@@ -247,17 +247,19 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 	if err != nil {
 		log.Printf("Rate limiter error (idempotent): %v", err)
 		if s.failOpen {
-			s.forwardIdempotent(w, r, scope, idemKey)
+			s.forwardIdempotent(w, r, scope, idemKey, claim.FenceToken)
 			return
 		}
-		s.completeIdempotent(r.Context(), scope, idemKey, http.StatusServiceUnavailable, map[string]string{"Content-Type": "application/json"}, []byte(`{"error":"Rate limiter unavailable"}`))
+		_ = s.failIdempotent(r.Context(), scope, idemKey, claim.FenceToken, http.StatusServiceUnavailable,
+			map[string]string{"Content-Type": "application/json"},
+			[]byte(`{"error":"Rate limiter unavailable"}`))
 		http.Error(w, "Rate limiter unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
 	if !result.allowed {
 		body := []byte(`{"error":"Too many requests"}`)
-		_ = s.completeIdempotent(r.Context(), scope, idemKey, http.StatusTooManyRequests, map[string]string{"Content-Type": "application/json"}, body)
+		_ = s.completeIdempotent(r.Context(), scope, idemKey, claim.FenceToken, http.StatusTooManyRequests, map[string]string{"Content-Type": "application/json"}, body)
 		w.Header().Set("X-Idempotency-Status", "created")
 		s.writeDenial(w, result.limit, result.remaining, result.retryAfter)
 		return
@@ -265,15 +267,18 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 
 	idempotency.SetCreatedHeader(w)
 	s.writeRateLimitHeaders(w, result.limit, result.remaining)
-	s.forwardIdempotent(w, r, scope, idemKey)
+	s.forwardIdempotent(w, r, scope, idemKey, claim.FenceToken)
 }
 
-func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scope, idemKey string) {
+func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scope, idemKey, fenceToken string) {
 	capturer := idempotency.NewResponseCapturer(w)
 	if s.router != nil {
 		body, _ := readRequestBody(r)
 		if err := s.router.Forward(r.Context(), capturer, r, body); err != nil {
 			log.Printf("Routing forward error: %v", err)
+			_ = s.failIdempotent(r.Context(), scope, idemKey, fenceToken, http.StatusServiceUnavailable,
+				map[string]string{"Content-Type": "application/json"},
+				[]byte(`{"error":"all gateways unavailable"}`))
 			http.Error(w, "all gateways unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -283,13 +288,25 @@ func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scop
 		s.proxy.ServeHTTP(capturer, r)
 	}
 	captured := capturer.Commit()
-	_ = s.completeIdempotent(r.Context(), scope, idemKey, captured.StatusCode, captured.Headers, captured.Body)
+	_ = s.completeIdempotent(r.Context(), scope, idemKey, fenceToken, captured.StatusCode, captured.Headers, captured.Body)
 }
 
-func (s *Sidecar) completeIdempotent(ctx context.Context, scope, key string, status int, headers map[string]string, body []byte) error {
+func (s *Sidecar) completeIdempotent(ctx context.Context, scope, key, fenceToken string, status int, headers map[string]string, body []byte) error {
 	return s.idempotency.Complete(ctx, idempotency.CompleteRequest{
 		Scope:      scope,
 		Key:        key,
+		FenceToken: fenceToken,
+		HTTPStatus: status,
+		Headers:    headers,
+		Body:       body,
+	})
+}
+
+func (s *Sidecar) failIdempotent(ctx context.Context, scope, key, fenceToken string, status int, headers map[string]string, body []byte) error {
+	return s.idempotency.Fail(ctx, idempotency.FailRequest{
+		Scope:      scope,
+		Key:        key,
+		FenceToken: fenceToken,
 		HTTPStatus: status,
 		Headers:    headers,
 		Body:       body,
@@ -382,15 +399,6 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 	)
 	defer span.End()
 
-	if s.limiterCircuit != nil {
-		allow, err := s.limiterCircuit.Allow(ctx, circuitbreaker.TargetCentralLimiter)
-		if err == nil && !allow.Allowed {
-			err := fmt.Errorf("central limiter circuit %s", allow.State)
-			telemetry.RecordError(span, err)
-			return limitResult{}, err
-		}
-	}
-
 	start := time.Now()
 	var (
 		callErr    error
@@ -403,6 +411,21 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 		input := circuitbreaker.ClassifyHTTP(callErr, statusCode, time.Since(start), s.limiterCircuit.Config().LatencyThresholdMs)
 		_ = s.limiterCircuit.Record(ctx, circuitbreaker.TargetCentralLimiter, input)
 	}()
+
+	if s.limiterCircuit != nil {
+		allow, err := s.limiterCircuit.Allow(ctx, circuitbreaker.TargetCentralLimiter)
+		if err != nil {
+			if !s.limiterCircuit.Config().FailOpen {
+				callErr = err
+				telemetry.RecordError(span, err)
+				return limitResult{}, fmt.Errorf("circuit breaker unavailable: %w", err)
+			}
+		} else if !allow.Allowed {
+			err := fmt.Errorf("central limiter circuit %s", allow.State)
+			telemetry.RecordError(span, err)
+			return limitResult{}, err
+		}
+	}
 
 	var req *http.Request
 	var err error

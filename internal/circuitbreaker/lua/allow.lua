@@ -33,7 +33,10 @@ end
 if state == 'half_open' then
   local probes = tonumber(redis.call('HGET', key, 'half_open_calls') or '0')
   if probes >= max_probes then
-    return {0, 2, 0}
+    -- Probe budget exhausted without recovery — reopen so cooldown can retry.
+    redis.call('HSET', key, 'state', 'open', 'opened_at', now,
+      'half_open_calls', 0, 'half_open_successes', 0)
+    return {0, 1, 0}
   end
   redis.call('HINCRBY', key, 'half_open_calls', 1)
   return {1, 2, max_probes - probes - 1}

@@ -93,6 +93,7 @@ func (s *RedisStore) enrichCircuit(ctx context.Context, st *GatewayState) {
 	}
 	snap, err := s.breaker.GetState(ctx, st.ID)
 	if err != nil {
+		st.CircuitState = circuitbreaker.StateUnknown
 		return
 	}
 	st.CircuitState = snap.State

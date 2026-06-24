@@ -11,6 +11,7 @@ import (
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -21,12 +22,16 @@ var claimLua string
 //go:embed lua/complete.lua
 var completeLua string
 
+//go:embed lua/fail.lua
+var failLua string
+
 // RedisStore is the production idempotency backend.
 type RedisStore struct {
-	rdb           redis.UniversalClient
-	cfg           Config
-	claimScript   *redis.Script
+	rdb            redis.UniversalClient
+	cfg            Config
+	claimScript    *redis.Script
 	completeScript *redis.Script
+	failScript     *redis.Script
 }
 
 func NewRedisStore(rdb redis.UniversalClient, cfg Config) *RedisStore {
@@ -35,6 +40,7 @@ func NewRedisStore(rdb redis.UniversalClient, cfg Config) *RedisStore {
 		cfg:            cfg,
 		claimScript:    redis.NewScript(claimLua),
 		completeScript: redis.NewScript(completeLua),
+		failScript:     redis.NewScript(failLua),
 	}
 }
 
@@ -57,12 +63,14 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 	defer span.End()
 
 	start := time.Now()
+	fenceToken := uuid.New().String()
 	result, err := s.claimScript.Run(ctx, s.rdb,
 		[]string{metaKey(scope, key), bodyKey(scope, key)},
 		requestHash,
 		NowMillis(),
 		s.cfg.LockTTL,
 		s.cfg.CompletedTTL,
+		fenceToken,
 	).Result()
 	metrics.RecordIdempotencyRedisDuration(time.Since(start).Seconds())
 
@@ -81,7 +89,11 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 	switch code {
 	case 1:
 		metrics.RecordIdempotencyClaim("claimed")
-		return &ClaimResponse{Result: ResultClaimed}, nil
+		token := fenceToken
+		if len(values) > 1 {
+			token = luaString(values[1])
+		}
+		return &ClaimResponse{Result: ResultClaimed, FenceToken: token}, nil
 	case 2:
 		metrics.RecordIdempotencyClaim("replay")
 		status := int(luaInt(values[1]))
@@ -129,6 +141,7 @@ func (s *RedisStore) Complete(ctx context.Context, req CompleteRequest) error {
 		s.cfg.CompletedTTL,
 		NowMillis(),
 		s.cfg.InlineThreshold,
+		req.FenceToken,
 	).Result()
 	metrics.RecordIdempotencyRedisDuration(time.Since(start).Seconds())
 
@@ -138,10 +151,46 @@ func (s *RedisStore) Complete(ctx context.Context, req CompleteRequest) error {
 
 	values, ok := result.([]interface{})
 	if !ok || len(values) < 1 || luaInt(values[0]) != 1 {
-		return fmt.Errorf("%w: complete transition failed", ErrStoreUnavailable)
+		return ErrStaleFence
 	}
 
 	metrics.RecordIdempotencyComplete()
+	return nil
+}
+
+func (s *RedisStore) Fail(ctx context.Context, req FailRequest) error {
+	if int64(len(req.Body)) > s.cfg.MaxBodyBytes {
+		return ErrBodyTooLarge
+	}
+
+	ctx, span := telemetry.StartSpan(ctx, "idempotency.fail",
+		attribute.String("idempotency.key", req.Key),
+		attribute.Int("http.status_code", req.HTTPStatus),
+	)
+	defer span.End()
+
+	start := time.Now()
+	result, err := s.failScript.Run(ctx, s.rdb,
+		[]string{metaKey(req.Scope, req.Key)},
+		req.HTTPStatus,
+		encodeHeaders(req.Headers),
+		string(req.Body),
+		s.cfg.CompletedTTL,
+		NowMillis(),
+		req.FenceToken,
+	).Result()
+	metrics.RecordIdempotencyRedisDuration(time.Since(start).Seconds())
+
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+	}
+
+	values, ok := result.([]interface{})
+	if !ok || len(values) < 1 || luaInt(values[0]) != 1 {
+		return ErrStaleFence
+	}
+
+	metrics.RecordIdempotencyClaim("failed")
 	return nil
 }
 

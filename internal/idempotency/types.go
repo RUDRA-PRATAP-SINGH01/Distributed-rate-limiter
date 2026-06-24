@@ -23,6 +23,7 @@ const (
 // ClaimResponse is returned by Store.Claim.
 type ClaimResponse struct {
 	Result       ClaimResult
+	FenceToken   string // owner token; required for Complete/Fail after claim
 	RetryAfterMs int64
 	HTTPStatus   int
 	Headers      map[string]string
@@ -33,6 +34,17 @@ type ClaimResponse struct {
 type CompleteRequest struct {
 	Scope      string
 	Key        string
+	FenceToken string
+	HTTPStatus int
+	Headers    map[string]string
+	Body       []byte
+}
+
+// FailRequest marks a processing record as failed (retryable).
+type FailRequest struct {
+	Scope      string
+	Key        string
+	FenceToken string
 	HTTPStatus int
 	Headers    map[string]string
 	Body       []byte

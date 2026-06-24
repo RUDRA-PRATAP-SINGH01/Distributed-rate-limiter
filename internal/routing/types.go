@@ -51,7 +51,7 @@ func (s GatewayState) Selectable(cfg Config) bool {
 	if !s.Enabled {
 		return false
 	}
-	if s.CircuitState == circuitbreaker.StateOpen {
+	if s.CircuitState == circuitbreaker.StateOpen || s.CircuitState == circuitbreaker.StateUnknown {
 		return false
 	}
 	if s.HealthScore < cfg.MinHealthScore {

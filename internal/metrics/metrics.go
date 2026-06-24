@@ -210,6 +210,13 @@ var (
 		},
 	)
 
+	AuditDropped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "audit_dropped_total",
+			Help: "Audit events dropped when async queue is full",
+		},
+	)
+
 	RedisFailoverTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "redis_failover_reconnects_total",
@@ -328,6 +335,10 @@ func RecordAuditAppend(seconds float64, ok bool) {
 
 func RecordAuditSearch(seconds float64) {
 	AuditSearchDuration.Observe(seconds)
+}
+
+func RecordAuditDropped() {
+	AuditDropped.Inc()
 }
 
 func RecordRedisFailoverReconnect() {

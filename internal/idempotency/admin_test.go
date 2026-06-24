@@ -9,12 +9,12 @@ func TestGetRecordAndDelete(t *testing.T) {
 	store, _ := setupTestStore(t)
 	ctx := context.Background()
 
-	_, err := store.Claim(ctx, "scope-adm", "key-adm", "hash-1")
-	if err != nil {
+	claim, err := store.Claim(ctx, "scope-adm", "key-adm", "hash-1")
+	if err != nil || claim.Result != ResultClaimed {
 		t.Fatal(err)
 	}
 	err = store.Complete(ctx, CompleteRequest{
-		Scope: "scope-adm", Key: "key-adm", HTTPStatus: 200,
+		Scope: "scope-adm", Key: "key-adm", FenceToken: claim.FenceToken, HTTPStatus: 200,
 		Headers: map[string]string{"Content-Type": "application/json"},
 		Body:    []byte(`{"ok":true}`),
 	})

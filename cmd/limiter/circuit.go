@@ -17,7 +17,17 @@ func checkRedisCircuit(ctx context.Context, w http.ResponseWriter, span trace.Sp
 	}
 	allow, err := redisCircuit.Allow(ctx, circuitbreaker.TargetRedis)
 	if err != nil {
-		return true
+		if redisCircuit.Config().FailOpen {
+			return true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error":         "Rate limiter unavailable",
+			"circuit_state": "unavailable",
+		})
+		telemetry.SetHTTPStatus(span, http.StatusServiceUnavailable)
+		return false
 	}
 	if allow.Allowed {
 		return true

@@ -5,9 +5,10 @@
 -- ARGV[2] = now_ms
 -- ARGV[3] = lock_ttl_ms
 -- ARGV[4] = completed_ttl_ms (unused on claim, reserved)
+-- ARGV[5] = fence_token (new owner token; stale holders cannot complete)
 --
 -- Returns:
---   {1}                         -> claimed (new or reclaimed)
+--   {1, fence_token}            -> claimed (new or reclaimed)
 --   {2, http_status, headers, body} -> replay cached response
 --   {3, retry_after_ms}         -> in progress
 --   {0}                         -> hash mismatch
@@ -17,6 +18,7 @@ local body_key = KEYS[2]
 local req_hash = ARGV[1]
 local now_ms = tonumber(ARGV[2])
 local lock_ttl_ms = tonumber(ARGV[3])
+local fence_token = ARGV[5]
 
 local status = redis.call('HGET', meta_key, 'status')
 
@@ -25,10 +27,11 @@ if not status then
     'status', 'processing',
     'request_hash', req_hash,
     'created_at', now_ms,
-    'lock_until', now_ms + lock_ttl_ms
+    'lock_until', now_ms + lock_ttl_ms,
+    'fence_token', fence_token
   )
   redis.call('PEXPIRE', meta_key, lock_ttl_ms)
-  return {1}
+  return {1, fence_token}
 end
 
 local existing_hash = redis.call('HGET', meta_key, 'request_hash')
@@ -56,10 +59,11 @@ if status == 'processing' then
   end
   redis.call('HSET', meta_key,
     'status', 'processing',
-    'lock_until', now_ms + lock_ttl_ms
+    'lock_until', now_ms + lock_ttl_ms,
+    'fence_token', fence_token
   )
   redis.call('PEXPIRE', meta_key, lock_ttl_ms)
-  return {1}
+  return {1, fence_token}
 end
 
 return {0}

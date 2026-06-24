@@ -554,6 +554,7 @@ stateDiagram-v2
     [*] --> Missing: Key not in Redis
     Missing --> Processing: SET claim (Lua)
     Processing --> Completed: Upstream OK + store response
+    Processing --> Failed: Upstream/routing error (retryable)
     Processing --> InProgress409: Concurrent duplicate
     Processing --> Expired: Lock TTL elapsed
     Expired --> Processing: Reclaim lease
@@ -582,7 +583,19 @@ Content-Type: application/json
 | In progress | `409 Conflict` | `in_progress` | No | No |
 | Same key, different body | `422` | `hash_mismatch` | No | No |
 
-Request bodies are fingerprinted with `SHA256(method + path + body)` so a key cannot be reused with a different payload.
+Request bodies are fingerprinted with `SHA256(method + path + sorted_query + body)` so a key cannot be reused with a different payload (including differing query strings).
+
+### Fencing Tokens (Lease Safety)
+
+Each claim assigns a **fence token** stored in Redis. Only the holder of the matching token may call `complete` or `fail`. If a processing lease expires and another worker reclaims the key, the stale worker's completion is rejected — preventing duplicate payment execution after ownership transfer.
+
+```
+Worker A claims key     → fence_token = A
+Lease expires
+Worker B reclaims key   → fence_token = B
+Worker A completes      → rejected (stale fence)
+Worker B completes      → accepted
+```
 
 ### Redis Schema
 
@@ -743,6 +756,7 @@ cb:{target}                    HASH
 | `CB_HALF_OPEN_MAX_PROBES` | `3` | Max concurrent probes |
 | `CB_HALF_OPEN_SUCCESS_REQUIRED` | `2` | Successes needed to close |
 | `CB_EMA_ALPHA` | `0.2` | Latency EMA smoothing |
+| `CIRCUIT_FAIL_OPEN` | `false` | When `true`, Redis errors on Allow bypass the breaker (dangerous) |
 | `ENABLE_CIRCUIT_BREAKER` | `true` | Sidecar limiter CB (needs `REDIS_ADDR`) |
 
 ### Observability
@@ -777,6 +791,7 @@ curl -X DELETE -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/circui
 | **Redis-backed state** | Consistent across fleet | Extra Redis round-trip per Allow/Record |
 | **Lua atomicity** | No race on transitions | Script maintenance |
 | **Half-open probes** | Gradual recovery | Brief risk window on flaky deps |
+| **Fail-closed default** | Outage does not amplify traffic | Set `CIRCUIT_FAIL_OPEN=true` only for dev |
 | **Sliding window decay** | Adapts to changing traffic | Can delay trip on intermittent errors |
 | **Separate targets** | Isolated blast radius | More keys to monitor |
 
@@ -933,13 +948,13 @@ curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/audit/stats
 
 | Aspect | Approach |
 |--------|----------|
-| **Write path** | Async append (default) — no hot-path blocking |
-| **Indexes** | ZSET per dimension — O(log N) range queries |
+| **Write path** | Bounded worker pool (default 4 workers, 4096 queue) — no per-event goroutines |
+| **Indexes** | ZSET per dimension — O(log N) range queries; trim purges all indexes |
 | **Retention** | TTL on events + ZSET trim in Lua |
 | **Cardinality** | Per-tenant/user indexes grow with tenants — shard by tenant prefix at scale |
 | **Replay** | Returns stored decision + hint; does not re-execute Lua |
 
-Env: `ENABLE_AUDIT_TRAIL`, `AUDIT_RETENTION_HOURS`, `AUDIT_MAX_EVENTS`, `AUDIT_ASYNC`
+Env: `ENABLE_AUDIT_TRAIL`, `AUDIT_RETENTION_HOURS`, `AUDIT_MAX_EVENTS`, `AUDIT_ASYNC`, `AUDIT_QUEUE_SIZE`, `AUDIT_WORKERS`
 
 See `internal/audit/` and `benchmarks/audit/summary.md`.
 
@@ -1174,7 +1189,18 @@ flowchart LR
 | Query user ID | `ALLOW_QUERY_USER_ID` | `false` | Allow `?user_id=` (dev only) |
 | TLS | `TLS_CERT_FILE`, `TLS_KEY_FILE` | empty | Enable HTTPS |
 
-**Identity resolution:** Production traffic should arrive with `X-User-ID` set by an upstream auth gateway (JWT validated before the sidecar). Query string `user_id` is opt-in for local testing only — clients can spoof it.
+**Identity resolution:** In this demo, `X-User-ID` is accepted from the client for simplicity. **In production, identity must be derived from verified JWT claims** (or equivalent mTLS/service identity) at an upstream auth gateway — never trust client-supplied user headers on a payment path. Query string `user_id` is opt-in for local testing only and can be spoofed.
+
+### Production Hardening Checklist
+
+| Concern | Demo behavior | Production expectation |
+|---------|---------------|------------------------|
+| **User identity** | `X-User-ID` header from client | JWT validated upstream; sidecar receives trusted identity |
+| **Admin API (`:8082`)** | Exposed in docker-compose | Bind to internal network only (VPC, loopback, or mesh); never public internet |
+| **Circuit breaker** | Fail-closed on Redis errors | Opt into `CIRCUIT_FAIL_OPEN=true` only in dev |
+| **Gateway routing** | Unknown circuit state → non-selectable | Traffic not routed to nodes with unreadable breaker state |
+
+The admin port (`8082`) carries override CRUD, idempotency purge, circuit reset, and audit search. Treat it like a control plane: firewall, private subnet, and separate API key rotation — full RBAC is out of scope for this project but network isolation is not optional in production.
 
 ---
 

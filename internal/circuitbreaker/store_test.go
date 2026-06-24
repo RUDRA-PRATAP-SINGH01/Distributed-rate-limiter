@@ -123,6 +123,36 @@ func TestTimeoutTripsCircuit(t *testing.T) {
 	}
 }
 
+func TestHalfOpenProbeExhaustionTransitionsToOpen(t *testing.T) {
+	b, _ := setupCB(t)
+	ctx := context.Background()
+	target := "gw-exhaust"
+
+	for i := 0; i < 6; i++ {
+		_, _ = b.Allow(ctx, target)
+		_ = b.Record(ctx, target, RecordInput{Kind: OutcomeFailure, Latency: 1 * time.Millisecond})
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	cfg := b.Config()
+	for i := int64(0); i < cfg.HalfOpenMaxProbes; i++ {
+		allow, err := b.Allow(ctx, target)
+		if err != nil || !allow.Allowed {
+			t.Fatalf("probe %d: expected allowed in half-open, got %+v %v", i, allow, err)
+		}
+		// Do not record — probes consumed without outcomes.
+	}
+
+	allow, _ := b.Allow(ctx, target)
+	if allow.Allowed {
+		t.Fatal("expected rejection after probe budget exhausted")
+	}
+	st, _ := b.GetState(ctx, target)
+	if st.State != StateOpen {
+		t.Fatalf("expected transition back to open, got %s", st.State)
+	}
+}
+
 func TestReset(t *testing.T) {
 	b, _ := setupCB(t)
 	ctx := context.Background()

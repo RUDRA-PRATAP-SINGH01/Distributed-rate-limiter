@@ -77,6 +77,24 @@ func TestReplay(t *testing.T) {
 	}
 }
 
+func TestIndexCleanupOnTrim(t *testing.T) {
+	store, _ := setupAudit(t)
+	ctx := context.Background()
+	store.cfg.MaxEvents = 1
+
+	ev1, _ := store.record(ctx, RecordInput{TenantID: "t1", UserID: "u1", Decision: DecisionAllowed, Reason: "a", Handler: "check"})
+	_, _ = store.record(ctx, RecordInput{TenantID: "t1", UserID: "u1", Decision: DecisionAllowed, Reason: "b", Handler: "check"})
+
+	tenantN, _ := store.rdb.ZCard(ctx, tenantIndexKey("t1")).Result()
+	userN, _ := store.rdb.ZCard(ctx, userIndexKey("u1")).Result()
+	if tenantN != 1 || userN != 1 {
+		t.Fatalf("indexes should have one member after trim: tenant=%d user=%d", tenantN, userN)
+	}
+	if got, _ := store.Get(ctx, ev1.ID); got != nil {
+		t.Fatal("oldest event should be purged from tenant/user indexes")
+	}
+}
+
 func TestRetentionTrim(t *testing.T) {
 	store, mr := setupAudit(t)
 	ctx := context.Background()

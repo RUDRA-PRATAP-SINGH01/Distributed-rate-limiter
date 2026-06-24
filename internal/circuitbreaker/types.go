@@ -9,6 +9,7 @@ const (
 	StateClosed   State = "closed"
 	StateOpen     State = "open"
 	StateHalfOpen State = "half_open"
+	StateUnknown  State = "unknown" // breaker state unavailable — treat as non-selectable
 )
 
 // OutcomeKind classifies one dependency call result.
@@ -67,6 +68,8 @@ func (s State) Code() int {
 		return 1
 	case StateHalfOpen:
 		return 2
+	case StateUnknown:
+		return 3
 	default:
 		return 0
 	}
