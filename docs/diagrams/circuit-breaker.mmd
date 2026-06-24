@@ -1,0 +1,19 @@
+stateDiagram-v2
+    [*] --> closed
+
+    closed --> open: failure_rate ≥ threshold after min_samples<br/>OR consecutive_failures<br/>OR latency_spike + EMA<br/>OR timeout_rate
+
+    open --> half_open: cooldown elapsed (allow.lua)
+
+    half_open --> closed: half_open_successes ≥ required
+    half_open --> open: probe failure (record.lua)<br/>OR probe budget exhausted (allow.lua)
+
+    note right of open
+        Fast-fail: allow returns 0
+        No dependency calls
+    end note
+
+    note right of half_open
+        Limited probes: half_open_calls < max_probes
+        Each Allow increments probe counter
+    end note

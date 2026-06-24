@@ -1,0 +1,47 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant SC as Sidecar :9090
+    participant ID as Idempotency (Redis)
+    participant L as Limiter :8080
+    participant R as Redis
+    participant GW as Gateway / Upstream
+
+    C->>SC: HTTP request (+ X-User-ID, optional Idempotency-Key)
+    SC->>SC: Resolve identity, path allowlist
+
+    alt Mutating + Idempotency-Key
+        SC->>ID: claim.lua (fingerprint, fence_token)
+        alt Replay (completed/failed)
+            ID-->>SC: cached response
+            SC-->>C: replay (no upstream)
+        else In progress
+            ID-->>SC: 409 Conflict
+            SC-->>C: Retry-After
+        else Claimed
+            SC->>L: GET /check or /check_hierarchical
+            L->>R: token_bucket / hierarchical.lua
+            R-->>L: allow/deny + remaining
+            L-->>SC: 200 allowed or 429 denied
+            alt Denied
+                SC->>ID: complete.lua (429 body)
+                SC-->>C: 429 Too Many Requests
+            else Allowed
+                SC->>GW: Forward (routing or reverse proxy)
+                GW-->>SC: upstream response
+                SC->>ID: complete.lua (fence_token match)
+                SC-->>C: upstream status + X-Idempotency-Status: created
+            end
+        end
+    else Normal path
+        SC->>SC: Denial cache lookup (allowed never cached)
+        SC->>L: GET /check
+        L->>R: Lua atomic check
+        alt Allowed
+            SC->>GW: Forward
+            GW-->>SC: response
+            SC-->>C: proxied response
+        else Denied (cacheable)
+            SC-->>C: 429
+        end
+    end

@@ -1,0 +1,18 @@
+stateDiagram-v2
+    [*] --> Missing: key not in Redis
+    Missing --> Processing: claim.lua SET processing + fence_token
+
+    Processing --> Completed: complete.lua (matching fence)
+    Processing --> Failed: fail.lua (matching fence)
+    Processing --> InProgress409: concurrent claim, lock_until valid
+    Processing --> Expired: lock_until elapsed
+
+    Expired --> Processing: reclaim with NEW fence_token
+
+    Completed --> Completed: replay claim.lua code 2
+    Failed --> Failed: replay claim.lua code 2
+
+    note right of Processing
+        Stale worker with old fence_token
+        cannot complete or fail after reclaim
+    end note
