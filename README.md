@@ -1,7 +1,5 @@
 # Distributed Rate Limiter
 
-![System Architecture](docs/diagrams/architecture_diagram.png)
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, production-grade idempotency layer, OpenTelemetry tracing (Jaeger), runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
@@ -1585,9 +1583,6 @@ chmod +x scripts/start.sh scripts/demo/*.sh scripts/*.sh
 ```
 
 The startup script will automatically spin up the entire Docker Compose network, wait for health probes to pass, and spawn a constant background load of 15 RPS. This ensures the preloaded Grafana dashboard begins rendering metrics immediately.
-
-Here is the complete start-to-chaos telemetry pipeline in action:
-![Live Grafana Telemetry Demo](docs/diagrams/dashboard_demo.webp)
 
 ---
 
