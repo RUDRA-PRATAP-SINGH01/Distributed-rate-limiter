@@ -3,6 +3,7 @@ rate-limiter.exe
 *.exe
 __pycache__/
 *.pyc
+.git-rewrite/
 benchmarks/*/results/*.json
 benchmarks/*/results/
 benchmarks/idempotency/results/
