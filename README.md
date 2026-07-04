@@ -1538,6 +1538,12 @@ Once healthy, open these interfaces in your browser:
 - Jaeger UI (Traces): [http://localhost:16686/](http://localhost:16686/)
 - Prometheus UI: [http://localhost:9091/](http://localhost:9091/)
 
+#### Dashboard Telemetry Panels
+
+![Distributed Rate Limiter Fleet Dashboard](docs/diagrams/dashboard_screenshot_1.png)
+
+![Subsystem and Idempotency Metrics](docs/diagrams/dashboard_screenshot_2.png)
+
 ---
 
 ### Interactive Telemetry Missions
