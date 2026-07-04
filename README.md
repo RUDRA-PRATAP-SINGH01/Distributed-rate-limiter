@@ -1,5 +1,7 @@
 # Distributed Rate Limiter
 
+![System Architecture](docs/diagrams/architecture_diagram.png)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, production-grade idempotency layer, OpenTelemetry tracing (Jaeger), runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
@@ -1573,7 +1575,7 @@ Execute the bootstrapper matching your OS from the repository root:
 
 #### Linux / macOS
 ```bash
-chmod +x scripts/start.sh scripts/demo/*.sh
+chmod +x scripts/start.sh scripts/demo/*.sh scripts/*.sh
 ./scripts/start.sh
 ```
 
@@ -1583,6 +1585,9 @@ chmod +x scripts/start.sh scripts/demo/*.sh
 ```
 
 The startup script will automatically spin up the entire Docker Compose network, wait for health probes to pass, and spawn a constant background load of 15 RPS. This ensures the preloaded Grafana dashboard begins rendering metrics immediately.
+
+Here is the complete start-to-chaos telemetry pipeline in action:
+![Live Grafana Telemetry Demo](docs/diagrams/dashboard_demo.webp)
 
 ---
 
@@ -1596,25 +1601,97 @@ Once healthy, open these interfaces in your browser:
 
 ---
 
-### 🛠️ Run Demo Scenarios
+### 🎮 Interactive Telemetry Missions
 
-We have created 9 zero-config test cases that execute load scripts, database failures, and concurrency race conditions in real-time. Look at `scripts/demo/` and run them:
+Test the system like a platform engineer with these interactive missions. Monitor the Grafana dashboard to verify correct execution.
 
-1. **Normal Traffic**: `./scripts/demo/normal.sh` (or `normal.ps1`)
-2. **Rate Limiting**: Flood single user `rudra` to see instant HTTP 429 blocks
-3. **Multi-User Quota**: `@("alice","bob")` tenant isolation tests
-4. **Redis Outage**: `./scripts/demo/redis-down.sh` to trigger circuit breakers and 100% error rates
-5. **Redis Recovery**: `./scripts/demo/redis-up.sh` to see automatic service restoration
-6. **System Saturation**: `./scripts/demo/saturation.sh` to push system capacity limit
-7. **Hot Key Abuse**: `./scripts/demo/hotkey.sh` to spam Redis Lua engine
-8. **Idempotency Races**: `./scripts/demo/idempotency.sh` to observe concurrency locks, replay cache hits, and claims
-9. **Infrastructure Chaos**: `./scripts/demo/chaos.sh` injecting active network/db faults under load
+#### 🎯 Mission 1: Normal Baseline Traffic
+* **Run Command**:
+  - POSIX: `./scripts/demo/normal.sh`
+  - Windows: `.\scripts\demo\normal.ps1`
+* **Observe**:
+  - **Allowed Requests** line series rising to 50 RPS.
+  - **Rejected Requests (429)** staying at exactly 0.
+  - **P95 Latency** remaining under 10 ms (typically 1-3 ms).
+* **Expected Output**:
+  - `Allowed` increases (Spikes to 50)
+  - `Rejected (429)` stays at 0 (Flatline)
+  - `Latency` P95 < 10ms, P99 < 20ms
+
+#### 🎯 Mission 2: Key Exhaustion & Abuse (Hot Key)
+* **Run Command**:
+  - POSIX: `./scripts/demo/hotkey.sh`
+  - Windows: `.\scripts\demo\hotkey.ps1`
+* **Observe**:
+  - **Rejected Requests (429)** climbing rapidly.
+  - **Quota Block Rate (%)** gauge spiking to > 90%.
+  - **Lua Executions/sec** and CPU metrics rising under massive concurrent evaluation.
+* **Expected Output**:
+  - `Allowed` decreases (Allowed 200 flatlines at quota capacity)
+  - `Rejected` increases (Rejected 429 area spikes to 4900+ RPS)
+  - `Lua` increases (EvalSHA executions spike to 5000/s)
+  - `Circuit` CLOSED (Breaker remains closed for allowed users)
+
+#### 🎯 Mission 3: Database Outage & Resiliency
+* **Run Command (Crash)**:
+  - POSIX: `./scripts/demo/redis-down.sh`
+  - Windows: `.\scripts\demo\redis-down.ps1`
+* **Observe**:
+  - **Redis Storage Health** indicator turning bright **RED (DOWN)**.
+  - **System Error Rate** spiking immediately to 100%.
+  - **Circuit Breaker State** panel showing the transition to **OPEN**.
+* **Expected Outage Output**:
+  - `Redis` DOWN
+  - `Errors` increases (Spikes to 100%, limiter returns 503 Service Unavailable)
+  - `Circuit` OPEN (State code 1)
+* **Run Command (Recovery)**:
+  - POSIX: `./scripts/demo/redis-up.sh`
+  - Windows: `.\scripts\demo\redis-up.ps1`
+* **Expected Recovery Output**:
+  - `Redis` UP
+  - `Errors` decreases (Drops back to 0%)
+  - `Circuit` Transitions: `OPEN` (1) --> `HALF-OPEN` (2) --> `CLOSED` (0)
+
+#### 🎯 Mission 4: Stripe Concurrency & Idempotency Races
+* **Run Command**:
+  - POSIX: `./scripts/demo/idempotency.sh`
+  - Windows: `.\scripts\demo\idempotency.ps1`
+* **Observe**:
+  - **Idempotency Claims** showing exactly 1 successful claim.
+  - **Replay Cache Hits** showing successful repeats.
+  - **In-Progress Conflicts (HTTP 409)** indicating concurrent lock blocks.
+* **Expected Output**:
+  - `Claims` Exactly 1 Claimed (result="claimed")
+  - `Replays` 50+ served from cache (result="replay")
+  - `In Progress` 40+ concurrent lock waits blocked (result="in_progress")
+
+---
 
 For detailed explanations, read:
 - **Getting Started Guide**: [docs/demo/getting-started.md](docs/demo/getting-started.md)
 - **Dashboard Tour**: [docs/demo/dashboard-tour.md](docs/demo/dashboard-tour.md)
 - **Interactive Scenarios**: [docs/demo/demo-scenarios.md](docs/demo/demo-scenarios.md)
+- **Architecture Walkthrough**: [docs/architecture/walkthrough.md](docs/architecture/walkthrough.md)
 
+---
+
+## Benchmarking & Verification
+
+### One-Click Performance Testing
+
+Execute our benchmark utility script to run the load test suites, compile results, and automatically regenerate matplotlib graph charts:
+
+#### Linux / macOS
+```bash
+./scripts/benchmark.sh
+```
+
+#### Windows (PowerShell)
+```powershell
+.\scripts\benchmark.ps1
+```
+
+*Note: Add the `--full` option to execute the full multi-hour system saturation sweep.*
 
 ---
 
@@ -1630,36 +1707,6 @@ With race detector:
 
 ```bash
 go test -race ./...
-```
-
-### Quick Load Test
-
-```bash
-k6 run benchmarks/load-test.js
-```
-
-This hits the sidecar with 50 VUs for 40 seconds. It treats 429 as success and only flags real failures (503, timeouts).
-
-### Full Benchmark Suite
-
-```bash
-# Requires docker compose up and k6 installed
-.\benchmarks\run-all.ps1
-```
-
-This runs throughput, saturation, hot-key, and enforcement tests with docker stats collection, then generates parsed tables and graphs.
-
-Saturation sweep only:
-
-```bash
-.\benchmarks\run-saturation.ps1
-```
-
-Parse existing results:
-
-```bash
-python benchmarks/parse-results.py
-python benchmarks/graphs/generate-graphs.py
 ```
 
 ### Chaos Tests
