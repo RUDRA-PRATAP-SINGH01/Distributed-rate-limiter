@@ -1565,114 +1565,56 @@ The root README covers setup, APIs, and quick starts. The [`docs/`](docs/README.
 
 ## Running the System
 
-### Prerequisites
+For a production-grade, zero-configuration Developer Experience, use our one-command startup script:
 
-- Go 1.25+
-- Docker and Docker Compose
-- k6 (for load testing)
-- Python 3 + matplotlib (for benchmark graphs)
+### 🚀 One-Command Quick Start
 
-### Option 1: Docker Compose (Recommended)
+Execute the bootstrapper matching your OS from the repository root:
 
-This starts Redis, Jaeger, limiter, sidecar, and demo backend together.
-
+#### Linux / macOS
 ```bash
-git clone https://github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter.git
-cd Distributed-Rate-Limiter
-
-docker compose up -d --build
+chmod +x scripts/start.sh scripts/demo/*.sh
+./scripts/start.sh
 ```
 
-Wait for all containers to be healthy:
-
-```bash
-docker compose ps
+#### Windows (PowerShell)
+```powershell
+.\scripts\start.ps1
 ```
 
-Verify the full path works:
+The startup script will automatically spin up the entire Docker Compose network, wait for health probes to pass, and spawn a constant background load of 15 RPS. This ensures the preloaded Grafana dashboard begins rendering metrics immediately.
 
-```bash
-# Should return backend response
-curl "http://localhost:9090/check?user_id=alice"
+---
 
-# Check limiter health
-curl http://localhost:8080/health
+### 🖥️ Observability Console URLs
 
-# Check Prometheus metrics
-curl http://localhost:8080/metrics
+Once healthy, open these interfaces in your browser:
 
-# View distributed traces (Jaeger UI)
-# http://localhost:16686
-```
+- **Grafana Dashboard**: [http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet](http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet) (Pre-configured datasource and auto-loaded panels)
+- **Jaeger UI (Traces)**: [http://localhost:16686/](http://localhost:16686/)
+- **Prometheus UI**: [http://localhost:9091/](http://localhost:9091/)
 
-Shutdown and clean up:
+---
 
-```bash
-docker compose down -v
-```
+### 🛠️ Run Demo Scenarios
 
-### Option 2: Run Locally (Without Docker)
+We have created 9 zero-config test cases that execute load scripts, database failures, and concurrency race conditions in real-time. Look at `scripts/demo/` and run them:
 
-You need a running Redis instance.
+1. **Normal Traffic**: `./scripts/demo/normal.sh` (or `normal.ps1`)
+2. **Rate Limiting**: Flood single user `rudra` to see instant HTTP 429 blocks
+3. **Multi-User Quota**: `@("alice","bob")` tenant isolation tests
+4. **Redis Outage**: `./scripts/demo/redis-down.sh` to trigger circuit breakers and 100% error rates
+5. **Redis Recovery**: `./scripts/demo/redis-up.sh` to see automatic service restoration
+6. **System Saturation**: `./scripts/demo/saturation.sh` to push system capacity limit
+7. **Hot Key Abuse**: `./scripts/demo/hotkey.sh` to spam Redis Lua engine
+8. **Idempotency Races**: `./scripts/demo/idempotency.sh` to observe concurrency locks, replay cache hits, and claims
+9. **Infrastructure Chaos**: `./scripts/demo/chaos.sh` injecting active network/db faults under load
 
-```bash
-# Terminal 1: Redis (or use an existing instance)
-docker run -d -p 6379:6379 redis:7-alpine redis-server --requirepass dev-redis-password
+For detailed explanations, read:
+- **Getting Started Guide**: [docs/demo/getting-started.md](docs/demo/getting-started.md)
+- **Dashboard Tour**: [docs/demo/dashboard-tour.md](docs/demo/dashboard-tour.md)
+- **Interactive Scenarios**: [docs/demo/demo-scenarios.md](docs/demo/demo-scenarios.md)
 
-# Terminal 2: Limiter
-export REDIS_ADDR=localhost:6379
-export REDIS_PASSWORD=dev-redis-password
-export INTERNAL_API_KEY=dev-internal-key
-export ALLOW_QUERY_USER_ID=true
-go run ./cmd/limiter
-
-# Terminal 3: Demo backend
-go run ./cmd/demo-backend
-
-# Terminal 4: Sidecar
-export UPSTREAM_URL=http://localhost:8081
-export RATE_LIMITER_URL=http://localhost:8080
-export INTERNAL_API_KEY=dev-internal-key
-export ALLOW_QUERY_USER_ID=true
-go run ./cmd/sidecar
-```
-
-Test:
-
-```bash
-curl "http://localhost:9090/check?user_id=alice"
-```
-
-### Environment Variables Reference
-
-**Limiter:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `8080` | Main HTTP port |
-| `REDIS_ADDR` | `localhost:6379` | Redis address |
-| `REDIS_PASSWORD` | empty | Redis password |
-| `ALGORITHM` | `token` | `token` or `sliding` |
-| `CAPACITY` | `10` | Max tokens/requests |
-| `REFILL_RATE` | `1.0` | Tokens per second (token bucket) |
-| `WINDOW_SEC` | `60` | Window size (sliding window) |
-| `ENABLE_HIERARCHICAL` | `true` | Enable `/check_hierarchical` |
-| `INTERNAL_API_KEY` | empty | Protects `/check` endpoints |
-| `ADMIN_API_KEY` | `dev-key-change-in-prod` | Protects admin API |
-| `ADMIN_PORT` | `8082` | Admin API port |
-
-**Sidecar:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `9090` | Sidecar HTTP port |
-| `UPSTREAM_URL` | `http://localhost:8081` | Backend to proxy to |
-| `RATE_LIMITER_URL` | `http://localhost:8080` | Central limiter URL |
-| `INTERNAL_API_KEY` | empty | Key sent to limiter |
-| `FAIL_OPEN` | `false` | Allow requests when limiter is down |
-| `USE_HIERARCHICAL` | `false` | Use hierarchical checks |
-| `ALLOWED_PATHS` | `/` | Comma-separated path allowlist |
-| `ALLOW_QUERY_USER_ID` | `false` | Accept `?user_id=` param |
 
 ---
 

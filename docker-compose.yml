@@ -56,6 +56,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      jaeger:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
@@ -161,6 +163,8 @@ services:
         condition: service_started
       gateway-c:
         condition: service_started
+      jaeger:
+        condition: service_started
 
   jaeger:
     image: jaegertracing/all-in-one:1.58
@@ -193,7 +197,7 @@ services:
     ports:
       - "9091:9090"
     volumes:
-      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     networks:
       - rate-net
     command:
