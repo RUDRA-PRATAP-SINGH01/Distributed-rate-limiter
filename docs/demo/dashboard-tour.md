@@ -21,6 +21,8 @@ This row answers the question: *Is the system healthy, and is it actively rate l
   - Tracks non-limiter exceptions (e.g., HTTP 5xx) to monitor server failures.
   - *PromQL*: `sum(rate(routing_outcomes_total{result="error"}[1m])) / sum(rate(routing_outcomes_total[1m])) * 100`.
 
+![Traffic Overview and Health KPIs](../../docs/diagrams/dashboard_top.png)
+
 ---
 
 ### 2. Redis & Lua Subsystem Telemetry
@@ -32,6 +34,8 @@ Since the rate-limiting calculations run as atomic Lua scripts directly on the s
 * **Subsystem Lua Latency (P99)**: Sub-millisecond latency tracking split by Go package targets (sliding window core, token bucket, idempotency, routing).
 * **Memory Fragmentation & Connections**: Connected client sockets and memory fragmentation ratio.
 
+![Redis and Lua Subsystem Telemetry](../../docs/diagrams/dashboard_middle.png)
+
 ---
 
 ### 3. Stripe-Style Idempotency Metrics
@@ -42,6 +46,8 @@ Idempotency is a critical concurrency feature. This dedicated section monitors t
 * **In-Progress Conflicts (HTTP 409)**: Requests blocked because a concurrent call for the identical key is already actively executing on a worker.
   - *PromQL*: `sum(rate(idempotency_claims_total{result="in_progress"}[1m]))`.
 * **Hash Mismatches**: Replays rejected because the request payload was modified since the original call.
+
+![Stripe-Style Idempotency Metrics](../../docs/diagrams/dashboard_bottom.png)
 
 ---
 

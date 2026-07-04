@@ -55,67 +55,11 @@ I needed a limiter that:
 
 ---
 
-## How I Arrived at This Architecture
+## Architecture Evolution
 
-This was not designed upfront. I iterated through several approaches and kept what worked.
+This project evolved iteratively through multiple designs—from basic in-memory limiters to a sidecar-proxy and central limiter architecture utilizing atomic Redis Lua evaluations.
 
-### Iteration 1: In-memory limiter in the app
-
-I started with token bucket and sliding window implementations in pure Go (`cmd/limiter/token_bucket.go`, `cmd/limiter/sliding_window.go`). These are still in the repo as reference implementations with unit tests. They proved the algorithm logic but obviously cannot scale horizontally.
-
-```
-App Instance A          App Instance B
-┌──────────────┐        ┌──────────────┐
-│ map[user]int │        │ map[user]int │   ← independent state
-└──────────────┘        └──────────────┘
-```
-
-**Decision:** Move state out of the application.
-
-### Iteration 2: Redis without atomicity
-
-I moved counters to Redis using plain `GET`/`SET`. Under load testing, this immediately showed lost updates — exactly the race condition I was trying to fix, just moved to a different layer.
-
-**Decision:** All quota mutations must be atomic. Redis Lua scripts execute atomically on the server — no other command can interleave.
-
-### Iteration 3: Central limiter service
-
-Instead of embedding Redis calls in every application, I split the system into:
-
-- A **central limiter** that owns all quota logic and Redis state
-- A **sidecar proxy** that sits in front of each application and calls the limiter
-
-This mirrors how Envoy/Istio sidecars work. The backend never imports rate limiting code.
-
-```
-Before (embedded):  Client → App (limiter + business logic)
-After (sidecar):    Client → Sidecar → Limiter → Redis
-                              ↓ (if allowed)
-                           Backend
-```
-
-**Decision:** Sidecar pattern. Separation of concerns. Backend stays clean.
-
-### Iteration 4: Hierarchical limits
-
-Flat per-user limits were not enough. In a multi-tenant SaaS, you need:
-
-- A global ceiling so the platform never melts
-- Per-tenant caps so one customer cannot consume everything
-- Per-user caps for abuse prevention
-- Per-endpoint caps because `/export` costs 100x more than `/health`
-
-I implemented all four levels in a single Lua script so the check-and-decrement is still atomic.
-
-### Iteration 5: Denial-only caching
-
-I initially cached both allowed and denied responses in the sidecar. A reviewer (and my own load tests) showed the bug: if you cache "allowed", an attacker can freeze their quota at "allowed" forever without consuming tokens.
-
-**Decision:** Only cache 429 denials. Allowed requests always re-check Redis.
-
-### Iteration 6: Benchmarks and chaos tests
-
-Once the core system worked, I built a k6 benchmark suite to find the actual saturation point of the system, and chaos scripts to verify behavior when Redis dies or the network partitions. Numbers without failure testing are not useful.
+Read the full engineering journal: [docs/deep-dives/architecture-evolution.md](docs/deep-dives/architecture-evolution.md)
 
 ---
 
