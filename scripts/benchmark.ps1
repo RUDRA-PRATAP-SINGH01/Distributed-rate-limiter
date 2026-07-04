@@ -24,7 +24,7 @@ if ($Full) {
     python benchmarks/graphs/generate-graphs.py
     
     Write-Host "==========================================================" -ForegroundColor Cyan
-    Write-Host "🎉 Benchmark validation completed successfully!" -ForegroundColor Green
+    Write-Host "Benchmark validation completed successfully!" -ForegroundColor Green
     Write-Host "Graphs generated in: benchmarks/graphs/" -ForegroundColor Green
     Write-Host "==========================================================" -ForegroundColor Cyan
 }

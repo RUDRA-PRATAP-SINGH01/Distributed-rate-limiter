@@ -33,7 +33,7 @@ else
   echo "Regenerating Matplotlib performance graphs..."
   python benchmarks/graphs/generate-graphs.py
   echo "=========================================================="
-  echo "🎉 Benchmark validation completed successfully!"
+  echo "Benchmark validation completed successfully!"
   echo "Graphs generated in: benchmarks/graphs/"
   echo "=========================================================="
 fi

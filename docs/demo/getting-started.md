@@ -4,7 +4,7 @@ Welcome to the Distributed Rate Limiter developer playground! This repository ha
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
 Before starting, ensure you have the following installed on your host system:
 1. **Docker Desktop** (with Compose v2 support)
@@ -13,7 +13,7 @@ Before starting, ensure you have the following installed on your host system:
 
 ---
 
-## 🚀 Quick Start (One-Command Boot)
+## Quick Start (One-Command Boot)
 
 Run the bootstrapper script matching your operating system from the repository root:
 
@@ -35,7 +35,7 @@ The script will automatically:
 
 ---
 
-## 🔗 Port & Endpoint Mappings
+## Port and Endpoint Mappings
 
 Once running, the stack exposes the following web interfaces and service portals:
 
@@ -50,6 +50,6 @@ Once running, the stack exposes the following web interfaces and service portals
 
 ---
 
-## 🛠️ Run Demo Scenarios
+## Run Demo Scenarios
 
 Interactive load scenarios are located in `scripts/demo/`. Refer to [demo-scenarios.md](./demo-scenarios.md) to start validating system resilience.

@@ -1569,7 +1569,7 @@ The root README covers setup, APIs, and quick starts. The [`docs/`](docs/README.
 
 For a production-grade, zero-configuration Developer Experience, use our one-command startup script:
 
-### 🚀 One-Command Quick Start
+### One-Command Quick Start
 
 Execute the bootstrapper matching your OS from the repository root:
 
@@ -1591,91 +1591,36 @@ Here is the complete start-to-chaos telemetry pipeline in action:
 
 ---
 
-### 🖥️ Observability Console URLs
+### Observability Console URLs
 
 Once healthy, open these interfaces in your browser:
 
-- **Grafana Dashboard**: [http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet](http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet) (Pre-configured datasource and auto-loaded panels)
-- **Jaeger UI (Traces)**: [http://localhost:16686/](http://localhost:16686/)
-- **Prometheus UI**: [http://localhost:9091/](http://localhost:9091/)
+- Grafana Dashboard: [http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet](http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet) (Pre-configured datasource and auto-loaded panels)
+- Jaeger UI (Traces): [http://localhost:16686/](http://localhost:16686/)
+- Prometheus UI: [http://localhost:9091/](http://localhost:9091/)
 
 ---
 
-### 🎮 Interactive Telemetry Missions
+### Interactive Telemetry Missions
 
-Test the system like a platform engineer with these interactive missions. Monitor the Grafana dashboard to verify correct execution.
+We have created several pre-configured verification tests to validate system boundaries. For detailed steps, commands, and expected metric states, refer to the [Telemetry Verification and Demo Scenarios Guide](docs/demo/demo-scenarios.md).
 
-#### 🎯 Mission 1: Normal Baseline Traffic
-* **Run Command**:
-  - POSIX: `./scripts/demo/normal.sh`
-  - Windows: `.\scripts\demo\normal.ps1`
-* **Observe**:
-  - **Allowed Requests** line series rising to 50 RPS.
-  - **Rejected Requests (429)** staying at exactly 0.
-  - **P95 Latency** remaining under 10 ms (typically 1-3 ms).
-* **Expected Output**:
-  - `Allowed` increases (Spikes to 50)
-  - `Rejected (429)` stays at 0 (Flatline)
-  - `Latency` P95 < 10ms, P99 < 20ms
+- Mission 1: Normal Baseline Traffic (verify steady 50 RPS metrics)
+- Mission 2: Key Exhaustion and Abuse (observe hot-key throttling)
+- Mission 3: Database Outage and Resiliency (simulate Redis crash and recovery)
+- Mission 4: Stripe Concurrency and Idempotency Races (verify concurrent locking and replays)
+- Mission 5: Multi-User Quota Isolation (validate tenant boundary limits)
+- Mission 6: System Saturation Sweep (analyze peak load processing limits)
+- Mission 7: Infrastructure Chaos Simulation (simulate dynamic gateway and Redis crashes)
 
-#### 🎯 Mission 2: Key Exhaustion & Abuse (Hot Key)
-* **Run Command**:
-  - POSIX: `./scripts/demo/hotkey.sh`
-  - Windows: `.\scripts\demo\hotkey.ps1`
-* **Observe**:
-  - **Rejected Requests (429)** climbing rapidly.
-  - **Quota Block Rate (%)** gauge spiking to > 90%.
-  - **Lua Executions/sec** and CPU metrics rising under massive concurrent evaluation.
-* **Expected Output**:
-  - `Allowed` decreases (Allowed 200 flatlines at quota capacity)
-  - `Rejected` increases (Rejected 429 area spikes to 4900+ RPS)
-  - `Lua` increases (EvalSHA executions spike to 5000/s)
-  - `Circuit` CLOSED (Breaker remains closed for allowed users)
-
-#### 🎯 Mission 3: Database Outage & Resiliency
-* **Run Command (Crash)**:
-  - POSIX: `./scripts/demo/redis-down.sh`
-  - Windows: `.\scripts\demo\redis-down.ps1`
-* **Observe**:
-  - **Redis Storage Health** indicator turning bright **RED (DOWN)**.
-  - **System Error Rate** spiking immediately to 100%.
-  - **Circuit Breaker State** panel showing the transition to **OPEN**.
-* **Expected Outage Output**:
-  - `Redis` DOWN
-  - `Errors` increases (Spikes to 100%, limiter returns 503 Service Unavailable)
-  - `Circuit` OPEN (State code 1)
-* **Run Command (Recovery)**:
-  - POSIX: `./scripts/demo/redis-up.sh`
-  - Windows: `.\scripts\demo\redis-up.ps1`
-* **Expected Recovery Output**:
-  - `Redis` UP
-  - `Errors` decreases (Drops back to 0%)
-  - `Circuit` Transitions: `OPEN` (1) --> `HALF-OPEN` (2) --> `CLOSED` (0)
-
-#### 🎯 Mission 4: Stripe Concurrency & Idempotency Races
-* **Run Command**:
-  - POSIX: `./scripts/demo/idempotency.sh`
-  - Windows: `.\scripts\demo\idempotency.ps1`
-* **Observe**:
-  - **Idempotency Claims** showing exactly 1 successful claim.
-  - **Replay Cache Hits** showing successful repeats.
-  - **In-Progress Conflicts (HTTP 409)** indicating concurrent lock blocks.
-* **Expected Output**:
-  - `Claims` Exactly 1 Claimed (result="claimed")
-  - `Replays` 50+ served from cache (result="replay")
-  - `In Progress` 40+ concurrent lock waits blocked (result="in_progress")
+For details, read:
+- Getting Started Guide: [docs/demo/getting-started.md](docs/demo/getting-started.md)
+- Dashboard Tour: [docs/demo/dashboard-tour.md](docs/demo/dashboard-tour.md)
+- Architecture Walkthrough: [docs/architecture/walkthrough.md](docs/architecture/walkthrough.md)
 
 ---
 
-For detailed explanations, read:
-- **Getting Started Guide**: [docs/demo/getting-started.md](docs/demo/getting-started.md)
-- **Dashboard Tour**: [docs/demo/dashboard-tour.md](docs/demo/dashboard-tour.md)
-- **Interactive Scenarios**: [docs/demo/demo-scenarios.md](docs/demo/demo-scenarios.md)
-- **Architecture Walkthrough**: [docs/architecture/walkthrough.md](docs/architecture/walkthrough.md)
-
----
-
-## Benchmarking & Verification
+## Benchmarking and Verification
 
 ### One-Click Performance Testing
 
@@ -1691,7 +1636,7 @@ Execute our benchmark utility script to run the load test suites, compile result
 .\scripts\benchmark.ps1
 ```
 
-*Note: Add the `--full` option to execute the full multi-hour system saturation sweep.*
+Note: Add the --full option to execute the full multi-hour system saturation sweep.
 
 ---
 

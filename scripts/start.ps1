@@ -53,7 +53,7 @@ Start-Process -FilePath "k6" -ArgumentList "run benchmarks/demo/background-traff
 Write-Host "Background traffic loader launched successfully in a hidden window." -ForegroundColor Green
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "🎉 System is UP and running!" -ForegroundColor Green
+Write-Host "System is UP and running!" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Cyan
 Write-Host "Access endpoints:"
 Write-Host "  - Sidecar Proxy:       http://localhost:9090/"

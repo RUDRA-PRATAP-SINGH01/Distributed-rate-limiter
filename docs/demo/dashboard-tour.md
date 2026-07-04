@@ -4,7 +4,7 @@ The pre-provisioned dashboard **Distributed Rate Limiter Fleet** is designed to 
 
 ---
 
-## 🖥️ Dashboard Rows and Layout
+## Dashboard Rows and Layout
 
 The dashboard is split logically into 4 primary focus areas:
 

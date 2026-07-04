@@ -4,7 +4,7 @@ This document traces the path of an incoming HTTP request through each layer of 
 
 ---
 
-## 🗺️ High-Level Request Flow Map
+## High-Level Request Flow Map
 
 ```
 [ Client ]
@@ -27,7 +27,7 @@ This document traces the path of an incoming HTTP request through each layer of 
 
 ---
 
-## 🔍 Detailed Lifecycle Breakdown
+## Detailed Lifecycle Breakdown
 
 ### 1. Hop 1: Client ──► Sidecar Proxy (Ingress)
 - **Protocol**: HTTP/1.1 or HTTP/2 over TCP.

@@ -48,7 +48,7 @@ nohup k6 run benchmarks/demo/background-traffic.js > /dev/null 2>&1 &
 echo "Background traffic loader launched successfully in background."
 
 echo "=========================================================="
-echo "🎉 System is UP and running!"
+echo "System is UP and running!"
 echo "=========================================================="
 echo "Access endpoints:"
 echo "  - Sidecar Proxy:       http://localhost:9090/"
