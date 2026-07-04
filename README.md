@@ -2,6 +2,10 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+![Distributed Rate Limiter Fleet Dashboard](docs/diagrams/dashboard_screenshot_1.png)
+
+![Subsystem and Idempotency Metrics](docs/diagrams/dashboard_screenshot_2.png)
+
 A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, production-grade idempotency layer, OpenTelemetry tracing (Jaeger), runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
 
 I started this project because I wanted to understand how production systems like API gateways and SaaS platforms actually enforce limits at scale, not just a single-process token bucket, but something that stays correct when you have ten sidecars and a million requests per minute.
@@ -1537,13 +1541,6 @@ Once healthy, open these interfaces in your browser:
 - Grafana Dashboard: [http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet](http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet) (Pre-configured datasource and auto-loaded panels)
 - Jaeger UI (Traces): [http://localhost:16686/](http://localhost:16686/)
 - Prometheus UI: [http://localhost:9091/](http://localhost:9091/)
-
-#### Dashboard Telemetry Panels
-
-![Distributed Rate Limiter Fleet Dashboard](docs/diagrams/dashboard_screenshot_1.png)
-
-![Subsystem and Idempotency Metrics](docs/diagrams/dashboard_screenshot_2.png)
-
 ---
 
 ### Interactive Telemetry Missions
