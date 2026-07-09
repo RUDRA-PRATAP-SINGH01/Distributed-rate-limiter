@@ -4,11 +4,11 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"log"
 	"time"
 
-	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -49,13 +49,22 @@ func (tb *RedisAtomicTokenBucket) Allow(ctx context.Context, userID string) (boo
 	metrics.RecordRedisDuration(time.Since(start).Seconds())
 
 	if err != nil {
-		log.Printf("token bucket lua error for %s: %v", userID, err)
+		logging.Error(ctx, "token bucket lua script failed",
+			"component", "limiter",
+			"operation", "redis_lua",
+			"algorithm", "token_bucket",
+			"error", err,
+		)
 		return false, 0, err
 	}
 
 	values, ok := result.([]interface{})
 	if !ok || len(values) < 2 {
-		log.Printf("token bucket lua unexpected result for %s: %#v", userID, result)
+		logging.Error(ctx, "token bucket lua returned unexpected result",
+			"component", "limiter",
+			"operation", "redis_lua",
+			"algorithm", "token_bucket",
+		)
 		return false, 0, fmt.Errorf("unexpected lua result")
 	}
 

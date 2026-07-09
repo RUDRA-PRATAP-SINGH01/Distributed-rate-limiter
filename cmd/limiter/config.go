@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strconv"
+
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 )
 
 // Config holds all runtime tuning knobs. Everything is env-driven so the same binary
@@ -94,20 +95,26 @@ func LoadConfig() Config {
 	}
 
 	if cfg.StrictSecurity && cfg.InternalAPIKey == "" {
-		log.Fatal("STRICT_SECURITY=true requires INTERNAL_API_KEY")
+		logging.Fatal("STRICT_SECURITY=true requires INTERNAL_API_KEY")
 	}
 	if cfg.StrictSecurity && cfg.EnableAdminAPI && (cfg.AdminAPIKey == "" || cfg.AdminAPIKey == "dev-key-change-in-prod") {
-		log.Fatal("STRICT_SECURITY=true requires a non-default ADMIN_API_KEY when ADMIN_API is enabled")
+		logging.Fatal("STRICT_SECURITY=true requires a non-default ADMIN_API_KEY when ADMIN_API is enabled")
 	}
 	if cfg.InternalAPIKey == "" {
-		log.Printf("WARNING: INTERNAL_API_KEY is not set — /check endpoints are reachable without authentication (dev only)")
+		logging.Warn(nil, "INTERNAL_API_KEY is not set — /check endpoints are reachable without authentication",
+			"component", "limiter",
+			"security_dev_mode", true,
+		)
 	}
 	if cfg.EnableAdminAPI && (cfg.AdminAPIKey == "" || cfg.AdminAPIKey == "dev-key-change-in-prod") {
-		log.Printf("WARNING: ADMIN_API_KEY is using default dev placeholder — admin endpoints are insecure")
+		logging.Warn(nil, "ADMIN_API_KEY is using default dev placeholder — admin endpoints are insecure",
+			"component", "limiter",
+			"security_dev_mode", true,
+		)
 	}
 	if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
-			log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable TLS")
+			logging.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable TLS")
 		}
 	}
 
@@ -130,10 +137,13 @@ func mustParseIntEnv(key, defaultVal string, strict bool) int {
 	if err != nil || value <= 0 {
 		msg := fmt.Sprintf("invalid %s=%q", key, raw)
 		if strict {
-			log.Fatalf("FATAL: %s", msg)
+			logging.Fatal(msg)
 		}
 		if raw != defaultVal {
-			log.Printf("WARNING: %s, using default %s", msg, defaultVal)
+			logging.Warn(nil, msg+", using default "+defaultVal,
+				"component", "limiter",
+				"config_key", key,
+			)
 		}
 		return defaultInt
 	}
@@ -147,10 +157,13 @@ func mustParseFloatEnv(key, defaultVal string, strict bool) float64 {
 	if err != nil || value <= 0 {
 		msg := fmt.Sprintf("invalid %s=%q", key, raw)
 		if strict {
-			log.Fatalf("FATAL: %s", msg)
+			logging.Fatal(msg)
 		}
 		if raw != defaultVal {
-			log.Printf("WARNING: %s, using default %s", msg, defaultVal)
+			logging.Warn(nil, msg+", using default "+defaultVal,
+				"component", "limiter",
+				"config_key", key,
+			)
 		}
 		return defaultFloat
 	}

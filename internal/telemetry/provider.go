@@ -3,7 +3,7 @@ package telemetry
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -24,7 +24,7 @@ type Shutdown func(context.Context) error
 // Returns a shutdown function that must be called after HTTP drains complete.
 func Init(ctx context.Context, cfg Config) (Shutdown, error) {
 	if !cfg.Enabled {
-		log.Printf("OpenTelemetry disabled for %s", cfg.ServiceName)
+		slog.Info("OpenTelemetry disabled", "component", "telemetry", "service", cfg.ServiceName)
 		return func(context.Context) error { return nil }, nil
 	}
 
@@ -64,8 +64,12 @@ func Init(ctx context.Context, cfg Config) (Shutdown, error) {
 		propagation.Baggage{},
 	))
 
-	log.Printf("OpenTelemetry enabled: service=%s endpoint=%s sample=%.2f",
-		cfg.ServiceName, cfg.OTLPEndpoint, cfg.SampleRatio)
+	slog.Info("OpenTelemetry enabled",
+		"component", "telemetry",
+		"service", cfg.ServiceName,
+		"endpoint", cfg.OTLPEndpoint,
+		"sample_ratio", cfg.SampleRatio,
+	)
 
 	return func(shutdownCtx context.Context) error {
 		if shutdownCtx == nil {
@@ -80,7 +84,7 @@ func Init(ctx context.Context, cfg Config) (Shutdown, error) {
 		if err := tp.Shutdown(ctx); err != nil {
 			return fmt.Errorf("otel shutdown: %w", err)
 		}
-		log.Printf("OpenTelemetry shutdown complete for %s", cfg.ServiceName)
+		slog.Info("OpenTelemetry shutdown complete", "component", "telemetry", "service", cfg.ServiceName)
 		return nil
 	}, nil
 }

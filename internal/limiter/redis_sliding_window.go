@@ -4,11 +4,11 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"log"
 	"time"
 
-	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -57,13 +57,22 @@ func (rw *RedisSlidingWindow) Allow(ctx context.Context, userID string) (bool, i
 	metrics.RecordRedisDuration(time.Since(start).Seconds())
 
 	if err != nil {
-		log.Printf("sliding window lua error for %s: %v", userID, err)
+		logging.Error(ctx, "sliding window lua script failed",
+			"component", "limiter",
+			"operation", "redis_lua",
+			"algorithm", "sliding_window",
+			"error", err,
+		)
 		return false, 0, err
 	}
 
 	values, ok := result.([]interface{})
 	if !ok || len(values) < 2 {
-		log.Printf("sliding window lua unexpected result for %s: %#v", userID, result)
+		logging.Error(ctx, "sliding window lua returned unexpected result",
+			"component", "limiter",
+			"operation", "redis_lua",
+			"algorithm", "sliding_window",
+		)
 		return false, 0, fmt.Errorf("unexpected lua result")
 	}
 

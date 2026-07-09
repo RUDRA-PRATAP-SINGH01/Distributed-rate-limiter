@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -29,6 +28,7 @@ import (
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/idempotency"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/routing"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
@@ -61,7 +61,6 @@ type Sidecar struct {
 	metricsAPIKey    string
 	allowQueryUserID bool
 	allowedPaths     []string
-	debug            bool
 	cache            sync.Map
 	limitFlight      singleflight.Group
 	ttl              time.Duration
@@ -81,12 +80,12 @@ func NewSidecar(
 	ttl time.Duration,
 	failOpen bool,
 	defaultLimit int,
-	useHierarchical, allowQueryUserID, debug bool,
+	useHierarchical, allowQueryUserID bool,
 	allowedPaths []string,
 ) *Sidecar {
 	target, err := url.Parse(upstream)
 	if err != nil {
-		log.Fatalf("invalid UPSTREAM_URL: %v", err)
+		logging.Fatal("invalid UPSTREAM_URL", "error", err)
 	}
 	return &Sidecar{
 		upstreamURL:      upstream,
@@ -95,7 +94,6 @@ func NewSidecar(
 		metricsAPIKey:    metricsAPIKey,
 		allowQueryUserID: allowQueryUserID,
 		allowedPaths:     allowedPaths,
-		debug:            debug,
 		ttl:              ttl,
 		failOpen:         failOpen,
 		defaultLimit:     defaultLimit,
@@ -155,12 +153,6 @@ func (s *Sidecar) tenantID(r *http.Request) string {
 		return tenantID
 	}
 	return "default"
-}
-
-func (s *Sidecar) debugf(format string, args ...interface{}) {
-	if s.debug {
-		log.Printf("[DEBUG] "+format, args...)
-	}
 }
 
 // cacheKey scopes entries by tenant + user + path in hierarchical mode so
@@ -243,9 +235,18 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 
 	claim, err := s.idempotency.Claim(ctx, scope, idemKey, reqHash)
 	if err != nil {
-		log.Printf("Idempotency claim error: %v", err)
+		logging.Error(ctx, "idempotency claim failed",
+			"component", "sidecar",
+			"operation", "idempotency_claim",
+			"key_present", true,
+			"error", err,
+		)
 		if s.idempotencyCfg.FailOpen {
-			log.Printf("WARNING: idempotency FAIL_OPEN — proceeding without dedup")
+			logging.Warn(ctx, "idempotency fail-open proceeding without dedup",
+				"component", "sidecar",
+				"operation", "idempotency_claim",
+				"fail_open", true,
+			)
 			s.serveNormal(w, r, userID)
 			return
 		}
@@ -255,14 +256,22 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 
 	switch claim.Result {
 	case idempotency.ResultReplay:
-		s.debugf("Idempotency replay for key %s", idemKey)
+		logging.Debug(ctx, "idempotency replay served",
+			"component", "sidecar",
+			"operation", "idempotency_replay",
+			"key_present", true,
+		)
 		idempotency.WriteClaimResponse(w, claim)
 		return
 	case idempotency.ResultInProgress, idempotency.ResultHashMismatch:
 		idempotency.WriteClaimResponse(w, claim)
 		return
 	case idempotency.ResultClaimed:
-		s.debugf("Idempotency claimed key %s", idemKey)
+		logging.Debug(ctx, "idempotency key claimed",
+			"component", "sidecar",
+			"operation", "idempotency_claim",
+			"key_present", true,
+		)
 	default:
 		http.Error(w, "idempotency error", http.StatusInternalServerError)
 		return
@@ -270,7 +279,11 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 
 	result, err := s.checkRateLimit(ctx, r, userID, false)
 	if err != nil {
-		log.Printf("Rate limiter error (idempotent): %v", err)
+		logging.Error(ctx, "rate limit check failed",
+			"component", "sidecar",
+			"operation", "rate_limit_check",
+			"error", err,
+		)
 		if s.failOpen {
 			s.forwardIdempotent(w, r, scope, idemKey, claim.FenceToken)
 			return
@@ -306,7 +319,11 @@ func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scop
 	if s.router != nil {
 		body, _ := readRequestBody(r)
 		if err := s.router.Forward(r.Context(), capturer, r, body); err != nil {
-			log.Printf("Routing forward error: %v", err)
+			logging.Error(r.Context(), "routing forward failed",
+				"component", "sidecar",
+				"operation", "upstream_proxy",
+				"error", err,
+			)
 			_ = s.failIdempotent(r.Context(), scope, idemKey, fenceToken, http.StatusServiceUnavailable,
 				map[string]string{"Content-Type": "application/json"},
 				[]byte(`{"error":"all gateways unavailable"}`))
@@ -353,25 +370,38 @@ func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID str
 	r = r.WithContext(ctx)
 
 	cacheKey := s.cacheKey(r, userID)
-	s.debugf("Request for user %s (cache key: %s)", userID, cacheKey)
+	logging.Debug(ctx, "processing proxied request",
+		"component", "sidecar",
+		"operation", "proxy",
+		"http.path", r.URL.Path,
+		"hierarchical", s.useHierarchical,
+	)
 
 	if val, ok := s.cache.Load(cacheKey); ok {
 		entry := val.(CacheEntry)
 		if time.Now().Before(entry.ExpiresAt) {
 			if !entry.Allowed {
-				// Only denials are served from cache — allowed responses must re-hit Redis
-				// or attackers could freeze their quota at "allowed" forever.
-				s.debugf("Serving cached DENIAL for %s", cacheKey)
+				logging.Debug(ctx, "serving cached denial",
+					"component", "sidecar",
+					"operation", "cache",
+					"cache_hit", true,
+				)
 				metrics.RecordCacheHit()
 				s.writeDenial(w, entry.Limit, entry.Remaining, entry.RetryAfter)
 				return
 			}
-			s.debugf("Cache entry is ALLOWED – ignoring cache, will call central limiter")
+			logging.Debug(ctx, "allowed cache entry ignored",
+				"component", "sidecar",
+				"operation", "cache",
+			)
 		} else {
 			s.cache.Delete(cacheKey)
 		}
 	} else {
-		s.debugf("Cache miss for cache key %s", cacheKey)
+		logging.Debug(ctx, "cache miss",
+			"component", "sidecar",
+			"operation", "cache",
+		)
 	}
 
 	metrics.RecordCacheMiss()
@@ -381,9 +411,17 @@ func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID str
 		return s.checkRateLimit(ctx, r, userID, false)
 	})
 	if err != nil {
-		log.Printf("Rate limiter error: %v", err)
+		logging.Error(ctx, "rate limit check failed",
+			"component", "sidecar",
+			"operation", "rate_limit_check",
+			"error", err,
+		)
 		if s.failOpen {
-			log.Printf("WARNING: FAIL_OPEN enabled — forwarding request despite limiter error")
+			logging.Warn(ctx, "fail-open forwarding despite limiter error",
+				"component", "sidecar",
+				"operation", "rate_limit_check",
+				"fail_open", true,
+			)
 			s.forwardRequest(w, r)
 			return
 		}
@@ -552,7 +590,11 @@ func (s *Sidecar) forwardRequest(w http.ResponseWriter, r *http.Request) {
 	if s.router != nil {
 		body, _ := readRequestBody(r)
 		if err := s.router.Forward(ctx, w, r, body); err != nil {
-			log.Printf("Routing forward error: %v", err)
+			logging.Error(ctx, "routing forward failed",
+				"component", "sidecar",
+				"operation", "upstream_proxy",
+				"error", err,
+			)
 			telemetry.RecordError(span, err)
 			http.Error(w, "all gateways unavailable", http.StatusServiceUnavailable)
 		}
@@ -599,19 +641,21 @@ func sidecarMetricsAuthKey(internalKey, metricsKey string) string {
 }
 
 func main() {
+	logging.Init()
+
 	upstream := os.Getenv("UPSTREAM_URL")
 	limiter := os.Getenv("RATE_LIMITER_URL")
 	if limiter == "" {
-		log.Fatal("RATE_LIMITER_URL must be set")
+		logging.Fatal("RATE_LIMITER_URL must be set")
 	}
 	if upstream == "" && os.Getenv("ENABLE_ROUTING") != "true" {
-		log.Fatal("UPSTREAM_URL must be set when ENABLE_ROUTING is false")
+		logging.Fatal("UPSTREAM_URL must be set when ENABLE_ROUTING is false")
 	}
 
 	otelCfg := telemetry.LoadConfigFromEnv("rate-sidecar")
 	otelShutdown, err := telemetry.Init(context.Background(), otelCfg)
 	if err != nil {
-		log.Fatalf("OpenTelemetry init failed: %v", err)
+		logging.Fatal("OpenTelemetry init failed", "error", err)
 	}
 
 	ttl := 30 * time.Millisecond
@@ -623,12 +667,14 @@ func main() {
 
 	failOpen := os.Getenv("FAIL_OPEN") == "true"
 	if failOpen {
-		log.Printf("WARNING: FAIL_OPEN=true — sidecar forwards all traffic when limiter/Redis is down. Never use in production.")
+		logging.Warn(nil, "FAIL_OPEN enabled — sidecar forwards traffic when limiter or Redis is down",
+			"component", "sidecar",
+			"fail_open", true,
+		)
 	}
 
 	useHierarchical := os.Getenv("USE_HIERARCHICAL") == "true"
 	allowQueryUserID := os.Getenv("ALLOW_QUERY_USER_ID") == "true"
-	debug := os.Getenv("DEBUG") == "true"
 	internalAPIKey := os.Getenv("INTERNAL_API_KEY")
 	metricsRequireAuth := os.Getenv("METRICS_REQUIRE_AUTH") == "true"
 	metricsAPIKey := sidecarMetricsAuthKey(internalAPIKey, os.Getenv("METRICS_API_KEY"))
@@ -639,7 +685,10 @@ func main() {
 	allowedPaths := parseAllowedPaths(os.Getenv("ALLOWED_PATHS"))
 
 	if len(allowedPaths) == 0 {
-		log.Printf("WARNING: ALLOWED_PATHS is not set — all paths are proxied. Set ALLOWED_PATHS=/ for production hardening.")
+		logging.Warn(nil, "ALLOWED_PATHS is not set — all paths are proxied",
+			"component", "sidecar",
+			"security_dev_mode", true,
+		)
 	}
 
 	defaultLimit := 10
@@ -650,12 +699,12 @@ func main() {
 	tlsCert := os.Getenv("TLS_CERT_FILE")
 	tlsKey := os.Getenv("TLS_KEY_FILE")
 	if (tlsCert != "" || tlsKey != "") && (tlsCert == "" || tlsKey == "") {
-		log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable TLS")
+		logging.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable TLS")
 	}
 
 	sidecar := NewSidecar(
 		upstream, limiter, internalAPIKey, metricsAPIKey,
-		ttl, failOpen, defaultLimit, useHierarchical, allowQueryUserID, debug, allowedPaths,
+		ttl, failOpen, defaultLimit, useHierarchical, allowQueryUserID, allowedPaths,
 	)
 
 	var sharedRdb redis.UniversalClient
@@ -688,7 +737,11 @@ func main() {
 			cbCfg := circuitbreaker.LoadConfigFromEnv()
 			sidecar.SetLimiterCircuit(circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg)))
 		}
-		log.Printf("Idempotency layer enabled (lock_ttl=%dms, completed_ttl=%dms)", idemCfg.LockTTL, idemCfg.CompletedTTL)
+		logging.Info(nil, "Idempotency layer enabled",
+			"component", "sidecar",
+			"lock_ttl_ms", idemCfg.LockTTL,
+			"completed_ttl_ms", idemCfg.CompletedTTL,
+		)
 	}
 
 	if os.Getenv("ENABLE_ROUTING") == "true" {
@@ -702,14 +755,17 @@ func main() {
 		sidecar.SetLimiterCircuit(breaker)
 		gateways := routing.GatewaysFromEnv()
 		if len(gateways) == 0 {
-			log.Fatal("ENABLE_ROUTING=true requires GATEWAYS env")
+			logging.Fatal("ENABLE_ROUTING=true requires GATEWAYS env")
 		}
 		if err := router.Seed(context.Background(), gateways); err != nil {
-			log.Fatalf("gateway seed failed: %v", err)
+			logging.Fatal("gateway seed failed", "error", err)
 		}
 		router.StartHealthProbes(context.Background())
 		sidecar.SetRouter(router)
-		log.Printf("Intelligent routing enabled with %d gateways", len(gateways))
+		logging.Info(nil, "Intelligent routing enabled",
+			"component", "sidecar",
+			"gateway_count", len(gateways),
+		)
 	}
 
 	mux := http.NewServeMux()
@@ -746,7 +802,12 @@ func main() {
 	if useHierarchical {
 		mode = "hierarchical /check_hierarchical"
 	}
-	log.Printf("Sidecar starting on :%s, forwarding to %s, limiter mode: %s", port, upstream, mode)
+	logging.Info(nil, "Sidecar starting",
+		"component", "sidecar",
+		"port", port,
+		"upstream", upstream,
+		"limiter_mode", mode,
+	)
 
 	sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
 	defer sweeperCancel()
@@ -768,44 +829,44 @@ func main() {
 			err = srv.ListenAndServe()
 		}
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %s\n", err)
+			logging.Fatal("listen failed", "error", err)
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down sidecar...")
+	logging.Info(nil, "Shutting down sidecar", "component", "sidecar")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Fatal("Sidecar forced to shutdown:", err)
+		logging.Fatal("Sidecar forced to shutdown", "error", err)
 	}
 	if err := otelShutdown(shutdownCtx); err != nil {
-		log.Printf("OpenTelemetry shutdown error: %v", err)
+		logging.Error(shutdownCtx, "OpenTelemetry shutdown error", "component", "sidecar", "error", err)
 	}
-	log.Println("Sidecar exited")
+	logging.Info(nil, "Sidecar exited", "component", "sidecar")
 }
 
 func connectSidecarRedis(otelCfg telemetry.Config) redis.UniversalClient {
 	cfg := redisclient.LoadConfigFromEnv()
 	if cfg.Mode == redisclient.ModeStandalone && cfg.Addr == "" {
-		log.Fatal("REDIS_ADDR is required when ENABLE_IDEMPOTENCY or ENABLE_ROUTING is true")
+		logging.Fatal("REDIS_ADDR is required when ENABLE_IDEMPOTENCY or ENABLE_ROUTING is true")
 	}
 	if cfg.Mode == redisclient.ModeSentinel && len(cfg.SentinelAddrs) == 0 {
-		log.Fatal("REDIS_SENTINEL_ADDRS is required when REDIS_MODE=sentinel")
+		logging.Fatal("REDIS_SENTINEL_ADDRS is required when REDIS_MODE=sentinel")
 	}
 	rdb := redisclient.New(cfg)
 	if err := redisclient.Ping(rdb); err != nil {
-		log.Fatalf("Redis unreachable (%s): %v", redisclient.Describe(cfg), err)
+		logging.Fatal("Redis unreachable", "redis", redisclient.Describe(cfg), "error", err)
 	}
 	if otelCfg.Enabled {
 		if err := telemetry.InstrumentRedis(rdb); err != nil {
-			log.Fatalf("Redis OpenTelemetry instrumentation failed: %v", err)
+			logging.Fatal("Redis OpenTelemetry instrumentation failed", "error", err)
 		}
 	}
-	log.Printf("Sidecar Redis connected (%s)", redisclient.Describe(cfg))
+	logging.Info(nil, "Sidecar Redis connected", "component", "sidecar", "redis", redisclient.Describe(cfg))
 	return rdb
 }

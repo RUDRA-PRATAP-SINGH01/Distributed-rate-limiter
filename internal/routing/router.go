@@ -5,13 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	"go.opentelemetry.io/otel/attribute"
@@ -77,7 +77,11 @@ func (r *Router) StartHealthProbes(ctx context.Context) {
 func (r *Router) probeAll(ctx context.Context) {
 	states, err := r.store.ListGateways(ctx)
 	if err != nil {
-		log.Printf("[routing] probe list error: %v", err)
+		logging.Error(ctx, "routing gateway probe list failed",
+			"component", "routing",
+			"operation", "health_probe",
+			"error", err,
+		)
 		return
 	}
 	for _, st := range states {

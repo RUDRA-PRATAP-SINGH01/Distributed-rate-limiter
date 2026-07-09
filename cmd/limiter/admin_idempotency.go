@@ -2,11 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/idempotency"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -38,7 +38,11 @@ func registerIdempotencyRoutes(mux *http.ServeMux, cfg Config, rdb redis.Univers
 		case http.MethodGet:
 			rec, err := store.GetRecord(r.Context(), scope, key)
 			if err != nil {
-				log.Printf("[admin] idempotency get error: %v", err)
+				logging.Error(r.Context(), "admin idempotency get failed",
+					"component", "admin",
+					"action", "get_idempotency",
+					"error", err,
+				)
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
@@ -56,11 +60,20 @@ func registerIdempotencyRoutes(mux *http.ServeMux, cfg Config, rdb redis.Univers
 		json.NewEncoder(w).Encode(out)
 		case http.MethodDelete:
 			if err := store.DeleteRecord(r.Context(), scope, key); err != nil {
-				log.Printf("[admin] idempotency delete error: %v", err)
+				logging.Error(r.Context(), "admin idempotency delete failed",
+					"component", "admin",
+					"action", "delete_idempotency",
+					"key_present", true,
+					"error", err,
+				)
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
-			log.Printf("[admin] deleted idempotency key scope=%s key=%s", scope, key)
+			logging.Info(r.Context(), "admin idempotency record deleted",
+				"component", "admin",
+				"action", "delete_idempotency",
+				"key_present", true,
+			)
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -87,7 +100,12 @@ func registerIdempotencyRoutes(mux *http.ServeMux, cfg Config, rdb redis.Univers
 		scope := idempotency.ScopeForTenantUser(tenant, user)
 		rec, err := store.GetRecord(r.Context(), scope, key)
 		if err != nil {
-			log.Printf("[admin] idempotency lookup error: %v", err)
+			logging.Error(r.Context(), "admin idempotency lookup failed",
+				"component", "admin",
+				"action", "lookup_idempotency",
+				"key_present", key != "",
+				"error", err,
+			)
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}

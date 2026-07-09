@@ -7,8 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -114,6 +115,12 @@ func (s *RedisStore) Record(ctx context.Context, target string, input RecordInpu
 	metrics.RecordCircuitState(target, state)
 	if transition != "none" && prev != state {
 		metrics.RecordCircuitTransition(target, string(prev), string(state))
+		logging.Warn(ctx, "circuit breaker state transition",
+			"component", "circuit_breaker",
+			"target", target,
+			"from_state", string(prev),
+			"to_state", string(state),
+		)
 	}
 	metrics.RecordCircuitFailureRate(target, failureRate)
 	metrics.RecordCircuitLatencyEMA(target, latencyEMA)

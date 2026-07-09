@@ -2,12 +2,12 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/audit"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 )
 
 func registerAuditRoutes(mux *http.ServeMux, cfg Config, store *audit.Store) {
@@ -101,7 +101,7 @@ func registerAuditRoutes(mux *http.ServeMux, cfg Config, store *audit.Store) {
 		writeJSON(w, ev)
 	})
 
-	log.Printf("[admin] audit trail API registered")
+	logging.Info(nil, "Audit trail admin API registered", "component", "admin", "action", "register_audit_api")
 }
 
 func auditAuth(w http.ResponseWriter, r *http.Request, cfg Config) bool {

@@ -7,13 +7,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/audit"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -40,9 +40,9 @@ func startAdminServer(cfg Config, store *override.Store, rdb redis.UniversalClie
 	}
 
 	go func() {
-		log.Printf("Admin API listening on %s", cfg.AdminAddr())
+		logging.Info(nil, "Admin API listening", "component", "admin", "addr", cfg.AdminAddr())
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Admin server error: %v", err)
+			logging.Error(nil, "Admin server error", "component", "admin", "error", err)
 		}
 	}()
 
@@ -110,19 +110,39 @@ func handleLimitOverride(
 			newCfg.RefillRate = defaultCfg.RefillRate
 		}
 		if err := store.SetOverride(level, id, newCfg); err != nil {
-			log.Printf("[admin] set override error: %v", err)
+			logging.Error(r.Context(), "admin set override failed",
+				"component", "admin",
+				"action", "set_override",
+				"override_level", level,
+				"error", err,
+			)
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		log.Printf("[admin] set %s override for %s: capacity=%d refill_rate=%.2f", level, id, newCfg.Capacity, newCfg.RefillRate)
+		logging.Info(r.Context(), "admin set override",
+			"component", "admin",
+			"action", "set_override",
+			"override_level", level,
+			"capacity", newCfg.Capacity,
+			"refill_rate", newCfg.RefillRate,
+		)
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodDelete:
 		if err := store.DeleteOverride(level, id); err != nil {
-			log.Printf("[admin] delete override error: %v", err)
+			logging.Error(r.Context(), "admin delete override failed",
+				"component", "admin",
+				"action", "delete_override",
+				"override_level", level,
+				"error", err,
+			)
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		log.Printf("[admin] deleted %s override for %s", level, id)
+		logging.Info(r.Context(), "admin delete override",
+			"component", "admin",
+			"action", "delete_override",
+			"override_level", level,
+		)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

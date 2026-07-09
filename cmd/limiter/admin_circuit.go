@@ -2,11 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -61,7 +61,11 @@ func registerCircuitRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalCl
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			log.Printf("[admin] reset circuit breaker for %s", target)
+			logging.Info(r.Context(), "admin reset circuit breaker",
+				"component", "admin",
+				"action", "reset_circuit",
+				"target", target,
+			)
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

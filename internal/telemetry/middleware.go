@@ -18,6 +18,11 @@ const RequestIDHeader = "X-Request-ID"
 const TraceIDHeader = "X-Trace-ID"
 const SpanIDHeader = "X-Span-ID"
 
+// WithRequestID attaches a correlation ID to ctx for logging and downstream use.
+func WithRequestID(ctx context.Context, requestID string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, requestID)
+}
+
 // RequestIDFromContext returns the correlation ID for this request.
 func RequestIDFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(requestIDKey{}).(string); ok {

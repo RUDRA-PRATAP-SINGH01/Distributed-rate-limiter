@@ -2,11 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/routing"
 	"github.com/redis/go-redis/v9"
 )
@@ -98,7 +98,11 @@ func registerRoutingRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalCl
 			w.WriteHeader(http.StatusNoContent)
 		case http.MethodDelete:
 			_ = store.ResetCircuit(r.Context(), id)
-			log.Printf("[admin] reset circuit for gateway %s", id)
+			logging.Info(r.Context(), "admin reset gateway circuit",
+				"component", "admin",
+				"action", "reset_gateway_circuit",
+				"gateway_id", id,
+			)
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

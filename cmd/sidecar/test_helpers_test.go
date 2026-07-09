@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
@@ -139,6 +140,7 @@ func (h *mockUpstreamHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 
 func newTestFixture(t *testing.T, failOpen bool, ttl time.Duration, useHierarchical bool) (*testFixture, func()) {
 	t.Helper()
+	logging.Init()
 
 	// Upstream Server
 	upstreamHandler := &mockUpstreamHandler{}
@@ -172,7 +174,6 @@ func newTestFixture(t *testing.T, failOpen bool, ttl time.Duration, useHierarchi
 		10,
 		useHierarchical,
 		true, // allowQueryUserID
-		true, // debug
 		[]string{"/"},
 	)
 

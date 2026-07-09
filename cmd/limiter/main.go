@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +20,7 @@ import (
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/limiter"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
@@ -37,12 +37,13 @@ var auditStore *audit.Store
 var redisCfg redisclient.Config
 
 func main() {
+	logging.Init()
 	cfg := LoadConfig()
 
 	otelCfg := telemetry.LoadConfigFromEnv("rate-limiter")
 	otelShutdown, err := telemetry.Init(context.Background(), otelCfg)
 	if err != nil {
-		log.Fatalf("OpenTelemetry init failed: %v", err)
+		logging.Fatal("OpenTelemetry init failed", "error", err)
 	}
 
 	// Fail fast if Redis is down. A limiter that starts without verified connectivity
@@ -50,25 +51,32 @@ func main() {
 	redisCfg = redisclient.LoadConfigFromEnv()
 	rdb := redisclient.New(redisCfg)
 	if err := redisclient.Ping(rdb); err != nil {
-		log.Fatalf("Redis unreachable (%s): %v", redisclient.Describe(redisCfg), err)
+		logging.Fatal("Redis unreachable", "redis", redisclient.Describe(redisCfg), "error", err)
 	}
 	if otelCfg.Enabled {
 		if err := telemetry.InstrumentRedis(rdb); err != nil {
-			log.Fatalf("Redis OpenTelemetry instrumentation failed: %v", err)
+			logging.Fatal("Redis OpenTelemetry instrumentation failed", "error", err)
 		}
 	}
-	log.Printf("Redis connection verified (%s)", redisclient.Describe(redisCfg))
+	logging.Info(nil, "Redis connection verified", "component", "limiter", "redis", redisclient.Describe(redisCfg))
 
 	auditCfg := audit.LoadConfigFromEnv()
 	auditStore = audit.NewStore(rdb, auditCfg)
 	if auditCfg.Enabled {
-		log.Printf("Audit trail enabled (retention=%s, max_events=%d)", auditCfg.Retention, auditCfg.MaxEvents)
+		logging.Info(nil, "Audit trail enabled",
+			"component", "limiter",
+			"retention", auditCfg.Retention.String(),
+			"max_events", auditCfg.MaxEvents,
+		)
 	}
 
 	cbCfg := circuitbreaker.LoadConfigFromEnv()
 	redisCircuit = circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
-	log.Printf("Redis circuit breaker enabled (failure_rate=%.2f, cooldown=%dms)",
-		cbCfg.FailureRateThreshold, cbCfg.OpenCooldownMs)
+	logging.Info(nil, "Redis circuit breaker enabled",
+		"component", "limiter",
+		"failure_rate", cbCfg.FailureRateThreshold,
+		"cooldown_ms", cbCfg.OpenCooldownMs,
+	)
 
 	// Override store sits beside the algorithm layer: limits can be tuned at runtime
 	// without redeploying binaries. Local TTL cache avoids a Redis round-trip per check.
@@ -79,12 +87,20 @@ func main() {
 	switch cfg.Algorithm {
 	case "sliding":
 		limiterInstance = limiter.NewRedisSlidingWindow(rdb, cfg.Capacity, time.Duration(cfg.WindowSec)*time.Second)
-		log.Printf("Using Redis sliding window algorithm (limit=%d, window=%ds)", cfg.Capacity, cfg.WindowSec)
+		logging.Info(nil, "Using Redis sliding window algorithm",
+			"component", "limiter",
+			"algorithm", "sliding_window",
+			"capacity", cfg.Capacity,
+			"window_sec", cfg.WindowSec,
+		)
 	case "token":
 		fallthrough
 	default:
 		limiterInstance = limiter.NewRedisAtomicTokenBucket(rdb, cfg.Capacity, cfg.RefillRate)
-		log.Println("Using Redis token bucket (atomic Lua)")
+		logging.Info(nil, "Using Redis token bucket algorithm",
+			"component", "limiter",
+			"algorithm", "token_bucket",
+		)
 	}
 
 	if cfg.EnableHierarchical {
@@ -93,7 +109,10 @@ func main() {
 			cfg.GlobalCapacity, cfg.TenantCapacity, cfg.UserCapacity, cfg.EndpointCapacity,
 			cfg.GlobalRefillRate, cfg.TenantRefillRate, cfg.UserRefillRate, cfg.EndpointRefillRate,
 		)
-		log.Println("Hierarchical limiter enabled (global / tenant / user / endpoint)")
+		logging.Info(nil, "Hierarchical limiter enabled",
+			"component", "limiter",
+			"algorithm", "hierarchical",
+		)
 	}
 
 	metricsKey := ""
@@ -110,7 +129,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		h := redisclient.CheckHealth(r.Context(), rdb, redisCfg)
 		if !h.Connected {
-			log.Printf("health check failed: %s", h.Error)
+			logRedisHealthTransition(r.Context(), false, h.Error)
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"status": "unhealthy",
@@ -118,6 +137,7 @@ func main() {
 			})
 			return
 		}
+		logRedisHealthTransition(r.Context(), true, "")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "healthy",
@@ -341,7 +361,7 @@ func main() {
 	adminSrv := startAdminServer(cfg, overrideStore, rdb, auditStore)
 
 	go func() {
-		log.Printf("Server starting on :%d", cfg.Port)
+		logging.Info(nil, "Server starting", "component", "limiter", "port", cfg.Port)
 		var err error
 		if cfg.TLSCertFile != "" {
 			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -349,7 +369,7 @@ func main() {
 			err = srv.ListenAndServe()
 		}
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %s\n", err)
+			logging.Fatal("listen failed", "error", err)
 		}
 	}()
 
@@ -357,20 +377,20 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down server...")
+	logging.Info(nil, "Shutting down server", "component", "limiter")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if adminSrv != nil {
 		if err := adminSrv.Shutdown(ctx); err != nil {
-			log.Printf("Admin server shutdown error: %v", err)
+			logging.Error(ctx, "Admin server shutdown error", "component", "limiter", "error", err)
 		}
 	}
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+		logging.Fatal("Server forced to shutdown", "error", err)
 	}
 	if err := otelShutdown(ctx); err != nil {
-		log.Printf("OpenTelemetry shutdown error: %v", err)
+		logging.Error(ctx, "OpenTelemetry shutdown error", "component", "limiter", "error", err)
 	}
-	log.Println("Server exited")
+	logging.Info(nil, "Server exited", "component", "limiter")
 }
