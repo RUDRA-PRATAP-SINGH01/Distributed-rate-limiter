@@ -31,6 +31,8 @@ func New(cfg Config) redis.UniversalClient {
 		minIdle = 10
 	}
 
+	timeouts := ResolveClientTimeouts(cfg)
+
 	switch cfg.Mode {
 	case ModeSentinel:
 		if len(cfg.SentinelAddrs) == 0 {
@@ -48,6 +50,7 @@ func New(cfg Config) redis.UniversalClient {
 			RouteByLatency: false,
 			RouteRandomly:  false,
 		}
+		applyFailoverTimeouts(opts, timeouts)
 		return redis.NewFailoverClient(opts)
 	default:
 		opts := &redis.Options{
@@ -57,8 +60,31 @@ func New(cfg Config) redis.UniversalClient {
 			PoolSize:     pool,
 			MinIdleConns: minIdle,
 		}
+		applyStandaloneTimeouts(opts, timeouts)
 		return redis.NewClient(opts)
 	}
+}
+
+func applyStandaloneTimeouts(opts *redis.Options, t ClientTimeouts) {
+	opts.DialTimeout = t.DialTimeout
+	opts.ReadTimeout = t.ReadTimeout
+	opts.WriteTimeout = t.WriteTimeout
+	opts.PoolTimeout = t.PoolTimeout
+	opts.DialerRetries = t.DialerRetries
+	opts.MaxRetries = goRedisMaxRetries(t.MaxRetries)
+	opts.MinRetryBackoff = -1
+	opts.MaxRetryBackoff = -1
+}
+
+func applyFailoverTimeouts(opts *redis.FailoverOptions, t ClientTimeouts) {
+	opts.DialTimeout = t.DialTimeout
+	opts.ReadTimeout = t.ReadTimeout
+	opts.WriteTimeout = t.WriteTimeout
+	opts.PoolTimeout = t.PoolTimeout
+	opts.DialerRetries = t.DialerRetries
+	opts.MaxRetries = goRedisMaxRetries(t.MaxRetries)
+	opts.MinRetryBackoff = -1
+	opts.MaxRetryBackoff = -1
 }
 
 func Ping(client redis.UniversalClient) error {

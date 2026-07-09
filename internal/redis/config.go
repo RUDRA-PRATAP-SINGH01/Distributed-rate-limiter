@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Mode selects standalone Redis or Sentinel-managed failover.
@@ -25,15 +26,28 @@ type Config struct {
 	DB               int
 	PoolSize         int
 	MinIdleConns     int
+	DialTimeout      time.Duration
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	PoolTimeout      time.Duration
+	MaxRetries       int
+	DialerRetries    int
 }
 
 func DefaultConfig() Config {
+	t := defaultClientTimeouts()
 	return Config{
-		Mode:         ModeStandalone,
-		Addr:         "localhost:6379",
-		MasterName:   "mymaster",
-		PoolSize:     100,
-		MinIdleConns: 10,
+		Mode:          ModeStandalone,
+		Addr:          "localhost:6379",
+		MasterName:    "mymaster",
+		PoolSize:      100,
+		MinIdleConns:  10,
+		DialTimeout:   t.DialTimeout,
+		ReadTimeout:   t.ReadTimeout,
+		WriteTimeout:  t.WriteTimeout,
+		PoolTimeout:   t.PoolTimeout,
+		MaxRetries:    t.MaxRetries,
+		DialerRetries: t.DialerRetries,
 	}
 }
 
@@ -60,6 +74,12 @@ func LoadConfigFromEnv() Config {
 			cfg.DB = n
 		}
 	}
+	cfg.DialTimeout = loadDurationEnvMS("REDIS_DIAL_TIMEOUT_MS", cfg.DialTimeout)
+	cfg.ReadTimeout = loadDurationEnvMS("REDIS_READ_TIMEOUT_MS", cfg.ReadTimeout)
+	cfg.WriteTimeout = loadDurationEnvMS("REDIS_WRITE_TIMEOUT_MS", cfg.WriteTimeout)
+	cfg.PoolTimeout = loadDurationEnvMS("REDIS_POOL_TIMEOUT_MS", cfg.PoolTimeout)
+	cfg.DialerRetries = loadPositiveIntEnv("REDIS_DIALER_RETRIES", cfg.DialerRetries)
+	cfg.MaxRetries = loadNonNegativeIntEnv("REDIS_MAX_RETRIES", cfg.MaxRetries)
 	return cfg
 }
 
