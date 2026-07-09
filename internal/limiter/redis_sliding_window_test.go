@@ -23,11 +23,14 @@ package limiter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -148,29 +151,61 @@ func TestSlidingWindow_WindowExpiry_FreesCapacity(t *testing.T) {
 // An entry at exactly windowStart is REMOVED — it's outside the window.
 
 func TestSlidingWindow_BoundarySemantics(t *testing.T) {
+	ctx := context.Background()
 	_, rdb := newMR(t)
-	const window = 150 * time.Millisecond
+	const window = 10 * time.Second // 10000ms window
 	sw := NewRedisSlidingWindow(rdb, 1, window)
 	uid := "sw-boundary"
+	key := "sw:" + uid
 
-	// Allow at T=0.
-	allow1SW(t, sw, uid)
+	now := time.Now().UnixMilli()
 
-	// Sleep 140ms — inside the 150ms window. Should be denied.
-	time.Sleep(140 * time.Millisecond)
-	ok, _ := allow1SW(t, sw, uid)
+	// Seed score for m1 as now - 15000 (outside window, should be pruned)
+	// Seed score for m2 as now - 5000 (inside window, should be kept)
+	err1 := rdb.ZAdd(ctx, key, redis.Z{Score: float64(now - 15000), Member: "m1"}).Err()
+	err2 := rdb.ZAdd(ctx, key, redis.Z{Score: float64(now - 5000), Member: "m2"}).Err()
+	if err1 != nil || err2 != nil {
+		t.Fatalf("failed to seed: %v, %v", err1, err2)
+	}
+
+	// With limit = 1 and 1 kept member (m2), this next call must be denied.
+	ok, rem, err := sw.Allow(ctx, uid)
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
 	if ok {
-		t.Fatal("inside window: must be denied")
+		t.Fatal("expected request to be denied because m2 is within the window")
+	}
+	if rem != 0 {
+		t.Fatalf("remaining should be 0, got %d", rem)
 	}
 
-	// Sleep another 20ms (total ~160ms) — outside the window.
-	time.Sleep(20 * time.Millisecond)
-	ok, _ = allow1SW(t, sw, uid)
-	if !ok {
-		t.Fatal("outside window: must be allowed")
+	// Verify that m1 was pruned and only m2 remains in ZSET.
+	card := zCard(t, rdb, key)
+	if card != 1 {
+		t.Fatalf("expected cardinality 1 (m2), got %d", card)
 	}
 
-	_ = rdb
+	// Now recreate with limit = 2.
+	sw2 := NewRedisSlidingWindow(rdb, 2, window)
+
+	// Next call must be allowed.
+	ok2, rem2, err2 := sw2.Allow(ctx, uid)
+	if err2 != nil {
+		t.Fatalf("Allow: %v", err2)
+	}
+	if !ok2 {
+		t.Fatal("expected request to be allowed because count < limit (2)")
+	}
+	if rem2 != 0 {
+		t.Fatalf("remaining should be 0, got %d", rem2)
+	}
+
+	// Verify that the new cardinality is 2.
+	card2 := zCard(t, rdb, key)
+	if card2 != 2 {
+		t.Fatalf("expected cardinality 2, got %d", card2)
+	}
 }
 
 // ── Suite 2E: Same-Millisecond Uniqueness ─────────────────────────────────────
@@ -183,27 +218,51 @@ func TestSlidingWindow_SameMsUniqueness(t *testing.T) {
 	sw := NewRedisSlidingWindow(rdb, limit, 10*time.Second)
 	uid := "sw-uniqueness"
 
-	var wg sync.WaitGroup
-	barrier := make(chan struct{})
+	var (
+		allowed atomic.Int64
+		denied  atomic.Int64
+		errs    atomic.Int64
+		wg      sync.WaitGroup
+		barrier = make(chan struct{})
+	)
 
 	for i := 0; i < limit; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-barrier
-			sw.Allow(context.Background(), uid) //nolint:errcheck
+			ok, _, err := sw.Allow(context.Background(), uid)
+			if err != nil {
+				errs.Add(1)
+				return
+			}
+			if ok {
+				allowed.Add(1)
+			} else {
+				denied.Add(1)
+			}
 		}()
 	}
 	close(barrier)
 	wg.Wait()
 
-	// Cardinality must equal the number of accepted requests (no member collisions).
-	card := zCard(t, rdb, "sw:"+uid)
-	if card > int64(limit) {
-		t.Fatalf("ZSET cardinality %d exceeds limit %d — members shouldn't be overwritten", card, limit)
+	gotErrs := errs.Load()
+	gotAllowed := allowed.Load()
+	gotDenied := denied.Load()
+
+	if gotErrs != 0 {
+		t.Errorf("expected 0 errors, got %d", gotErrs)
 	}
-	// cardinality == card means no collisions occurred (all members unique).
-	t.Logf("ZSET cardinality after %d concurrent requests: %d (limit=%d)", limit, card, limit)
+	if gotAllowed != int64(limit) {
+		t.Errorf("expected all %d requests allowed, got %d allowed, %d denied", limit, gotAllowed, gotDenied)
+	}
+
+	// Cardinality must equal the number of accepted requests because member IDs
+	// generated using UUIDs are negligibly probable to collide, preventing ZADD overwrites.
+	card := zCard(t, rdb, "sw:"+uid)
+	if card != gotAllowed {
+		t.Fatalf("ZSET cardinality %d does not match allowed count %d (potential member collision)", card, gotAllowed)
+	}
 }
 
 // ── Suite 2F: Concurrency / Atomicity ─────────────────────────────────────────
@@ -219,9 +278,13 @@ func TestSlidingWindow_Atomicity(t *testing.T) {
 			sw := NewRedisSlidingWindow(rdb, limit, 10*time.Second)
 			uid := fmt.Sprintf("sw-atomic-run%d", run)
 
-			var allowed atomic.Int64
-			var wg sync.WaitGroup
-			barrier := make(chan struct{})
+			var (
+				allowed atomic.Int64
+				denied  atomic.Int64
+				errs    atomic.Int64
+				wg      sync.WaitGroup
+				barrier = make(chan struct{})
+			)
 
 			for i := 0; i < goroutines; i++ {
 				wg.Add(1)
@@ -229,23 +292,39 @@ func TestSlidingWindow_Atomicity(t *testing.T) {
 					defer wg.Done()
 					<-barrier
 					ok, _, err := sw.Allow(context.Background(), uid)
-					if err == nil && ok {
+					if err != nil {
+						errs.Add(1)
+						return
+					}
+					if ok {
 						allowed.Add(1)
+					} else {
+						denied.Add(1)
 					}
 				}()
 			}
 			close(barrier)
 			wg.Wait()
 
-			got := allowed.Load()
-			if got != limit {
-				t.Errorf("run %d: expected exactly %d allowed, got %d", run, limit, got)
+			gotErrs := errs.Load()
+			gotAllowed := allowed.Load()
+			gotDenied := denied.Load()
+
+			if gotErrs != 0 {
+				t.Errorf("expected 0 errors, got %d", gotErrs)
+			}
+			if gotAllowed+gotDenied != int64(goroutines) {
+				t.Errorf("expected allowed + denied == total (%d), got %d + %d = %d",
+					goroutines, gotAllowed, gotDenied, gotAllowed+gotDenied)
+			}
+			if gotAllowed != limit {
+				t.Errorf("run %d: expected exactly %d allowed, got %d", run, limit, gotAllowed)
 			}
 
 			// ZSET cardinality must equal allowed count.
 			card := zCard(t, rdb, "sw:"+uid)
-			if card != got {
-				t.Errorf("run %d: ZSET cardinality %d ≠ allowed count %d", run, card, got)
+			if card != gotAllowed {
+				t.Errorf("run %d: ZSET cardinality %d ≠ allowed count %d", run, card, gotAllowed)
 			}
 		})
 	}
@@ -286,10 +365,16 @@ func TestSlidingWindow_CancelledContext(t *testing.T) {
 	cancel()
 
 	ok, _, err := sw.Allow(ctx, uid)
-	t.Logf("cancelled context: ok=%v err=%v", ok, err)
-	// Must not panic.
-
-	_ = rdb
+	if err == nil {
+		if isRealRedis {
+			t.Fatal("real Redis: cancelled context must return error")
+		}
+		t.Logf("NOTE: cancelled context did not return error under miniredis; ok=%v", ok)
+	} else {
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled error, got %v", err)
+		}
+	}
 }
 
 // ── Suite 2I: Active Count Never Exceeds Limit ───────────────────────────────

@@ -17,6 +17,7 @@ package limiter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -141,7 +142,7 @@ func TestTokenBucket_ExactExhaustion(t *testing.T) {
 // This test verifies that the stored float survives repeated Allow() calls
 // when refill_rate < 1 token/s, so accumulated fractional progress is not lost.
 
-func TestTokenBucket_FractionalRefill_NoTruncation(t *testing.T) {
+func TestTokenBucket_FractionalRefill_PreservesSubTokenState(t *testing.T) {
 	cases := []struct {
 		rate float64
 	}{
@@ -154,55 +155,92 @@ func TestTokenBucket_FractionalRefill_NoTruncation(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(fmt.Sprintf("rate%.3f", tc.rate), func(t *testing.T) {
-			_, rdb := newMR(t)
-			tb := NewRedisAtomicTokenBucket(rdb, 5, tc.rate)
-			uid := fmt.Sprintf("frac-%.3f", tc.rate)
+			ctx := context.Background()
+			tb, rdb, _ := newTB(t, 5, tc.rate)
+			uid := fmt.Sprintf("frac-preserve-%.3f", tc.rate)
+			key := "rate:" + uid
 
-			// Exhaust the bucket.
-			for i := 0; i < 5; i++ {
-				allow1(t, tb, uid)
-			}
+			const stepMs = 50
+			for step := 1; step <= 3; step++ {
+				// Seed 0 tokens and last_refill in the past.
+				currentTime := time.Now().UnixMilli()
+				if err := rdb.HMSet(ctx, key, "tokens", 0.0, "last_refill", currentTime-stepMs).Err(); err != nil {
+					t.Fatalf("failed to seed: %v", err)
+				}
 
-			const numPolls = 4
-			const sleepMs = 50 // 50ms each step
-
-			var prevStored float64 = 0
-			for step := 0; step < numPolls; step++ {
-				time.Sleep(sleepMs * time.Millisecond)
-				// Allow is denied but triggers a refill+write.
-				ok, _, err := tb.Allow(context.Background(), uid)
+				ok, rem, err := tb.Allow(ctx, uid)
 				if err != nil {
-					t.Fatalf("step %d: unexpected error: %v", step, err)
+					t.Fatalf("Allow: %v", err)
+				}
+				if ok {
+					t.Fatalf("request must be denied as accumulated tokens < 1.0")
+				}
+				if rem != 0 {
+					t.Fatalf("remaining must be 0, got %d", rem)
 				}
 
 				stored := readTokensFloat(t, rdb, uid)
-				if stored < 0 {
-					t.Fatalf("step %d: persisted tokens negative: %f", step, stored)
+				// The stored tokens should be approximately stepMs * rate / 1000.0
+				minExpected := float64(stepMs) * tc.rate / 1000.0
+				maxExpected := float64(stepMs+8) * tc.rate / 1000.0 // Allow small execution time delta
+				if stored < minExpected || stored > maxExpected {
+					t.Fatalf("step %d: stored tokens %.6f outside expected range [%.6f, %.6f]", step, stored, minExpected, maxExpected)
 				}
-				if stored > 5 {
-					t.Fatalf("step %d: tokens exceed capacity: %f", step, stored)
-				}
+			}
+		})
+	}
+}
 
-				// If rate*0.05s < 1: tokens should still grow (no floor truncation).
-				// We merely assert monotonic growth while below capacity.
-				if stored < prevStored && stored < 5.0 {
-					t.Fatalf("step %d: fractional tokens regressed (truncated?): was %.6f, now %.6f", step, prevStored, stored)
-				}
-				prevStored = stored
+func TestTokenBucket_FractionalRefill_EventuallyAllows(t *testing.T) {
+	cases := []struct {
+		rate float64
+	}{
+		{0.1},
+		{0.5},
+		{1.5},
+		{0.333},
+	}
 
-				// Once a full token has accumulated, the next Allow must succeed.
-				if math.Floor(stored) >= 1 && !ok {
-					// Verify next call is allowed.
-					ok2, _, err2 := tb.Allow(context.Background(), uid)
-					if err2 != nil {
-						t.Fatalf("step %d: unexpected error: %v", step, err2)
-					}
-					if !ok2 {
-						t.Fatalf("step %d: stored=%.4f ≥ 1 but Allow returned denied", step, stored)
-					}
-					// Exhaust again and continue.
-					allow1(t, tb, uid)
-				}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(fmt.Sprintf("rate%.3f", tc.rate), func(t *testing.T) {
+			ctx := context.Background()
+			tb, rdb, _ := newTB(t, 5, tc.rate)
+			uid := fmt.Sprintf("frac-allow-%.3f", tc.rate)
+			key := "rate:" + uid
+
+			// Seed to 0.9 tokens, so < 1.0 (denied)
+			currentTime := time.Now().UnixMilli()
+			if err := rdb.HMSet(ctx, key, "tokens", 0.9, "last_refill", currentTime).Err(); err != nil {
+				t.Fatalf("failed to seed: %v", err)
+			}
+
+			ok1, _, err := tb.Allow(ctx, uid)
+			if err != nil {
+				t.Fatalf("Allow: %v", err)
+			}
+			if ok1 {
+				t.Fatalf("0.9 tokens must be denied")
+			}
+
+			// We need 0.1 tokens more.
+			requiredMs := int64(math.Ceil(0.1/tc.rate*1000.0)) + 5 // add 5ms safety buffer
+			currentTime = time.Now().UnixMilli()
+
+			// Seed last_refill in the past by requiredMs.
+			if err := rdb.HMSet(ctx, key, "tokens", 0.9, "last_refill", currentTime-requiredMs).Err(); err != nil {
+				t.Fatalf("failed to seed: %v", err)
+			}
+
+			ok2, rem, err := tb.Allow(ctx, uid)
+			if err != nil {
+				t.Fatalf("Allow: %v", err)
+			}
+			if !ok2 {
+				t.Fatalf("expected allowed after sufficient simulated time elapsed")
+			}
+			if rem < 0 {
+				t.Fatalf("remaining cannot be negative: %d", rem)
 			}
 		})
 	}
@@ -210,34 +248,49 @@ func TestTokenBucket_FractionalRefill_NoTruncation(t *testing.T) {
 
 // ── Suite 1D: Millisecond Precision ──────────────────────────────────────────
 // Demonstrate that a sub-second fast-forward genuinely accumulates tokens.
-// At refillRate=2.0, 250ms → +0.5 tokens; 500ms → +1.0 token (allows a request).
+// At refillRate=10.0, 50ms -> +0.5 tokens; 150ms -> +1.5 tokens (allows a request).
 
 func TestTokenBucket_MillisecondPrecision(t *testing.T) {
-	_, rdb := newMR(t)
-	tb := NewRedisAtomicTokenBucket(rdb, 10, 10.0) // 10 tokens/s
+	ctx := context.Background()
+	tb, rdb, _ := newTB(t, 10, 10.0) // 10 tokens/s
 	uid := "ms-precision"
+	key := "rate:" + uid
 
-	// Exhaust to 0.
-	for i := 0; i < 10; i++ {
-		allow1(t, tb, uid)
+	// Seed 0 tokens, last_refill at currentTime - 50ms.
+	currentTime := time.Now().UnixMilli()
+	if err := rdb.HMSet(ctx, key, "tokens", 0.0, "last_refill", currentTime-50).Err(); err != nil {
+		t.Fatalf("seed failed: %v", err)
 	}
 
-	// Sleep 50ms — should add 0.5 tokens (not enough for 1).
-	time.Sleep(50 * time.Millisecond)
-	ok, _, _ := tb.Allow(context.Background(), uid)
+	ok, _, err := tb.Allow(ctx, uid)
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
 	if ok {
-		t.Fatalf("50ms at 10tok/s should not yet allow (only 0.5 tokens refilled)")
-	}
-	stored := readTokensFloat(t, rdb, uid)
-	if stored <= 0 || stored >= 1 {
-		t.Fatalf("after 50ms at 10tok/s: expected 0 < stored < 1, got %.6f", stored)
+		t.Fatalf("50ms at 10tok/s should refill only ~0.5 tokens and must be denied")
 	}
 
-	// Sleep another 100ms — total ~150ms, ~1.5 tokens total.
-	time.Sleep(100 * time.Millisecond)
-	ok, _, _ = tb.Allow(context.Background(), uid)
+	stored := readTokensFloat(t, rdb, uid)
+	// Stored must be approximately 0.5 (range [0.5, 0.58])
+	if stored < 0.50 || stored > 0.58 {
+		t.Fatalf("expected stored tokens in range [0.50, 0.58], got %.6f", stored)
+	}
+
+	// Now seed 0 tokens, last_refill at currentTime - 150ms.
+	currentTime = time.Now().UnixMilli()
+	if err := rdb.HMSet(ctx, key, "tokens", 0.0, "last_refill", currentTime-150).Err(); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	ok, rem, err := tb.Allow(ctx, uid)
+	if err != nil {
+		t.Fatalf("Allow: %v", err)
+	}
 	if !ok {
-		t.Fatalf("after ~150ms at 10tok/s should have ≥1 token and be allowed")
+		t.Fatalf("150ms at 10tok/s should refill ~1.5 tokens and must be allowed")
+	}
+	if rem < 0 {
+		t.Fatalf("remaining cannot be negative: %d", rem)
 	}
 }
 
@@ -272,38 +325,45 @@ func TestTokenBucket_CapacityNeverExceeded(t *testing.T) {
 // A denied request must not deduct any tokens from the bucket.
 
 func TestTokenBucket_RejectionDeductsNothing(t *testing.T) {
-	_, rdb := newMR(t)
-	tb := NewRedisAtomicTokenBucket(rdb, 3, 0.0001) // near-zero refill
+	ctx := context.Background()
+	tb, rdb, _ := newTB(t, 3, 0.0) // exact 0 refill rate
 	uid := "rejection-deduct"
+	key := "rate:" + uid
 
-	// Exhaust all 3 tokens.
-	for i := 0; i < 3; i++ {
-		allow1(t, tb, uid)
+	// Seed exactly 0.0 tokens and last_refill 100ms in the past.
+	now := time.Now().UnixMilli()
+	if err := rdb.HMSet(ctx, key, "tokens", 0.0, "last_refill", now-100).Err(); err != nil {
+		t.Fatalf("seed failed: %v", err)
 	}
 
 	// Capture state before rejections.
-	beforeStr, _ := readTokenBucketState(t, rdb, uid)
+	beforeStr, beforeRefillStr := readTokenBucketState(t, rdb, uid)
 
 	// Issue 5 denials.
 	for i := 0; i < 5; i++ {
-		ok, rem := allow1(t, tb, uid)
+		ok, rem, err := tb.Allow(ctx, uid)
+		if err != nil {
+			t.Fatalf("Allow failed: %v", err)
+		}
 		if ok {
-			t.Fatalf("denial %d: expected denied, got allowed", i+1)
+			t.Fatalf("request %d should be denied", i+1)
 		}
-		if rem < 0 {
-			t.Fatalf("denial %d: remaining is negative: %d", i+1, rem)
+		if rem != 0 {
+			t.Fatalf("remaining must be 0, got %d", rem)
 		}
 	}
 
-	// Stored tokens must not be negative and must not have decreased further
-	// (the denial path in Lua does NOT deduct from new_tokens — verified from script).
-	stored := readTokensFloat(t, rdb, uid)
-	if stored < 0 {
-		t.Fatalf("stored tokens negative after denials: %f", stored)
-	}
+	// Capture state after rejections.
+	afterStr, afterRefillStr := readTokenBucketState(t, rdb, uid)
 
-	// Note: 'beforeStr' may be "0" or fractionally above. Stored now should be ≥ 0.
-	_ = beforeStr // used for documentation
+	// Assert stored balance is exactly unchanged.
+	if beforeStr != afterStr {
+		t.Fatalf("tokens mutated on denial: before=%q, after=%q", beforeStr, afterStr)
+	}
+	// Assert last_refill was updated to the new timestamps.
+	if beforeRefillStr == afterRefillStr {
+		t.Fatalf("last_refill must be updated on denial: got=%q", afterRefillStr)
+	}
 }
 
 // ── Suite 1G: Key Isolation ───────────────────────────────────────────────────
@@ -339,12 +399,13 @@ func TestTokenBucket_KeyIsolation(t *testing.T) {
 
 func runAtomicConcurrencyCheck(t *testing.T, capacity, goroutines int) {
 	t.Helper()
-	_, rdb := newMR(t)
-	tb := NewRedisAtomicTokenBucket(rdb, capacity, 0) // 0 refill
+	_, rdb, _ := newTB(t, capacity, 0) // 0 refill
+	tb := NewRedisAtomicTokenBucket(rdb, capacity, 0)
 
 	var (
 		allowed atomic.Int64
 		denied  atomic.Int64
+		errs    atomic.Int64
 		wg      sync.WaitGroup
 		barrier = make(chan struct{})
 	)
@@ -358,7 +419,7 @@ func runAtomicConcurrencyCheck(t *testing.T, capacity, goroutines int) {
 			<-barrier
 			ok, _, err := tb.Allow(context.Background(), uid)
 			if err != nil {
-				// miniredis is single-instance; errors are unexpected
+				errs.Add(1)
 				return
 			}
 			if ok {
@@ -372,10 +433,20 @@ func runAtomicConcurrencyCheck(t *testing.T, capacity, goroutines int) {
 	close(barrier) // release all goroutines simultaneously
 	wg.Wait()
 
-	got := allowed.Load()
-	if got != int64(capacity) {
+	gotErrs := errs.Load()
+	gotAllowed := allowed.Load()
+	gotDenied := denied.Load()
+
+	if gotErrs != 0 {
+		t.Errorf("expected 0 errors, got %d", gotErrs)
+	}
+	if gotAllowed+gotDenied != int64(goroutines) {
+		t.Errorf("expected allowed + denied == total (%d), got %d + %d = %d",
+			goroutines, gotAllowed, gotDenied, gotAllowed+gotDenied)
+	}
+	if gotAllowed != int64(capacity) {
 		t.Errorf("goroutines=%d, cap=%d: exactly %d should be allowed, got %d allowed, %d denied",
-			goroutines, capacity, capacity, got, denied.Load())
+			goroutines, capacity, capacity, gotAllowed, gotDenied)
 	}
 
 	// Redis state must have non-negative tokens.
@@ -385,7 +456,7 @@ func runAtomicConcurrencyCheck(t *testing.T, capacity, goroutines int) {
 	}
 }
 
-func TestTokenBucket_Atomicity_100Goroutines(t *testing.T) {
+func TestTokenBucket_Atomicity_30Goroutines(t *testing.T) {
 	// Run several times to catch non-deterministic races.
 	for i := 0; i < 3; i++ {
 		t.Run(fmt.Sprintf("run%d", i), func(t *testing.T) {
@@ -394,7 +465,7 @@ func TestTokenBucket_Atomicity_100Goroutines(t *testing.T) {
 	}
 }
 
-func TestTokenBucket_Atomicity_1000Goroutines(t *testing.T) {
+func TestTokenBucket_Atomicity_50Goroutines(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		t.Run(fmt.Sprintf("run%d", i), func(t *testing.T) {
 			runAtomicConcurrencyCheck(t, 20, 50)
@@ -413,10 +484,9 @@ func TestTokenBucket_MultiKeyConcurrency(t *testing.T) {
 	_, rdb := newMR(t)
 	tb := NewRedisAtomicTokenBucket(rdb, cap, 0)
 
-	type result struct {
-		allowed int64
-	}
 	results := make([]atomic.Int64, numKeys)
+	errorsList := make([]atomic.Int64, numKeys)
+	deniedList := make([]atomic.Int64, numKeys)
 	var wg sync.WaitGroup
 	barrier := make(chan struct{})
 
@@ -429,8 +499,14 @@ func TestTokenBucket_MultiKeyConcurrency(t *testing.T) {
 				defer wg.Done()
 				<-barrier
 				ok, _, err := tb.Allow(context.Background(), uid)
-				if err == nil && ok {
+				if err != nil {
+					errorsList[k].Add(1)
+					return
+				}
+				if ok {
 					results[k].Add(1)
+				} else {
+					deniedList[k].Add(1)
 				}
 			}()
 		}
@@ -440,9 +516,19 @@ func TestTokenBucket_MultiKeyConcurrency(t *testing.T) {
 	wg.Wait()
 
 	for k := 0; k < numKeys; k++ {
-		got := results[k].Load()
-		if got != cap {
-			t.Errorf("key %d: expected exactly %d allowed, got %d", k, cap, got)
+		gotErrs := errorsList[k].Load()
+		gotAllowed := results[k].Load()
+		gotDenied := deniedList[k].Load()
+
+		if gotErrs != 0 {
+			t.Errorf("key %d: expected 0 errors, got %d", k, gotErrs)
+		}
+		if gotAllowed+gotDenied != int64(goroutinesPerKey) {
+			t.Errorf("key %d: expected allowed + denied == total (%d), got %d + %d = %d",
+				k, goroutinesPerKey, gotAllowed, gotDenied, gotAllowed+gotDenied)
+		}
+		if gotAllowed != cap {
+			t.Errorf("key %d: expected exactly %d allowed, got %d", k, cap, gotAllowed)
 		}
 	}
 }
@@ -514,13 +600,17 @@ func TestTokenBucket_CancelledContext(t *testing.T) {
 
 	ok, _, err := tb.Allow(ctx, uid)
 	if err == nil {
-		// Miniredis may or may not respect context cancellation.
-		// Document behavior rather than hard-fail.
-		t.Logf("NOTE: cancelled context did not return error (miniredis may not enforce context); ok=%v", ok)
+		// Miniredis may succeed if context check isn't enforced in mocks.
+		// We document the warning/divergence.
+		if isRealRedis {
+			t.Fatal("real Redis: cancelled context must return error")
+		}
+		t.Logf("NOTE: cancelled context did not return error under miniredis; ok=%v", ok)
 	} else {
-		t.Logf("cancelled context returned expected error: %v", err)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled error, got %v", err)
+		}
 	}
-	// Must not panic regardless.
 }
 
 func TestTokenBucket_DeadlineExceeded(t *testing.T) {
@@ -532,8 +622,16 @@ func TestTokenBucket_DeadlineExceeded(t *testing.T) {
 	defer cancel()
 
 	_, _, err := tb.Allow(ctx, uid)
-	// Again miniredis may succeed; just ensure no panic.
-	t.Logf("expired deadline: err=%v", err)
+	if err == nil {
+		if isRealRedis {
+			t.Fatal("real Redis: expired deadline must return error")
+		}
+		t.Logf("NOTE: expired deadline did not return error under miniredis")
+	} else {
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("expected context.DeadlineExceeded error, got %v", err)
+		}
+	}
 }
 
 // ── Suite 1L: Property Invariant — 0 ≤ stored_tokens ≤ capacity ──────────────

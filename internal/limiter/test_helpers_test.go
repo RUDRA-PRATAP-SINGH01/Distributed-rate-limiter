@@ -14,6 +14,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// NOTE: Tests in this package share a single Redis connection pool and database instance
+// to prevent socket/port exhaustion on Windows. As a result, tests MUST run serially.
+// Calling t.Parallel() is strictly prohibited.
 var (
 	sharedMR    *miniredis.Miniredis
 	sharedRdb   redis.UniversalClient
@@ -24,10 +27,7 @@ func TestMain(m *testing.M) {
 	redisAddr := os.Getenv("REDIS_TEST_ADDR")
 	if redisAddr != "" {
 		isRealRedis = true
-		password := os.Getenv("REDIS_TEST_PASSWORD")
-		if password == "" {
-			password = "dev-redis-password" // default developer compose password
-		}
+		password := os.Getenv("REDIS_TEST_PASSWORD") // default is empty if unset
 		sharedRdb = redis.NewClient(&redis.Options{
 			Addr:     redisAddr,
 			Password: password,
@@ -55,13 +55,37 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// newMR returns the shared miniredis instance and resets the database.
+// newMR returns the shared miniredis/Redis instance and resets database keys.
+// If running on a real Redis server, it deletes only the test-prefixed keys
+// to avoid destructive FlushDB operations on active servers.
 func newMR(t *testing.T) (*miniredis.Miniredis, redis.UniversalClient) {
 	t.Helper()
 	ctx := context.Background()
-	// Flush DB to ensure test isolation
-	if err := sharedRdb.FlushDB(ctx).Err(); err != nil {
-		t.Fatalf("FlushDB failed: %v", err)
+	if isRealRedis {
+		// Destructive isolation: Scan and delete only test keys
+		patterns := []string{"rate:*", "sw:*", "hier:*"}
+		for _, pattern := range patterns {
+			var cursor uint64
+			for {
+				keys, nextCursor, err := sharedRdb.Scan(ctx, cursor, pattern, 0).Result()
+				if err != nil {
+					t.Fatalf("SCAN pattern %q failed: %v", pattern, err)
+				}
+				if len(keys) > 0 {
+					if _, err := sharedRdb.Del(ctx, keys...).Result(); err != nil {
+						t.Fatalf("DEL keys failed: %v", err)
+					}
+				}
+				cursor = nextCursor
+				if cursor == 0 {
+					break
+				}
+			}
+		}
+	} else {
+		if err := sharedRdb.FlushDB(ctx).Err(); err != nil {
+			t.Fatalf("FlushDB failed: %v", err)
+		}
 	}
 	return sharedMR, sharedRdb
 }

@@ -16,6 +16,7 @@ package limiter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -218,14 +219,20 @@ func TestHierarchical_Independence(t *testing.T) {
 
 // ── Suite 3E: Global Contention ──────────────────────────────────────────────
 
+// ── Suite 3E: Global Contention ──────────────────────────────────────────────
+
 func TestHierarchical_GlobalContention(t *testing.T) {
 	const globalCap = 20
 	const numIdentities = 50 // more identities than global capacity
 	hl, rdb, _ := setupHierarchical(t, globalCap, 10, 10, 10, 0, 0, 0, 0)
 
-	var wg sync.WaitGroup
-	var allowed atomic.Int64
-	barrier := make(chan struct{})
+	var (
+		allowed atomic.Int64
+		denied  atomic.Int64
+		errs    atomic.Int64
+		wg      sync.WaitGroup
+		barrier = make(chan struct{})
+	)
 
 	for i := 0; i < numIdentities; i++ {
 		i := i
@@ -234,14 +241,20 @@ func TestHierarchical_GlobalContention(t *testing.T) {
 			defer wg.Done()
 			<-barrier
 			keys := []string{
-				"global-contend",
-				fmt.Sprintf("tenant-%d", i),
-				fmt.Sprintf("user-%d", i),
-				fmt.Sprintf("endpoint-%d", i),
+				"hier:global-contend:global",
+				fmt.Sprintf("hier:tenant-%d:tenant", i),
+				fmt.Sprintf("hier:user-%d:user", i),
+				fmt.Sprintf("hier:endpoint-%d:endpoint", i),
 			}
 			ok, _, err := hl.Allow(context.Background(), keys[0], keys[1], keys[2], keys[3])
-			if err == nil && ok {
+			if err != nil {
+				errs.Add(1)
+				return
+			}
+			if ok {
 				allowed.Add(1)
+			} else {
+				denied.Add(1)
 			}
 		}()
 	}
@@ -249,13 +262,26 @@ func TestHierarchical_GlobalContention(t *testing.T) {
 	close(barrier)
 	wg.Wait()
 
-	got := allowed.Load()
-	if got > globalCap {
-		t.Errorf("global capacity exceeded: allowed %d requests, global limit is %d", got, globalCap)
-	}
-	t.Logf("global contention: allowed %d of %d request paths (global capacity %d)", got, numIdentities, globalCap)
+	gotErrs := errs.Load()
+	gotAllowed := allowed.Load()
+	gotDenied := denied.Load()
 
-	_ = rdb
+	if gotErrs != 0 {
+		t.Errorf("expected 0 errors, got %d", gotErrs)
+	}
+	if gotAllowed+gotDenied != int64(numIdentities) {
+		t.Errorf("expected allowed + denied == total (%d), got %d + %d = %d",
+			numIdentities, gotAllowed, gotDenied, gotAllowed+gotDenied)
+	}
+	if gotAllowed != globalCap {
+		t.Errorf("global capacity exceeded: allowed %d requests, global limit is %d", gotAllowed, globalCap)
+	}
+
+	// Verify global remaining tokens is exactly 0.
+	globalTokens := readHierarchyTokens(t, rdb, []string{"hier:global-contend:global", "non-existent-1", "non-existent-2", "non-existent-3"})
+	if globalTokens[0] != 0.0 {
+		t.Errorf("expected global remaining tokens to be exactly 0.0, got %f", globalTokens[0])
+	}
 }
 
 // ── Suite 3F: Same-Path Contention ───────────────────────────────────────────
@@ -270,9 +296,13 @@ func TestHierarchical_SamePathContention_BottleneckMatches(t *testing.T) {
 	)
 	keys := hierarchyKeys("samepath")
 
-	var wg sync.WaitGroup
-	var allowed atomic.Int64
-	barrier := make(chan struct{})
+	var (
+		allowed atomic.Int64
+		denied  atomic.Int64
+		errs    atomic.Int64
+		wg      sync.WaitGroup
+		barrier = make(chan struct{})
+	)
 
 	const goroutines = 50
 	for i := 0; i < goroutines; i++ {
@@ -281,8 +311,14 @@ func TestHierarchical_SamePathContention_BottleneckMatches(t *testing.T) {
 			defer wg.Done()
 			<-barrier
 			ok, _, err := hl.Allow(context.Background(), keys[0], keys[1], keys[2], keys[3])
-			if err == nil && ok {
+			if err != nil {
+				errs.Add(1)
+				return
+			}
+			if ok {
 				allowed.Add(1)
+			} else {
+				denied.Add(1)
 			}
 		}()
 	}
@@ -290,9 +326,19 @@ func TestHierarchical_SamePathContention_BottleneckMatches(t *testing.T) {
 	close(barrier)
 	wg.Wait()
 
-	got := allowed.Load()
-	if got != userBottleneck {
-		t.Errorf("expected exactly %d allowed (limited by user bottleneck), got %d allowed", userBottleneck, got)
+	gotErrs := errs.Load()
+	gotAllowed := allowed.Load()
+	gotDenied := denied.Load()
+
+	if gotErrs != 0 {
+		t.Errorf("expected 0 errors, got %d", gotErrs)
+	}
+	if gotAllowed+gotDenied != int64(goroutines) {
+		t.Errorf("expected allowed + denied == total (%d), got %d + %d = %d",
+			goroutines, gotAllowed, gotDenied, gotAllowed+gotDenied)
+	}
+	if gotAllowed != userBottleneck {
+		t.Errorf("expected exactly %d allowed (limited by user bottleneck), got %d allowed", userBottleneck, gotAllowed)
 	}
 
 	// Verify all levels recorded correctly
@@ -314,9 +360,13 @@ func TestHierarchical_MultiBottleneck(t *testing.T) {
 	hl, rdb, _ := setupHierarchical(t, 100, 50, 20, 7, 0, 0, 0, 0)
 	keys := hierarchyKeys("multibottleneck")
 
-	var wg sync.WaitGroup
-	var allowed atomic.Int64
-	barrier := make(chan struct{})
+	var (
+		allowed atomic.Int64
+		denied  atomic.Int64
+		errs    atomic.Int64
+		wg      sync.WaitGroup
+		barrier = make(chan struct{})
+	)
 
 	const goroutines = 30
 	for i := 0; i < goroutines; i++ {
@@ -325,8 +375,14 @@ func TestHierarchical_MultiBottleneck(t *testing.T) {
 			defer wg.Done()
 			<-barrier
 			ok, _, err := hl.Allow(context.Background(), keys[0], keys[1], keys[2], keys[3])
-			if err == nil && ok {
+			if err != nil {
+				errs.Add(1)
+				return
+			}
+			if ok {
 				allowed.Add(1)
+			} else {
+				denied.Add(1)
 			}
 		}()
 	}
@@ -334,9 +390,19 @@ func TestHierarchical_MultiBottleneck(t *testing.T) {
 	close(barrier)
 	wg.Wait()
 
-	got := allowed.Load()
-	if got != 7 {
-		t.Errorf("tightest bottleneck Endpoint(7) should restrict allowed to exactly 7, got %d", got)
+	gotErrs := errs.Load()
+	gotAllowed := allowed.Load()
+	gotDenied := denied.Load()
+
+	if gotErrs != 0 {
+		t.Errorf("expected 0 errors, got %d", gotErrs)
+	}
+	if gotAllowed+gotDenied != int64(goroutines) {
+		t.Errorf("expected allowed + denied == total (%d), got %d + %d = %d",
+			goroutines, gotAllowed, gotDenied, gotAllowed+gotDenied)
+	}
+	if gotAllowed != 7 {
+		t.Errorf("tightest bottleneck Endpoint(7) should restrict allowed to exactly 7, got %d", gotAllowed)
 	}
 
 	// Verify exact deductions
@@ -352,15 +418,21 @@ func TestHierarchical_MultiBottleneck(t *testing.T) {
 // ── Suite 3H: Context Errors ──────────────────────────────────────────────────
 
 func TestHierarchical_ContextCancellation(t *testing.T) {
-	hl, rdb, _ := setupHierarchical(t, 10, 10, 10, 10, 1.0, 1.0, 1.0, 1.0)
+	hl, _, _ := setupHierarchical(t, 10, 10, 10, 10, 1.0, 1.0, 1.0, 1.0)
 	keys := hierarchyKeys("ctx")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel context immediately
 
 	ok, _, err := hl.AllowWithParams(ctx, keys, []int{10, 10, 10, 10}, []float64{1, 1, 1, 1})
-	t.Logf("cancelled context: ok=%v, err=%v", ok, err)
-	// Ensure no panics occurred.
-
-	_ = rdb
+	if err == nil {
+		if isRealRedis {
+			t.Fatal("real Redis: cancelled context must return error")
+		}
+		t.Logf("NOTE: cancelled context did not return error under miniredis; ok=%v", ok)
+	} else {
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("expected context.Canceled error, got %v", err)
+		}
+	}
 }
