@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -109,7 +110,7 @@ func (s *Store) record(ctx context.Context, in RecordInput) (Event, error) {
 		return Event{}, err
 	}
 	values, ok := result.([]interface{})
-	if !ok || len(values) < 2 || luaInt(values[0]) != 1 {
+	if !ok || len(values) < 2 || luautil.LuaInt(values[0]) != 1 {
 		return Event{}, fmt.Errorf("audit append failed")
 	}
 
@@ -268,22 +269,6 @@ func parseEvent(fields map[string]string) *Event {
 	return ev
 }
 
-func luaInt(v interface{}) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	case float64:
-		return int64(n)
-	case string:
-		var parsed int64
-		fmt.Sscan(n, &parsed)
-		return parsed
-	default:
-		return 0
-	}
-}
 
 // PurgeTenant removes tenant index entries older than retention (ops).
 func (s *Store) PurgeTenant(ctx context.Context, tenantID string) (int64, error) {

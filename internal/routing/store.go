@@ -9,6 +9,7 @@ import (
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -130,7 +131,7 @@ func (s *RedisStore) RecordOutcome(ctx context.Context, outcome Outcome) error {
 		return err
 	}
 	values, ok := result.([]interface{})
-	if !ok || len(values) < 1 || luaInt(values[0]) != 1 {
+	if !ok || len(values) < 1 || luautil.LuaInt(values[0]) != 1 {
 		metrics.RecordRoutingOutcome(outcome.GatewayID, "error")
 		return fmt.Errorf("record outcome failed for %s", outcome.GatewayID)
 	}
@@ -143,7 +144,7 @@ func (s *RedisStore) RecordOutcome(ctx context.Context, outcome Outcome) error {
 	metrics.RecordRoutingLatency(outcome.GatewayID, outcome.Latency.Seconds())
 
 	if len(values) >= 2 {
-		health, _ := strconv.ParseFloat(luaString(values[1]), 64)
+		health, _ := strconv.ParseFloat(luautil.LuaString(values[1]), 64)
 		metrics.RecordRoutingScore(outcome.GatewayID, health)
 	}
 
@@ -195,15 +196,15 @@ func parseGatewayState(fields map[string]string) *GatewayState {
 		Gateway: Gateway{
 			ID:     fields["id"],
 			URL:    fields["url"],
-			Weight: int(luaInt(fields["weight"])),
+			Weight: int(luautil.LuaInt(fields["weight"])),
 		},
 		Enabled:        fields["enabled"] != "0",
 		LatencyEMAMs:   parseFloat(fields["latency_ema_ms"]),
-		ErrorCount:     luaInt(fields["error_count"]),
-		SuccessCount:   luaInt(fields["success_count"]),
-		TotalRequests:  luaInt(fields["total_requests"]),
+		ErrorCount:     luautil.LuaInt(fields["error_count"]),
+		SuccessCount:   luautil.LuaInt(fields["success_count"]),
+		TotalRequests:  luautil.LuaInt(fields["total_requests"]),
 		HealthScore:    parseFloat(fields["health_score"]),
-		UpdatedAt:      luaInt(fields["updated_at"]),
+		UpdatedAt:      luautil.LuaInt(fields["updated_at"]),
 		CircuitState:   circuitbreaker.StateClosed,
 	}
 	if st.Weight == 0 {
@@ -219,33 +220,7 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-func luaInt(v interface{}) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	case float64:
-		return int64(n)
-	case string:
-		var parsed int64
-		fmt.Sscan(n, &parsed)
-		return parsed
-	default:
-		return 0
-	}
-}
 
-func luaString(v interface{}) string {
-	switch s := v.(type) {
-	case string:
-		return s
-	case []byte:
-		return string(s)
-	default:
-		return fmt.Sprint(v)
-	}
-}
 
 func parseFloat(s string) float64 {
 	v, _ := strconv.ParseFloat(s, 64)

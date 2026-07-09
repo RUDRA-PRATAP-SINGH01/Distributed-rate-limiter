@@ -96,8 +96,14 @@ func LoadConfig() Config {
 	if cfg.StrictSecurity && cfg.InternalAPIKey == "" {
 		log.Fatal("STRICT_SECURITY=true requires INTERNAL_API_KEY")
 	}
+	if cfg.StrictSecurity && cfg.EnableAdminAPI && (cfg.AdminAPIKey == "" || cfg.AdminAPIKey == "dev-key-change-in-prod") {
+		log.Fatal("STRICT_SECURITY=true requires a non-default ADMIN_API_KEY when ADMIN_API is enabled")
+	}
 	if cfg.InternalAPIKey == "" {
 		log.Printf("WARNING: INTERNAL_API_KEY is not set — /check endpoints are reachable without authentication (dev only)")
+	}
+	if cfg.EnableAdminAPI && (cfg.AdminAPIKey == "" || cfg.AdminAPIKey == "dev-key-change-in-prod") {
+		log.Printf("WARNING: ADMIN_API_KEY is using default dev placeholder — admin endpoints are insecure")
 	}
 	if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -58,26 +59,10 @@ func (tb *RedisAtomicTokenBucket) Allow(ctx context.Context, userID string) (boo
 		return false, 0, fmt.Errorf("unexpected lua result")
 	}
 
-	allowed := luaInt(values[0]) == 1
-	remaining := int(luaInt(values[1]))
+	allowed := luautil.LuaInt(values[0]) == 1
+	remaining := int(luautil.LuaInt(values[1]))
 
 	return allowed, remaining, nil
 }
 
-// luaInt normalizes Redis/Lua return types — RESP encodings differ by version and driver.
-func luaInt(v interface{}) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	case float64:
-		return int64(n)
-	case string:
-		var parsed int64
-		fmt.Sscan(n, &parsed)
-		return parsed
-	default:
-		return 0
-	}
-}
+

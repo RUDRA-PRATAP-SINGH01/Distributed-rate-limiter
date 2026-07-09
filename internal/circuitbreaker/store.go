@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -56,9 +57,9 @@ func (s *RedisStore) Allow(ctx context.Context, target string) (AllowResult, err
 		return AllowResult{}, fmt.Errorf("unexpected allow lua result for %s", target)
 	}
 
-	allowed := luaInt(values[0]) == 1
-	state := stateFromCode(luaInt(values[1]))
-	probes := int(luaInt(values[2]))
+	allowed := luautil.LuaInt(values[0]) == 1
+	state := stateFromCode(luautil.LuaInt(values[1]))
+	probes := int(luautil.LuaInt(values[2]))
 
 	out := AllowResult{
 		Allowed:         allowed,
@@ -99,15 +100,15 @@ func (s *RedisStore) Record(ctx context.Context, target string, input RecordInpu
 		return Snapshot{}, err
 	}
 	values, ok := result.([]interface{})
-	if !ok || len(values) < 6 || luaInt(values[0]) != 1 {
+	if !ok || len(values) < 6 || luautil.LuaInt(values[0]) != 1 {
 		return Snapshot{}, fmt.Errorf("record failed for %s", target)
 	}
 
-	state := stateFromCode(luaInt(values[1]))
-	prev := stateFromCode(luaInt(values[2]))
-	transition := luaString(values[3])
-	failureRate, _ := strconv.ParseFloat(luaString(values[4]), 64)
-	latencyEMA, _ := strconv.ParseFloat(luaString(values[5]), 64)
+	state := stateFromCode(luautil.LuaInt(values[1]))
+	prev := stateFromCode(luautil.LuaInt(values[2]))
+	transition := luautil.LuaString(values[3])
+	failureRate, _ := strconv.ParseFloat(luautil.LuaString(values[4]), 64)
+	latencyEMA, _ := strconv.ParseFloat(luautil.LuaString(values[5]), 64)
 
 	metrics.RecordCircuitOutcome(target, outcomeLabel(input.Kind))
 	metrics.RecordCircuitState(target, state)
@@ -178,9 +179,9 @@ func (s *RedisStore) ListTargets(ctx context.Context) ([]Snapshot, error) {
 }
 
 func parseSnapshot(target string, fields map[string]string) Snapshot {
-	total := luaInt(fields["total_count"])
-	fail := luaInt(fields["failure_count"])
-	timeouts := luaInt(fields["timeout_count"])
+	total := luautil.LuaInt(fields["total_count"])
+	fail := luautil.LuaInt(fields["failure_count"])
+	timeouts := luautil.LuaInt(fields["timeout_count"])
 	var failureRate, timeoutRate float64
 	if total > 0 {
 		failureRate = float64(fail) / float64(total)
@@ -192,17 +193,17 @@ func parseSnapshot(target string, fields map[string]string) Snapshot {
 		FailureRate:         failureRate,
 		TimeoutRate:         timeoutRate,
 		LatencyEMAMs:        parseFloat(fields["latency_ema_ms"]),
-		ConsecutiveFailures: luaInt(fields["consecutive_failures"]),
-		SuccessCount:        luaInt(fields["success_count"]),
+		ConsecutiveFailures: luautil.LuaInt(fields["consecutive_failures"]),
+		SuccessCount:        luautil.LuaInt(fields["success_count"]),
 		FailureCount:        fail,
 		TimeoutCount:        timeouts,
-		LatencySpikeCount:   luaInt(fields["latency_spike_count"]),
+		LatencySpikeCount:   luautil.LuaInt(fields["latency_spike_count"]),
 		TotalCount:          total,
-		HalfOpenCalls:       luaInt(fields["half_open_calls"]),
-		HalfOpenSuccesses:   luaInt(fields["half_open_successes"]),
-		OpenedAtMs:          luaInt(fields["opened_at"]),
-		HalfOpenAtMs:        luaInt(fields["half_open_at"]),
-		UpdatedAtMs:         luaInt(fields["updated_at"]),
+		HalfOpenCalls:       luautil.LuaInt(fields["half_open_calls"]),
+		HalfOpenSuccesses:   luautil.LuaInt(fields["half_open_successes"]),
+		OpenedAtMs:          luautil.LuaInt(fields["opened_at"]),
+		HalfOpenAtMs:        luautil.LuaInt(fields["half_open_at"]),
+		UpdatedAtMs:         luautil.LuaInt(fields["updated_at"]),
 	}
 }
 
@@ -216,34 +217,6 @@ func outcomeLabel(k OutcomeKind) string {
 		return "latency_spike"
 	default:
 		return "failure"
-	}
-}
-
-func luaInt(v interface{}) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	case float64:
-		return int64(n)
-	case string:
-		var parsed int64
-		fmt.Sscan(n, &parsed)
-		return parsed
-	default:
-		return 0
-	}
-}
-
-func luaString(v interface{}) string {
-	switch s := v.(type) {
-	case string:
-		return s
-	case []byte:
-		return string(s)
-	default:
-		return fmt.Sprint(v)
 	}
 }
 

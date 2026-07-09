@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -92,7 +93,7 @@ func (hl *HierarchicalLimiter) AllowWithParams(
 		return false, 0, fmt.Errorf("unexpected lua result: %#v", result)
 	}
 
-	allowed = luaInt(values[0]) == 1
-	remaining = int(luaInt(values[1]))
+	allowed = luautil.LuaInt(values[0]) == 1
+	remaining = int(luautil.LuaInt(values[1]))
 	return allowed, remaining, nil
 }

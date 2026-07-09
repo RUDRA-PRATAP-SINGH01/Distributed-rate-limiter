@@ -11,6 +11,7 @@ import (
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
@@ -85,20 +86,20 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 		return nil, fmt.Errorf("%w: unexpected lua result", ErrStoreUnavailable)
 	}
 
-	code := luaInt(values[0])
+	code := luautil.LuaInt(values[0])
 	switch code {
 	case 1:
 		metrics.RecordIdempotencyClaim("claimed")
 		token := fenceToken
 		if len(values) > 1 {
-			token = luaString(values[1])
+			token = luautil.LuaString(values[1])
 		}
 		return &ClaimResponse{Result: ResultClaimed, FenceToken: token}, nil
 	case 2:
 		metrics.RecordIdempotencyClaim("replay")
-		status := int(luaInt(values[1]))
-		headers := decodeHeaders(luaString(values[2]))
-		body := []byte(luaString(values[3]))
+		status := int(luautil.LuaInt(values[1]))
+		headers := decodeHeaders(luautil.LuaString(values[2]))
+		body := []byte(luautil.LuaString(values[3]))
 		return &ClaimResponse{
 			Result:     ResultReplay,
 			HTTPStatus: status,
@@ -109,7 +110,7 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 		metrics.RecordIdempotencyClaim("in_progress")
 		retryMs := int64(0)
 		if len(values) > 1 {
-			retryMs = luaInt(values[1])
+			retryMs = luautil.LuaInt(values[1])
 		}
 		return &ClaimResponse{Result: ResultInProgress, RetryAfterMs: retryMs}, nil
 	case 0:
@@ -150,7 +151,7 @@ func (s *RedisStore) Complete(ctx context.Context, req CompleteRequest) error {
 	}
 
 	values, ok := result.([]interface{})
-	if !ok || len(values) < 1 || luaInt(values[0]) != 1 {
+	if !ok || len(values) < 1 || luautil.LuaInt(values[0]) != 1 {
 		return ErrStaleFence
 	}
 
@@ -186,7 +187,7 @@ func (s *RedisStore) Fail(ctx context.Context, req FailRequest) error {
 	}
 
 	values, ok := result.([]interface{})
-	if !ok || len(values) < 1 || luaInt(values[0]) != 1 {
+	if !ok || len(values) < 1 || luautil.LuaInt(values[0]) != 1 {
 		return ErrStaleFence
 	}
 
@@ -194,33 +195,6 @@ func (s *RedisStore) Fail(ctx context.Context, req FailRequest) error {
 	return nil
 }
 
-func luaInt(v interface{}) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	case float64:
-		return int64(n)
-	case string:
-		var parsed int64
-		fmt.Sscan(n, &parsed)
-		return parsed
-	default:
-		return 0
-	}
-}
-
-func luaString(v interface{}) string {
-	switch s := v.(type) {
-	case string:
-		return s
-	case []byte:
-		return string(s)
-	default:
-		return fmt.Sprint(v)
-	}
-}
 
 // ReadBody reads and restores the request body for fingerprinting and proxying.
 func ReadBody(r *http.Request, maxBytes int64) ([]byte, error) {
