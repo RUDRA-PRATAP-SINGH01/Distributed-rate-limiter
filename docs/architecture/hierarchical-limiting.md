@@ -1,10 +1,10 @@
 # Hierarchical Limiting Architecture
 
-Hierarchical rate limiting **चार stacked token buckets** को एक ही Redis Lua round-trip में evaluate करता है। सभी levels approve करें तभी कोई level से token deduct होता है — **partial commit impossible**।
+Hierarchical rate limiting evaluates **four stacked token buckets** in a single Redis Lua round-trip. Tokens are deducted from a level only if all levels approve — **partial commit impossible**.
 
 ---
 
-## चार-स्तरीय merge
+## Four-level merge
 
 ```mermaid
 flowchart TB
@@ -27,34 +27,34 @@ flowchart TB
 | 2 User | `rate:user:{userID}` | `USER_*` env | `config:user:{userID}` |
 | 3 Endpoint | `rate:endpoint:{tenantID}:{endpoint}` | `ENDPOINT_*` env | `config:endpoint:{tenant\|endpoint}` |
 
-`tenantID` / `userID` headers से आते हैं (`identity` package); endpoint query param `?endpoint=/api/v1/foo`।
+`tenantID` / `userID` come from headers (`identity` package); endpoint is the query param `?endpoint=/api/v1/foo`.
 
 ---
 
 ## Endpoint keys — tenant isolation
 
-Endpoint bucket **tenant-scoped** है:
+The endpoint bucket is **tenant-scoped**:
 
 ```
 rate:endpoint:{tenantID}:{path}
 ```
 
-दो tenants same path (`/api/login`) share **नहीं** करते — override ID भी `tenantID + "|" + endpoint` (`override.EndpointOverrideID`)।
+Two tenants with the same path (`/api/login`) do **not** share — override ID is also `tenantID + "|" + endpoint` (`override.EndpointOverrideID`).
 
 Admin path example: `POST /admin/limits/endpoint/default%7C%2Fapi%2Fv1%2Fresource`
 
-Sidecar hierarchical mode में denial cache key भी `tenant + user + path` scope करता है (`cmd/sidecar/main.go` — `cacheKey`)।
+In sidecar hierarchical mode, the denial cache key is also scoped to `tenant + user + path` (`cmd/sidecar/main.go` — `cacheKey`).
 
 ---
 
 ## Lua merge algorithm (`hierarchical.lua`)
 
-1. **Read phase:** हर level पर `HMGET tokens, last_refill` → elapsed time से refill।
-2. **Check phase:** कोई भी level `floor(tokens) < requested` → `allowed=0`।
+1. **Read phase:** On each level, `HMGET tokens, last_refill` → refill from elapsed time.
+2. **Check phase:** If any level has `floor(tokens) < requested` → `allowed=0`.
 3. **Write phase:**
-   - Allowed → सभी levels से `requested` deduct + `EXPIRE 3600`।
-   - Denied → tokens refill state persist (no deduct)।
-4. **Return:** `{allowed, remaining}` — `remaining` = tightest level का floor minus request।
+   - Allowed → deduct `requested` from all levels + `EXPIRE 3600`.
+   - Denied → persist refill state (no deduct).
+4. **Return:** `{allowed, remaining}` — `remaining` = tightest level's floor minus request.
 
 ```go
 // internal/limiter/hierarchical.go — AllowWithParams
@@ -66,13 +66,13 @@ capacities, refillRates := effectiveHierarchicalLimits(...)
 
 ## Override merge (`effectiveHierarchicalLimits`)
 
-हर `/check_hierarchical` call पर:
+On every `/check_hierarchical` call:
 
-1. `store.RefreshGeneration(ctx)` — `config:generation` check।
-2. Per-level: env default → Redis override (अगर exists)।
-3. Capacities + refill rates Lua को pass।
+1. `store.RefreshGeneration(ctx)` — check `config:generation`.
+2. Per-level: env default → Redis override (if exists).
+3. Pass capacities + refill rates to Lua.
 
-`X-RateLimit-Limit` header = **सबसे छोटी capacity** across levels (bottleneck दिखाने के लिए)।
+`X-RateLimit-Limit` header = **smallest capacity** across levels (to show the bottleneck).
 
 ---
 
@@ -87,7 +87,7 @@ Client → Sidecar (optional) → GET /check_hierarchical?endpoint=...
   → JSON {allowed, remaining}
 ```
 
-Flat `/check` hierarchical path use **नहीं** करता — अलग algorithm/env।
+Flat `/check` does **not** use the hierarchical path — separate algorithm/env.
 
 ---
 
@@ -101,7 +101,7 @@ Flat `/check` hierarchical path use **नहीं** करता — अलग 
 | p99 | **34.17 ms** |
 | 200 / 429 | 440 / 60474 |
 
-High 429 rate **by design** — benchmark endpoint capacity configured ताकि majority requests endpoint level पर deny हों; latency path still healthy।
+High 429 rate is **by design** — benchmark endpoint capacity configured so the majority of requests deny at the endpoint level; latency path still healthy.
 
 ---
 

@@ -2,11 +2,11 @@
 
 ## Purpose
 
-यह दस्तावेज़ `cmd/sidecar` — edge proxy की आंतरिक संरचना — को वर्णन करता है, विशेष रूप से **denial-only cache**, **singleflight** deduplication, **fail-open** policy, और **health/readiness** semantics। Sidecar quota का स्रोत नहीं है; यह central limiter को delegate करता है और केवल सुरक्षित process-local optimizations लागू करता है।
+This document describes the internal structure of `cmd/sidecar` — the edge proxy — with emphasis on **denial-only cache**, **singleflight** deduplication, **fail-open** policy, and **health/readiness** semantics. The sidecar is not the source of quota; it delegates to the central limiter and applies only safe process-local optimizations.
 
 ## Executive Summary
 
-Sidecar क्लाइंट का single entry point (`PORT` default **9090**) है। प्रत्येक proxied request पर यह central limiter (`RATE_LIMITER_URL`, typically `http://limiter:8080`) को internal API key के साथ HTTP GET भेजता है। **Denial cache** (`sync.Map`, TTL `CACHE_TTL_MS`) केवल `Allowed=false` entries serve करता है — allowances हमेशा fresh limiter check। **singleflight** (`golang.org/x/sync/singleflight`) same `cacheKey` पर concurrent misses को एक limiter round-trip में संकुचित करता है। **FAIL_OPEN** default `false`: limiter/Redis errors → 503; `true` पर upstream forward with warning log। Health: limiter `/health` mandatory; Redis check conditional on idempotency/routing।
+The sidecar is the client's single entry point (`PORT` default **9090**). On each proxied request it sends an HTTP GET to the central limiter (`RATE_LIMITER_URL`, typically `http://limiter:8080`) with the internal API key. The **denial cache** (`sync.Map`, TTL `CACHE_TTL_MS`) serves only `Allowed=false` entries — allowances always trigger a fresh limiter check. **singleflight** (`golang.org/x/sync/singleflight`) collapses concurrent misses on the same `cacheKey` into one limiter round-trip. **FAIL_OPEN** default `false`: limiter/Redis errors → 503; when `true`, forwards upstream with a warning log. Health: limiter `/health` mandatory; Redis check conditional on idempotency/routing.
 
 ## Architecture
 
@@ -227,7 +227,7 @@ Metrics: `/metrics` on sidecar; optional `METRICS_REQUIRE_AUTH`. Health/metrics 
 
 ## Verified Evidence
 
-| दावा | प्रकार | स्रोत |
+| Claim | Type | Source |
 |------|--------|-------|
 | Cached denial = 0 additional limiter calls | TEST-PROVEN | `cmd/sidecar/cache_test.go` — `TestSidecar_DenialCache` |
 | Allowed cache entry ignored | TEST-PROVEN | `TestSidecar_AllowanceCache` |
@@ -241,9 +241,9 @@ Metrics: `/metrics` on sidecar; optional `METRICS_REQUIRE_AUTH`. Health/metrics 
 
 ## Known Limitations
 
-- **Process-local cache/singleflight**: Multi-replica deployments में duplicate limiter calls संभव — correctness OK, optimization partial (SOURCE + TEST + RUNTIME)।
-- **Short denial TTL** (30ms default): Abuse burst में limiter load कम होता है, zero नहीं।
+- **Process-local cache/singleflight**: Multi-replica deployments may see duplicate limiter calls — correctness OK, optimization partial (SOURCE + TEST + RUNTIME).
+- **Short denial TTL** (30ms default): Reduces limiter load under abuse burst, not to zero.
 - **FAIL_OPEN silent risk**: primarily log-based visibility when bypass occurs.
-- **Health does not probe upstream**: Healthy sidecar + dead demo-backend still `/health` 200 if limiter OK।
-- **Body buffering**: Idempotency + routing read full body — memory bound `IDEMPOTENCY_MAX_BODY_BYTES`।
-- **No cross-replica denial cache**: 429 cache hit rate lower under load balancer round-robin।
+- **Health does not probe upstream**: Healthy sidecar + dead demo-backend still `/health` 200 if limiter OK.
+- **Body buffering**: Idempotency + routing read full body — memory bound `IDEMPOTENCY_MAX_BODY_BYTES`.
+- **No cross-replica denial cache**: 429 cache hit rate lower under load balancer round-robin.

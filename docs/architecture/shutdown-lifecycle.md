@@ -1,6 +1,6 @@
 # Shutdown Lifecycle
 
-दोनों binaries (`cmd/limiter`, `cmd/sidecar`) SIGINT/SIGTERM पर graceful drain करते हैं। Rolling deploy में in-flight requests complete होने चाहिए; limiter पर audit queue Redis close से पहले flush होनी चाहिए।
+Both binaries (`cmd/limiter`, `cmd/sidecar`) perform graceful drain on SIGINT/SIGTERM. During rolling deploy, in-flight requests should complete; on the limiter, the audit queue must flush before Redis close.
 
 ---
 
@@ -42,7 +42,7 @@ sequenceDiagram
 | Audit worker wait | same parent ctx |
 | OTEL flush | **10 s** internal (`telemetry.defaultShutdownTimeout`) |
 
-Forced shutdown: HTTP `Shutdown` error → `Fatal` (limiter); sidecar same pattern。
+Forced shutdown: HTTP `Shutdown` error → `Fatal` (limiter); sidecar same pattern.
 
 ---
 
@@ -71,7 +71,7 @@ sequenceDiagram
   S->>S: log "Sidecar exited"
 ```
 
-Sidecar **no audit store** — simpler ordering。
+Sidecar **no audit store** — simpler ordering.
 
 Background tasks stopped **before** HTTP drain:
 
@@ -104,14 +104,14 @@ if auditStore != nil && !auditStore.RedisCloseSafe() {
 }
 ```
 
-`Shutdown` timeout पर workers जीवित रह सकते हैं — caller बाद में `Shutdown` retry कर सकता है (`shutdown_test.go: TestShutdown_TimeoutThenResume`)।
+On `Shutdown` timeout, workers may still be alive — caller can retry `Shutdown` later (`shutdown_test.go: TestShutdown_TimeoutThenResume`).
 
 ---
 
 ## Kubernetes / Compose notes
 
 - `terminationGracePeriodSeconds` ≥ **15 s** recommended (5 s HTTP + 5 s audit + OTEL margin)
-- Readiness fail पहले → LB cut traffic before SIGTERM
+- Readiness fail first → LB cuts traffic before SIGTERM
 - `docker compose stop` sends SIGTERM — same code path
 
 ---

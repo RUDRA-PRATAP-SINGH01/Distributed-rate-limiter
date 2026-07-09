@@ -1,6 +1,6 @@
 ﻿# Circuit Breaker Architecture
 
-Distributed circuit breaker Redis hash `cb:{target}` में state रखता है। **Pre-call** `allow.lua` traffic gate; **post-call** `record.lua` metrics + transitions। Fleet-wide half-open probe budget **`HalfOpenMaxProbes=3`** (default)।
+The distributed circuit breaker stores state in Redis hash `cb:{target}`. **Pre-call** `allow.lua` gates traffic; **post-call** `record.lua` updates metrics and transitions. Fleet-wide half-open probe budget **`HalfOpenMaxProbes=3`** (default).
 
 ---
 
@@ -22,7 +22,7 @@ stateDiagram-v2
 | **open** | Reject until `now - opened_at >= open_cooldown_ms` (default 30 s) |
 | **half_open** | Allow up to `half_open_max_probes` concurrent probes |
 
-State codes: `0=closed`, `1=open`, `2=half_open`。
+State codes: `0=closed`, `1=open`, `2=half_open`.
 
 ---
 
@@ -42,7 +42,7 @@ if state == 'half_open' then
 end
 ```
 
-**Global bound:** सभी processes/shared Redis — 32 concurrent callers पर भी अधिकतम **3** simultaneous half-open admissions (`TestHalfOpenConcurrentProbeBound`, `-race`)。
+**Global bound:** across all processes sharing Redis — even with 32 concurrent callers, at most **3** simultaneous half-open admissions (`TestHalfOpenConcurrentProbeBound`, `-race`).
 
 Default config (`internal/circuitbreaker/config.go`):
 
@@ -55,13 +55,13 @@ Default config (`internal/circuitbreaker/config.go`):
 | `MinSamples` | 10 | `CB_MIN_SAMPLES` |
 | `ConsecutiveFailures` | 5 | `CB_CONSECUTIVE_FAILURES` |
 
-Probe budget exhaust → circuit **reopens** (not stuck half-open forever)।
+Probe budget exhaust → circuit **reopens** (not stuck half-open forever).
 
 ---
 
 ## `record.lua` — post-call transitions
 
-Outcomes: `success`, `failure`, `timeout`, `latency_spike`।
+Outcomes: `success`, `failure`, `timeout`, `latency_spike`.
 
 - Rolling counters + latency EMA (`CB_EMA_ALPHA`, default 0.2)
 - Counter halving when `total_count` grows (memory bound)
@@ -78,7 +78,7 @@ Outcomes: `success`, `failure`, `timeout`, `latency_spike`।
 | `cb:central-limiter` | Sidecar | HTTP to limiter |
 | `cb:{gatewayID}` | Sidecar routing | Per-gateway upstream |
 
-429 responses **do not** trip breaker (quota, not infra failure)।
+429 responses **do not** trip breaker (quota, not infra failure).
 
 ---
 
@@ -105,7 +105,7 @@ sequenceDiagram
 
 ## Fail-open danger
 
-`CIRCUIT_FAIL_OPEN=true` → Redis errors allow traffic (default **false**)。Production में avoid।
+`CIRCUIT_FAIL_OPEN=true` → Redis errors allow traffic (default **false**). Avoid in production.
 
 ---
 

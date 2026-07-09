@@ -1,6 +1,6 @@
 # Redis Architecture
 
-Redis इस सिस्टम का **authoritative coordination layer** है — quota, idempotency, circuit breaker, routing metrics, audit, और runtime overrides सब एक `UniversalClient` (`internal/redis`) के ज़रिए जाते हैं। हर hot-path invariant **Lua script** में atomic रहता है; Go side पर `redis.NewScript` + `EVALSHA`।
+Redis is this system's **authoritative coordination layer** — quota, idempotency, circuit breaker, routing metrics, audit, and runtime overrides all flow through one `UniversalClient` (`internal/redis`). Every hot-path invariant stays **atomic in Lua scripts**; the Go side uses `redis.NewScript` + `EVALSHA`.
 
 ---
 
@@ -8,15 +8,15 @@ Redis इस सिस्टम का **authoritative coordination layer** ह�
 
 | Concern | Implementation |
 |---------|----------------|
-| Modes | `standalone` (default) या `sentinel` (`FailoverClient`) |
+| Modes | `standalone` (default) or `sentinel` (`FailoverClient`) |
 | Pool | `PoolSize=100`, `MinIdleConns=10` (defaults) |
 | Config | `LoadConfigFromEnv()` — `REDIS_MODE`, `REDIS_ADDR`, `REDIS_SENTINEL_ADDRS`, `REDIS_MASTER_NAME`, … |
 | Health | `Ping()`, `Describe()` |
-| Shutdown | `Close()` — limiter sidecar ordering में audit drain के बाद |
+| Shutdown | `Close()` — limiter sidecar ordering after audit drain |
 
 ### Timeout budget (`internal/redis/timeouts.go`)
 
-Deterministic outage budget — **कोई command-level retry नहीं** (default):
+Deterministic outage budget — **no command-level retry** (default):
 
 | Setting | Default | Env override |
 |---------|---------|--------------|
@@ -27,7 +27,7 @@ Deterministic outage budget — **कोई command-level retry नहीं** (
 | `DialerRetries` | 1 | `REDIS_DIALER_RETRIES` |
 | `MaxRetries` | 0 (disabled) | `REDIS_MAX_RETRIES` |
 
-`MaxRetries=0` → go-redis में `-1` (disable). Sidecar Redis down पर ~**1 s** bounded 503; limiter HTTP timeout ~**500 ms** — अलग layers।
+`MaxRetries=0` → `-1` in go-redis (disabled). Sidecar Redis down → ~**1 s** bounded 503; limiter HTTP timeout ~**500 ms** — separate layers.
 
 ---
 
@@ -55,7 +55,7 @@ audit:*         — events + indexes (HASH + ZSET)
 | `rate:user:{userID}` | HASH | same | level 2 |
 | `rate:endpoint:{tenantID}:{path}` | HASH | same | level 3 |
 
-TTL: hierarchical/token keys पर `EXPIRE 3600` (idle eviction)।
+TTL: `EXPIRE 3600` on hierarchical/token keys (idle eviction).
 
 ### Configuration
 
@@ -74,7 +74,7 @@ TTL: hierarchical/token keys पर `EXPIRE 3600` (idle eviction)।
 | `idem:{scope}:{key}` | HASH — status, hash, fence_token, lock_until, response |
 | `idem:body:{scope}:{key}` | STRING — large bodies (> inline threshold) |
 
-Scope = `SHA256(tenant|user)` के पहले 16 bytes (hex)।
+Scope = first 16 bytes (hex) of `SHA256(tenant|user)`.
 
 ### Circuit breaker
 
@@ -116,18 +116,18 @@ Scope = `SHA256(tenant|user)` के पहले 16 bytes (hex)।
 | `internal/routing/lua` | `record_outcome.lua` | EMA + health_score |
 | `internal/audit/lua` | `append.lua` | event + indexes + retention trim |
 
-सभी scripts `//go:embed` + `redis.NewScript()` — startup पर SHA1 cache।
+All scripts use `//go:embed` + `redis.NewScript()` — SHA1 cache at startup.
 
 ---
 
 ## NOSCRIPT handling
 
-1. Normal path: `EVALSHA <sha>` — script server-side cached।
-2. `SCRIPT FLUSH`, cold Redis, या failover के बाद Redis `NOSCRIPT` लौटा सकता है।
-3. **go-redis `redis.Script`** automatically full script body के साथ retry करता है — application code में explicit NOSCRIPT handler नहीं।
-4. Tests: `SCRIPT FLUSH` recovery SOURCE + TEST + RUNTIME proven।
+1. Normal path: `EVALSHA <sha>` — script cached server-side.
+2. After `SCRIPT FLUSH`, cold Redis, or failover, Redis may return `NOSCRIPT`.
+3. **go-redis `redis.Script`** automatically retries with the full script body — no explicit NOSCRIPT handler in application code.
+4. Tests: `SCRIPT FLUSH` recovery SOURCE + TEST + RUNTIME proven.
 
-**Operational note:** deliberate `SCRIPT FLUSH` production में rare; transient NOSCRIPT एक extra round-trip है, correctness break नहीं।
+**Operational note:** deliberate `SCRIPT FLUSH` is rare in production; transient NOSCRIPT is one extra round-trip, not a correctness break.
 
 ---
 
@@ -141,15 +141,15 @@ flowchart LR
   Lua -->|return array| Go
 ```
 
-- Per-shard single-threaded execution → Lua में read-modify-write race-free।
-- Sentinel promotion के बाद scripts unchanged; client reconnects via `FailoverClient`।
-- Hot path पर `KEYS *` / full scan forbidden — CB admin scan `SCAN cb:*` केवल ops।
+- Per-shard single-threaded execution → read-modify-write race-free in Lua.
+- After Sentinel promotion scripts are unchanged; client reconnects via `FailoverClient`.
+- `KEYS *` / full scan forbidden on hot path — CB admin scan `SCAN cb:*` only for ops.
 
 ---
 
 ## Observability hook
 
-`OTEL_ENABLED=true` पर `telemetry.InstrumentRedis(rdb)` — Redis commands traced (`internal/telemetry/redis.go`)।
+With `OTEL_ENABLED=true`, `telemetry.InstrumentRedis(rdb)` — Redis commands traced (`internal/telemetry/redis.go`).
 
 ---
 

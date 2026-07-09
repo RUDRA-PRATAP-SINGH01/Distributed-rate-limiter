@@ -2,13 +2,13 @@
 
 ## Purpose
 
-यह दस्तावेज़ Distributed Rate Limiter प्लेटफ़ॉर्म की end-to-end आर्किटेक्चर, प्रमुख प्रक्रियाएँ, नेटवर्क सतहें और state ownership को स्रोत कोड (`cmd/`, `internal/`, `docker-compose*.yml`) पर आधारित वर्णन करता है। पाठक को यह समझना चाहिए कि कौन-सा घटक किस पोर्ट पर सुनता है, कौन authoritative quota रखता है, और sidecar/limiter/redis के बीच जिम्मेदारी कैसे बँटी है।
+This document describes the end-to-end architecture, major processes, network surfaces, and state ownership of the Distributed Rate Limiter platform, based on source code (`cmd/`, `internal/`, `docker-compose*.yml`). Readers should understand which component listens on which port, who holds authoritative quota, and how responsibilities are split between sidecar, limiter, and Redis.
 
 ## Executive Summary
 
-क्लाइंट ट्रैफ़िक **sidecar** (`:9090`) से प्रवेश करती है। Sidecar प्रत्येक अनुरोध पर केंद्रीय **limiter** (`:8080`) को HTTP `GET /check` या `GET /check_hierarchical` से पूछता है। Limiter **Redis** में Lua-परमाणित quota state रखता है — यही fleet-wide सत्य का स्रोत है। Sidecar की in-memory denial cache और singleflight केवल प्रक्रिया-स्थानीय अनुकूलन हैं; वे global quota कमज़ोर नहीं करते (SOURCE + TEST)।
+Client traffic enters through the **sidecar** (`:9090`). On each request, the sidecar queries the central **limiter** (`:8080`) via HTTP `GET /check` or `GET /check_hierarchical`. The limiter maintains Lua-atomic quota state in **Redis** — this is the fleet-wide source of truth. The sidecar's in-memory denial cache and singleflight are process-local optimizations only; they do not weaken global quota (SOURCE + TEST).
 
-**Admin API** अलग पोर्ट `:8082` पर चलता है: runtime overrides, idempotency inspect/purge, circuit reset, audit search। **Prometheus** default compose में host `:9091` पर मैप है (`9091:9090`); यह sidecar replica नहीं है। Scale profile (`docker-compose.scale.yml`) दूसरा sidecar **`:9092`** पर expose करता है, जानबूझकर `:9091` Prometheus के लिए छोड़ा गया है।
+The **Admin API** runs on a separate port `:8082`: runtime overrides, idempotency inspect/purge, circuit reset, audit search. **Prometheus** in the default compose is mapped on host `:9091` (`9091:9090`); it is not a sidecar replica. The scale profile (`docker-compose.scale.yml`) exposes a second sidecar on **`:9092`**, deliberately leaving `:9091` for Prometheus.
 
 ```mermaid
 flowchart TB
@@ -71,56 +71,56 @@ flowchart TB
 
 ## Architecture
 
-### घटक सारणी
+### Component table
 
-| घटक | बाइनरी / इमेज | Host पोर्ट (default compose) | जिम्मेदारी |
+| Component | Binary / image | Host port (default compose) | Responsibility |
 |------|----------------|------------------------------|-------------|
-| **rate-sidecar** | `cmd/sidecar` | **9090** | क्लाइंट entry, rate check, denial cache, singleflight, idempotency, optional routing |
+| **rate-sidecar** | `cmd/sidecar` | **9090** | Client entry, rate check, denial cache, singleflight, idempotency, optional routing |
 | **rate-limiter** | `cmd/limiter` | **8080** (hot path), **8082** (admin) | Authoritative quota, circuit guard, audit emit, metrics |
 | **Redis** | `redis:7-alpine` | 6379 (loopback bind) | Quota, circuit breaker, idempotency, routing scores, audit |
-| **demo-backend** | `cmd/demo` | 8081 | Default upstream जब routing बंद |
+| **demo-backend** | `cmd/demo` | 8081 | Default upstream when routing is disabled |
 | **gateway-a/b/c** | `cmd/gateway` | internal 8081 | Weighted routing targets (`ENABLE_ROUTING=true`) |
-| **Prometheus** | `prom/prometheus` | **9091** → container 9090 | `limiter:8080`, `sidecar:9090`, `redis-exporter:9121` scrape |
+| **Prometheus** | `prom/prometheus` | **9091** → container 9090 | Scrape `limiter:8080`, `sidecar:9090`, `redis-exporter:9121` |
 | **Grafana** | `grafana/grafana` | 3000 | Dashboards |
 | **Jaeger** | `jaegertracing/all-in-one` | 16686 (UI), 4318 (OTLP HTTP) | Distributed tracing |
 | **redis-exporter** | `oliver006/redis_exporter` | 9121 | Redis infra metrics |
 
 ### Scale profile (`docker-compose.scale.yml`, profile `scale`)
 
-| घटक | Host पोर्ट | नोट |
+| Component | Host port | Note |
 |------|-----------|------|
-| limiter (primary) | 8080, 8082 | अपरिवर्तित |
-| **limiter-b** | **8083** → 8080, **8084** → 8082 | दूसरा limiter replica |
-| sidecar (primary) | 9090 | अपरिवर्तित |
-| **sidecar-b** | **9092** → 9090 | **9091 Prometheus के लिए रिज़र्व** — `docker-compose.scale.yml` टिप्पणी: `# 9091 is Prometheus in base compose` |
-| Prometheus | **9091** | sidecar-b **नहीं** |
+| limiter (primary) | 8080, 8082 | Unchanged |
+| **limiter-b** | **8083** → 8080, **8084** → 8082 | Second limiter replica |
+| sidecar (primary) | 9090 | Unchanged |
+| **sidecar-b** | **9092** → 9090 | **9091 reserved for Prometheus** — `docker-compose.scale.yml` comment: `# 9091 is Prometheus in base compose` |
+| Prometheus | **9091** | Not sidecar-b |
 
-दोनों sidecar replicas एक ही `RATE_LIMITER_URL=http://limiter:8080` और shared Redis उपयोग करते हैं; denial cache / singleflight **प्रति प्रक्रिया** अलग रहते हैं (SOURCE-PROVEN)।
+Both sidecar replicas use the same `RATE_LIMITER_URL=http://limiter:8080` and shared Redis; denial cache / singleflight remain **per process** (SOURCE-PROVEN).
 
-### HTTP सतहें (limiter)
+### HTTP surfaces (limiter)
 
-| Method | Path | Port | Auth | भूमिका |
+| Method | Path | Port | Auth | Role |
 |--------|------|------|------|--------|
 | GET | `/health` | 8080 | None | Redis connectivity JSON |
 | GET | `/check` | 8080 | `INTERNAL_API_KEY` | Flat per-user limit |
-| GET | `/check_hierarchical` | 8080 | `INTERNAL_API_KEY` | चार-स्तरीय hierarchical limit |
+| GET | `/check_hierarchical` | 8080 | `INTERNAL_API_KEY` | Four-level hierarchical limit |
 | GET | `/metrics` | 8080 | Optional `METRICS_API_KEY` | Prometheus |
 | * | `/admin/*` | **8082** | `ADMIN_API_KEY` | Overrides, idempotency, circuit, audit, routing |
 
-Sidecar: सभी proxied paths `/` पर; `/health` और `/metrics` अलग mux routes (`cmd/sidecar/main.go`).
+Sidecar: all proxied paths on `/`; `/health` and `/metrics` are separate mux routes (`cmd/sidecar/main.go`).
 
-### डेटा प्रवाह (सामान्य)
+### Data flow (typical)
 
 1. Client → sidecar `:9090`
-2. Sidecar identity resolve (`X-User-ID` या query `user_id` यदि `ALLOW_QUERY_USER_ID=true`)
+2. Sidecar identity resolve (`X-User-ID` or query `user_id` if `ALLOW_QUERY_USER_ID=true`)
 3. Optional idempotency claim (mutating + `Idempotency-Key`)
 4. Denial cache miss → singleflight → limiter HTTP
 5. Limiter: Redis circuit → Lua quota → audit record
-6. Allowed → reverse proxy upstream या weighted gateway
+6. Allowed → reverse proxy upstream or weighted gateway
 
 ## State Ownership
 
-| State | Owner | Storage | Replicas दृश्य |
+| State | Owner | Storage | Replica view |
 |-------|-------|---------|----------------|
 | Quota tokens / window counts | **Limiter + Redis** | `rate:*`, `sw:*` keys | Fleet-wide consistent (Lua atomic) |
 | Hierarchical buckets | **Limiter + Redis** | `rate:global`, `rate:tenant:*`, `rate:user:*`, `rate:endpoint:*` | Single Lua RTT, 4 keys |
@@ -154,26 +154,26 @@ Sidecar: सभी proxied paths `/` पर; `/health` और `/metrics` अल�
 
 ## Correctness Invariants
 
-1. **Redis authoritative**: कोई भी sidecar local state global quota का स्रोत नहीं बनता (`cmd/limiter/main.go` package comment).
-2. **Deny-only cache**: अनुमति (allow) cache hit पर भी limiter को फिर बुलाया जाता है — केवल `Allowed=false` entries serve होती हैं (`serveNormal`, lines 377–394).
-3. **Atomic quota**: सभी algorithms Redis `EVAL` के भीतर refill + deduct करते हैं — race-free fleet-wide.
-4. **Hierarchical all-or-nothing**: चारों स्तर एक Lua में; partial commit असंभव (`hierarchical.go` comment).
-5. **Flat `/check` ignores overrides**: Admin overrides केवल `/check_hierarchical` path पर merge (`docs/limitations.md`, SOURCE-PROVEN).
-6. **503 ≠ 429**: Redis/circuit/limiter failure → 503; quota exhausted → 429 — अलग operational semantics.
+1. **Redis authoritative**: No sidecar local state becomes the source of global quota (`cmd/limiter/main.go` package comment).
+2. **Deny-only cache**: On cache hit, the limiter is still called for allowances — only `Allowed=false` entries are served (`serveNormal`, lines 377–394).
+3. **Atomic quota**: All algorithms perform refill + deduct inside Redis `EVAL` — race-free fleet-wide.
+4. **Hierarchical all-or-nothing**: All four levels in one Lua; partial commit impossible (`hierarchical.go` comment).
+5. **Flat `/check` ignores overrides**: Admin overrides merge only on the `/check_hierarchical` path (`docs/limitations.md`, SOURCE-PROVEN).
+6. **503 ≠ 429**: Redis/circuit/limiter failure → 503; quota exhausted → 429 — distinct operational semantics.
 
 ## Failure Semantics
 
-| परिदृश्य | Sidecar | Limiter | Default policy |
+| Scenario | Sidecar | Limiter | Default policy |
 |----------|---------|---------|----------------|
-| Redis down | `/health` 503 यदि idempotency/routing needs Redis | Startup fatal; runtime `/health` 503 | Fail-closed |
+| Redis down | `/health` 503 if idempotency/routing needs Redis | Startup fatal; runtime `/health` 503 | Fail-closed |
 | Limiter unreachable | 503 (`FAIL_OPEN=false`) | — | Sidecar `FAIL_OPEN=true` → forward with warning log |
-| Redis circuit open (limiter) | Sidecar को limiter 503 | `checkRedisCircuit` → 503 + `circuit_state` | `CIRCUIT_FAIL_OPEN=false` default |
+| Redis circuit open (limiter) | Sidecar receives limiter 503 | `checkRedisCircuit` → 503 + `circuit_state` | `CIRCUIT_FAIL_OPEN=false` default |
 | Idempotency Redis down | 503 unless `IDEMPOTENCY_FAIL_OPEN=true` | — | Fail-closed default |
 | All gateways down (routing) | 503 `all gateways unavailable` | — | No upstream forward |
 
 ## Concurrency
 
-- **Sidecar**: `sync.Map` denial cache; `singleflight.Group` per `cacheKey`; cache sweeper goroutine हर 10s (`StartCacheSweeper`).
+- **Sidecar**: `sync.Map` denial cache; `singleflight.Group` per `cacheKey`; cache sweeper goroutine every 10s (`StartCacheSweeper`).
 - **Limiter**: Stateless HTTP handlers; Redis Lua serializes per-key mutations.
 - **Audit**: Optional async worker pool + bounded queue; full queue → drop + metric (`audit/store.go`).
 - **Override cache**: `sync.Map` + generation stamp; admin write increments `config:generation`.
@@ -188,7 +188,7 @@ Sidecar: सभी proxied paths `/` पर; `/health` और `/metrics` अल�
 
 ## Verified Evidence
 
-| दावा | प्रकार | स्रोत |
+| Claim | Type | Source |
 |------|--------|-------|
 | Denial cache hit skips limiter | TEST-PROVEN | `cmd/sidecar/cache_test.go` — `TestSidecar_DenialCache` |
 | Allowance not served from cache | TEST-PROVEN | `cmd/sidecar/cache_test.go` — `TestSidecar_AllowanceCache` |
@@ -200,9 +200,9 @@ Sidecar: सभी proxied paths `/` पर; `/health` और `/metrics` अल�
 
 ## Known Limitations
 
-- Single Redis master default compose में — सभी subsystems एक process साझा करते हैं (SOURCE-PROVEN).
-- Sidecar denial cache / singleflight **cross-replica नहीं** — प्रति sidecar instance अलग (SOURCE + TEST).
-- Hierarchical Lua 4 keys — Redis Cluster hash-tag safe **नहीं** बिना redesign (SOURCE-PROVEN).
-- Admin `:8082` dev में `0.0.0.0` bind — production में network isolation आवश्यक.
-- Dev secrets और `ALLOW_QUERY_USER_ID=true` default compose में (SOURCE-PROVEN).
-- Benchmark संख्याएँ इस दस्तावेज़ में उद्धृत **नहीं** — केवल `docs/benchmarks/` और `docs/limitations.md` में BENCHMARK-PROVEN रूप में।
+- Single Redis master in default compose — all subsystems share one process (SOURCE-PROVEN).
+- Sidecar denial cache / singleflight **not cross-replica** — separate per sidecar instance (SOURCE + TEST).
+- Hierarchical Lua 4 keys — not Redis Cluster hash-tag safe without redesign (SOURCE-PROVEN).
+- Admin `:8082` binds `0.0.0.0` in dev — production requires network isolation.
+- Dev secrets and `ALLOW_QUERY_USER_ID=true` in default compose (SOURCE-PROVEN).
+- Benchmark numbers are **not** cited in this document — only in `docs/benchmarks/` and `docs/limitations.md` as BENCHMARK-PROVEN.

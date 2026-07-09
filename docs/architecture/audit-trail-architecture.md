@@ -1,6 +1,6 @@
 ﻿# Audit Trail Architecture
 
-Limiter हर allow/deny decision का audit record Redis में persist कर सकता है (`ENABLE_AUDIT_TRAIL`, default on)। Hot path **async workers + bounded queue** से decouple; shutdown पर queue drain before Redis close।
+The limiter can persist an audit record for every allow/deny decision in Redis (`ENABLE_AUDIT_TRAIL`, default on). The hot path is decoupled via **async workers + bounded queue**; on shutdown, the queue drains before Redis close.
 
 ---
 
@@ -14,7 +14,7 @@ Limiter हर allow/deny decision का audit record Redis में persist �
 | `audit:idx:user:{id}` | ZSET | User filter |
 | `audit:idx:req:{requestID}` | STRING | Point lookup |
 
-Append: `append.lua` — atomic event write + index ZADD + retention trim (`AUDIT_MAX_EVENTS`, `AUDIT_RETENTION_HOURS`)。
+Append: `append.lua` — atomic event write + index ZADD + retention trim (`AUDIT_MAX_EVENTS`, `AUDIT_RETENTION_HOURS`).
 
 ---
 
@@ -47,7 +47,7 @@ flowchart LR
 2. `select` on queue — success → return immediately (latency off hot path)
 3. `default` on full queue → `RecordAuditDropped()`, event lost (bounded memory)
 
-Sync mode (`AUDIT_ASYNC=false`): inline `record()` — tests/benchmarks।
+Sync mode (`AUDIT_ASYNC=false`): inline `record()` — tests/benchmarks.
 
 ---
 
@@ -100,9 +100,9 @@ sequenceDiagram
 4. OpenTelemetry flush
 5. Redis close **only if** `auditStore.RedisCloseSafe()`
 
-`RedisCloseSafe()` → `state == stateStopped` for async audit。
+`RedisCloseSafe()` → `state == stateStopped` for async audit.
 
-Sidecar: audit store नहीं — केवल limiter।
+Sidecar: no audit store — limiter only.
 
 ---
 
@@ -123,7 +123,7 @@ Sidecar: audit store नहीं — केवल limiter।
 | Shutdown timeout | `ctx.Err()`; retry `Shutdown` with fresh context |
 | Record after shutdown | Silently dropped |
 
-Tests: `internal/audit/shutdown_test.go` — drain, ordering, idempotent shutdown, race stress。
+Tests: `internal/audit/shutdown_test.go` — drain, ordering, idempotent shutdown, race stress.
 
 ---
 

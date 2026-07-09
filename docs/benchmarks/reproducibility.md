@@ -1,6 +1,6 @@
 # Benchmark Reproducibility
 
-इस document से कोई भी engineer same commit पर benchmarks दोहरा सकता है और `bench-progress.log` जैसे artifacts regenerate कर सकता है।
+This document enables any engineer to repeat benchmarks on the same commit and regenerate artifacts like `bench-progress.log`.
 
 ---
 
@@ -20,7 +20,7 @@ docker version >> benchmarks/results/a1de9ec-final/environment.txt
 k6 version >> benchmarks/results/a1de9ec-final/environment.txt
 ```
 
-Reference `benchmarks/results/a1de9ec-final/environment.txt` for full hardware snapshot。
+Reference `benchmarks/results/a1de9ec-final/environment.txt` for full hardware snapshot.
 
 ---
 
@@ -94,7 +94,7 @@ k6 run benchmarks/scripts/idempotency-race.js   # expect 422 — use runtime tes
 k6 run -e TARGET_RPS=300 -e DURATION=15m benchmarks/scripts/soak.js
 ```
 
-Multi-replica requires second sidecar on **:9092** (see `commands.txt`)。
+Multi-replica requires second sidecar on **:9092** (see `commands.txt`).
 
 ---
 
@@ -110,20 +110,20 @@ Output format:
 sidecar-e2e-1000|total=61002 rps=871.5 p50=4.86 p95=8.21 p99=11.21 ...
 ```
 
-Append to `benchmarks/results/bench-progress.log` manually or via suite script。
+Append to `benchmarks/results/bench-progress.log` manually or via suite script.
 
 ---
 
 ## Idempotency runtime proof (valid test)
 
-k6 `idempotency-race.js` invalid keys → 422。Use documented runtime burst:
+k6 `idempotency-race.js` uses invalid keys → 422. Use documented runtime burst:
 
 ```powershell
 # 2 sidecars (9090 + 9092), 40 parallel POST, same GUID Idempotency-Key
 # Expected: 1×200, 39×409
 ```
 
-See `docs/testing/concurrency-and-race-testing.md` and `benchmarks/scripts/idempotency-race.js` (fix key format before trusting k6 row)।
+See `docs/testing/concurrency-and-race-testing.md` and `benchmarks/scripts/idempotency-race.js` (fix key format before trusting k6 row).
 
 ---
 
@@ -141,7 +141,7 @@ k6 run -e TARGET_RPS=100 benchmarks/scripts/direct-limiter.js `
 python benchmarks/scripts/parse-k6-stream.py benchmarks/results/a1de9ec-final/raw/direct-sliding-100-rerun-stream.json 70
 ```
 
-Expected rerun: **rps≈100, p99<10 ms, errors=0**。
+Expected rerun: **rps≈100, p99<10 ms, errors=0**.
 
 ---
 
@@ -187,7 +187,7 @@ benchmarks/final/results/a1de9ec-2026-07-09-2351/
 | Python | 3.x (parser scripts) |
 | Redis | 7.4.7 (compose image) |
 
-Ports free: **8080** limiter, **9090** sidecar, **6379** redis, **8081** demo, **8085** token limiter, **9092** second sidecar (multi-replica)।
+Ports free: **8080** limiter, **9090** sidecar, **6379** redis, **8081** demo, **8085** token limiter, **9092** second sidecar (multi-replica).
 
 ---
 

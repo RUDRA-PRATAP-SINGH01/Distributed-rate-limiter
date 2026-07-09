@@ -1,6 +1,6 @@
 ﻿# Observability Architecture
 
-तीन pillars — **metrics**, **traces**, **structured logs** — एक correlated stack। Design goal: production debug without per-user metric labels (OOM safe)।
+Three pillars — **metrics**, **traces**, **structured logs** — form one correlated stack. Design goal: production debug without per-user metric labels (OOM safe).
 
 ---
 
@@ -43,7 +43,7 @@ flowchart TB
 
 ## Metrics (`internal/metrics`)
 
-Prometheus client — **low-cardinality labels only**।
+Prometheus client — **low-cardinality labels only**.
 
 | Metric | Type | Labels |
 |--------|------|--------|
@@ -56,9 +56,9 @@ Prometheus client — **low-cardinality labels only**।
 | `routing_gateway_health_score` | Gauge | `gateway_id` |
 | `audit_events_total` | Counter | `decision`, `handler` |
 
-**Never label by:** `user_id`, `tenant_id`, path variants, idempotency keys。
+**Never label by:** `user_id`, `tenant_id`, path variants, idempotency keys.
 
-Scrape: limiter `:8080/metrics`, sidecar `:9090/metrics` (optional `METRICS_API_KEY`)।
+Scrape: limiter `:8080/metrics`, sidecar `:9090/metrics` (optional `METRICS_API_KEY`).
 
 ---
 
@@ -82,7 +82,7 @@ Representative span names:
 | `internal/idempotency/store.go` | `idempotency.claim`, `complete`, `fail` |
 | `internal/routing/router.go` | `sidecar.intelligent_route` |
 
-Shutdown: `otelShutdown(ctx)` **after** HTTP drain, span batch flush (10 s timeout)।
+Shutdown: `otelShutdown(ctx)` **after** HTTP drain, span batch flush (10 s timeout).
 
 ---
 
@@ -92,7 +92,7 @@ Shutdown: `otelShutdown(ctx)` **after** HTTP drain, span batch flush (10 s timeo
 - Fields: `component`, `operation`, `error`, trace correlation when OTEL active
 - **No** full request bodies; sensitive headers redacted (`docs/security/sensitive-data-policy.md`)
 
-Example flow: deny decision → metric `allowed=false` + span event + slog warn with `request_id`。
+Example flow: deny decision → metric `allowed=false` + span event + slog warn with `request_id`.
 
 ---
 
@@ -103,13 +103,13 @@ Example flow: deny decision → metric `allowed=false` + span event + slog warn 
 | Limiter `/health` | Redis ping, optional deps |
 | Sidecar `/health` | Limiter `/health` mandatory; Redis if idempotency/routing |
 
-Readiness fails → orchestrator removes pod from LB before SIGTERM drain。
+Readiness fails → orchestrator removes pod from LB before SIGTERM drain.
 
 ---
 
 ## Grafana
 
-Pre-built panels (`docs/observability/grafana-dashboards.md`): request rates, Redis latency, CB state, routing scores, idempotency outcomes, audit drops。
+Pre-built panels (`docs/observability/grafana-dashboards.md`): request rates, Redis latency, CB state, routing scores, idempotency outcomes, audit drops.
 
 ---
 
@@ -121,7 +121,7 @@ request_id (X-Request-ID) ← audit index + logs
 handler label ← metrics dimension
 ```
 
-Incident workflow: Grafana alert on p99 → Jaeger trace → slog request_id → `GET /admin/audit?request_id=...`。
+Incident workflow: Grafana alert on p99 → Jaeger trace → slog request_id → `GET /admin/audit?request_id=...`.
 
 ---
 

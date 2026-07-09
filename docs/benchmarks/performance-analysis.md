@@ -42,7 +42,7 @@
 
 ## ~872 RPS cluster
 
-तीन workloads same **~870 actual RPS** पर converge @ 1000 target, unique users, zero infra errors:
+Three workloads converge at the same **~870 actual RPS** @ 1000 target, unique users, zero infra errors:
 
 ```
 sidecar-e2e-1000   → 871.5 RPS, p99 11.21 ms  ← production path
@@ -50,7 +50,7 @@ hierarchical-1000  → 870.2 RPS, p99 34.17 ms  ← 4-level Lua + generation GET
 direct-token-1000  → 869.1 RPS, p99 145 ms    ← borderline sustainable (p99 > 100)
 ```
 
-**Verdict:** Production-shaped **sidecar e2e @ ~872 RPS** is the headline sustainable number (p99 < 100 ms, 0 errors)。
+**Verdict:** Production-shaped **sidecar e2e @ ~872 RPS** is the headline sustainable number (p99 < 100 ms, 0 errors).
 
 ---
 
@@ -81,9 +81,9 @@ Insights:
 | Sidecar e2e | **4.86 ms** | **11.21 ms** |
 | **Delta** | **~+3.7 ms** | **~+3 ms** |
 
-Overhead sources: extra HTTP hop, denial-cache miss path, singleflight coordination, JSON parse — **not** second Redis quota call on cache hit (denials only cached)。
+Overhead sources: extra HTTP hop, denial-cache miss path, singleflight coordination, JSON parse — **not** second Redis quota call on cache hit (denials only cached).
 
-@ 5000 target sidecar **1504** vs direct sliding **285** — sidecar back-pressure differs but both saturated (p99 hundreds of ms)。
+@ 5000 target sidecar **1504** vs direct sliding **285** — sidecar back-pressure differs but both saturated (p99 hundreds of ms).
 
 ---
 
@@ -95,7 +95,7 @@ Overhead sources: extra HTTP hop, denial-cache miss path, singleflight coordinat
 rps=55.2  p99=32017 ms  errors=6
 ```
 
-**Cause:** Overlapping outage recovery from prior chaos test — Redis/client not warm, polluted tail。
+**Cause:** Overlapping outage recovery from prior chaos test — Redis/client not warm, polluted tail.
 
 **Rerun** (`direct-sliding-100-rerun-stream.json`):
 
@@ -103,7 +103,7 @@ rps=55.2  p99=32017 ms  errors=6
 rps=100.0  p99=3.93 ms  errors=0
 ```
 
-**Action taken:** First run retained in log; analysis uses rerun for sliding @ 100 baseline。
+**Action taken:** First run retained in log; analysis uses rerun for sliding @ 100 baseline.
 
 ### 2. `idempotency-race` k6 — 422 vs runtime proof
 
@@ -112,11 +112,11 @@ rps=100.0  p99=3.93 ms  errors=0
 | k6 `idempotency-race` | 10×200, **90×422** | **No** — invalid key format (`ValidateKey` rejection) |
 | 40 parallel POST, 2 sidecars, GUID key | **1×200, 39×409** | **Yes** — RUNTIME-PROVEN |
 
-422 = `hash_mismatch` / validation path, not duplicate suppression failure。Benchmark narrative uses runtime proof, not k6 row。
+422 = `hash_mismatch` / validation path, not duplicate suppression failure. Benchmark narrative uses runtime proof, not k6 row.
 
 ### 3. `hierarchical-1000` high 429
 
-60474×429 vs 440×200 — endpoint capacity intentionally low; measures **latency under deny-heavy merge**, not admission throughput。
+60474×429 vs 440×200 — endpoint capacity intentionally low; measures **latency under deny-heavy merge**, not admission throughput.
 
 ---
 
@@ -145,7 +145,7 @@ Actual RPS
            100   1000   5000
 ```
 
-Knee for default stack: **~870–872 actual** before p99 or errors violate sustainable definition。
+Knee for default stack: **~870–872 actual** before p99 or errors violate sustainable definition.
 
 ---
 

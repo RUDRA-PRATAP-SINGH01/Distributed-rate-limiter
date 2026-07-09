@@ -2,11 +2,11 @@
 
 ## Purpose
 
-यह दस्तावेज़ एक HTTP अनुरोध के sidecar → limiter → Redis → upstream पथ पर विभिन्न परिदृश्यों (normal, denied, idempotent, hierarchical, redis failure, limiter failure) में क्रमिक व्यवहार को sequence diagrams और implementation evidence के साथ वर्णन करता है।
+This document describes the sequential behavior of an HTTP request across the sidecar → limiter → Redis → upstream path under various scenarios (normal, denied, idempotent, hierarchical, redis failure, limiter failure), with sequence diagrams and implementation evidence.
 
 ## Executive Summary
 
-सभी proxied अनुरोध `cmd/sidecar/main.go` के `ServeHTTP` से प्रवेश करते हैं। Identity resolve के बाद, यदि `Idempotency-Key` मौजूद है और method mutating है, तो `serveIdempotent` path; अन्यथा `serveNormal`। Normal path: denial cache → singleflight → `checkRateLimit` → limiter HTTP → upstream proxy। Limiter हर check पर Redis circuit guard और Lua quota चलाता है। Failure paths default **fail-closed** (503) हैं; `FAIL_OPEN`, `IDEMPOTENCY_FAIL_OPEN`, `CIRCUIT_FAIL_OPEN` explicit opt-in हैं।
+All proxied requests enter through `ServeHTTP` in `cmd/sidecar/main.go`. After identity resolution, if `Idempotency-Key` is present and the method is mutating, the `serveIdempotent` path is used; otherwise `serveNormal`. Normal path: denial cache → singleflight → `checkRateLimit` → limiter HTTP → upstream proxy. The limiter runs Redis circuit guard and Lua quota on every check. Failure paths default to **fail-closed** (503); `FAIL_OPEN`, `IDEMPOTENCY_FAIL_OPEN`, and `CIRCUIT_FAIL_OPEN` are explicit opt-ins.
 
 ## Architecture
 
@@ -26,7 +26,7 @@ flowchart TD
 
 ### Cache key semantics
 
-| Mode | `cacheKey` | स्रोत |
+| Mode | `cacheKey` | Source |
 |------|------------|-------|
 | Flat (`USE_HIERARCHICAL=false`) | `userID` | `Sidecar.cacheKey` |
 | Hierarchical | `tenantID\|userID\|path` | `Sidecar.cacheKey` |
@@ -129,7 +129,7 @@ sequenceDiagram
     end
 ```
 
-**नोट:** Sidecar standard idempotent path limiter पर `idempotent_replay=true` **नहीं** भेजता (`checkRateLimit` with `idempotentReplay=false`). Limiter का `?idempotent_replay=true` shortcut केवल trusted callers के लिए है (`cmd/limiter/main.go`).
+**Note:** The sidecar standard idempotent path does **not** send `idempotent_replay=true` to the limiter (`checkRateLimit` with `idempotentReplay=false`). The limiter's `?idempotent_replay=true` shortcut is for trusted callers only (`cmd/limiter/main.go`).
 
 ### 4. Hierarchical — USE_HIERARCHICAL=true
 
@@ -214,7 +214,7 @@ Sidecar limiter HTTP timeouts: `SIDECAR_LIMITER_HTTP_TIMEOUT_MS` default 1500ms 
 
 ## State Ownership
 
-| Lifecycle चरण | Mutable state | Owner |
+| Lifecycle stage | Mutable state | Owner |
 |---------------|---------------|-------|
 | Identity resolution | None (derived from headers/query) | Sidecar |
 | Idempotency claim | `idem:*` Redis keys | Sidecar + Redis Lua |
@@ -240,12 +240,12 @@ Sidecar limiter HTTP timeouts: `SIDECAR_LIMITER_HTTP_TIMEOUT_MS` default 1500ms 
 
 ## Correctness Invariants
 
-1. **Allow never cached for serve**: Expired या `Allowed=true` cache entry limiter को skip **नहीं** करती (`serveNormal` lines 377–394).
-2. **Denial cache weakens quota नहीं**: केवल पहले से denied state replay; नया allow Redis से आता है।
-3. **singleflight same key**: एक concurrent burst में एक limiter RTT (`limitFlight.Do(cacheKey, ...)`).
-4. **Idempotent deny persists**: 429 पर `Complete` — replay में वही denial (`serveIdempotent` lines 295–300).
-5. **Hierarchical endpoint**: Sidecar `r.URL.Path` को `endpoint` query के रूप में भेजता है।
-6. **Status code separation**: 429 = quota; 503 = infrastructure/policy unavailable।
+1. **Allow never cached for serve**: Expired or `Allowed=true` cache entries do **not** skip the limiter (`serveNormal` lines 377–394).
+2. **Denial cache does not weaken quota**: Only previously denied state is replayed; new allows come from Redis.
+3. **singleflight same key**: One limiter RTT in a concurrent burst (`limitFlight.Do(cacheKey, ...)`).
+4. **Idempotent deny persists**: On 429, `Complete` — same denial on replay (`serveIdempotent` lines 295–300).
+5. **Hierarchical endpoint**: Sidecar sends `r.URL.Path` as the `endpoint` query parameter.
+6. **Status code separation**: 429 = quota; 503 = infrastructure/policy unavailable.
 
 ## Failure Semantics
 
@@ -263,20 +263,20 @@ Sidecar limiter HTTP timeouts: `SIDECAR_LIMITER_HTTP_TIMEOUT_MS` default 1500ms 
 ## Concurrency
 
 - **Normal allowed burst**: N concurrent same-user → singleflight → 1 Redis Lua; N upstream forwards after shared result.
-- **Normal denied burst**: पहला miss → singleflight → 1 limiter call; बाकी same flight; फिर cache serves 429.
+- **Normal denied burst**: First miss → singleflight → 1 limiter call; rest share same flight; then cache serves 429.
 - **Idempotent**: Claim Lua serializes same key; concurrent duplicates → `ResultInProgress` / replay.
-- **Cross-sidecar**: कोई shared denial cache नहीं — दो replicas पर duplicate limiter calls संभव (correctness preserved, optimization lost).
+- **Cross-sidecar**: No shared denial cache — duplicate limiter calls possible on two replicas (correctness preserved, optimization lost).
 
 ## Operational Behavior
 
 - Default `CACHE_TTL_MS` = 30ms compose (`cmd/sidecar/main.go` `main()`).
 - Idempotency: `ENABLE_IDEMPOTENCY=true` default compose; Redis mandatory at sidecar startup.
-- Mutating methods: `idempotency.IsMutatingMethod` — GET checks idempotency path में नहीं जाते unless key present on GET (key + mutating gate).
+- Mutating methods: `idempotency.IsMutatingMethod` — GET checks do not enter idempotency path unless key present on GET (key + mutating gate).
 - Limiter records audit on allow/deny/error when `ENABLE_AUDIT_TRAIL=true`.
 
 ## Verified Evidence
 
-| परिदृश्य | प्रकार | स्रोत |
+| Scenario | Type | Source |
 |----------|--------|-------|
 | Denial cache second hit = 0 extra limiter calls | TEST-PROVEN | `TestSidecar_DenialCache` |
 | Allowance re-queries limiter despite cache entry | TEST-PROVEN | `TestSidecar_AllowanceCache` |
@@ -287,7 +287,7 @@ Sidecar limiter HTTP timeouts: `SIDECAR_LIMITER_HTTP_TIMEOUT_MS` default 1500ms 
 
 ## Known Limitations
 
-- Idempotent path **not** exactly-once upstream — crash between upstream success and `Complete` duplicates possible (`docs/limitations.md`).
-- `idempotent_replay=true` limiter shortcut sidecar idempotent flow में उपयोग नहीं।
-- Hierarchical + flat cache key differs — tenant/path isolation केवल hierarchical mode में।
+- Idempotent path **not** exactly-once upstream — crash between upstream success and `Complete` may duplicate (`docs/limitations.md`).
+- `idempotent_replay=true` limiter shortcut not used in sidecar idempotent flow.
+- Hierarchical + flat cache key differs — tenant/path isolation only in hierarchical mode.
 - k6 `singleflight.js` is functional; collapse ratio is not a dedicated metric (see `TestSidecar_SingleflightCollapse`).

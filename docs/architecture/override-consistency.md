@@ -1,12 +1,12 @@
 # Override Consistency Architecture
 
-Runtime limit overrides admin API से Redis में लिखे जाते हैं। Cross-replica consistency **`config:generation` counter** + per-replica local cache invalidation से होती है — **Pub/Sub नहीं**, और केवल **hierarchical path** पर apply।
+Runtime limit overrides are written to Redis via the admin API. Cross-replica consistency is achieved through the **`config:generation` counter** + per-replica local cache invalidation — **not Pub/Sub**, and applied only on the **hierarchical path**.
 
 ---
 
 ## Problem
 
-Admin एक replica पर override लिखे → दूसरे limiter replicas को तुरंत दिखना चाहिए, बिना redeploy। Pub/Sub miss (network gap, subscriber down) risk है; pure TTL wait slow है।
+Admin writes an override on one replica → other limiter replicas must see it immediately, without redeploy. Pub/Sub risks missed messages (network gap, subscriber down); pure TTL wait is slow.
 
 ---
 
@@ -34,9 +34,9 @@ sequenceDiagram
 | Key | Write trigger |
 |-----|---------------|
 | `config:{level}:{id}` | `SetOverride` / `DeleteOverride` |
-| `config:generation` | Same pipeline में atomic `INCR` |
+| `config:generation` | Atomic `INCR` in same pipeline |
 
-Levels: `global`, `tenant`, `user`, `endpoint` (endpoint id = `tenant|path`)।
+Levels: `global`, `tenant`, `user`, `endpoint` (endpoint id = `tenant|path`).
 
 ---
 
@@ -52,18 +52,18 @@ func (s *Store) RefreshGeneration(ctx context.Context) {
 }
 ```
 
-**Call site:** `effectiveHierarchicalLimits()` — हर `/check_hierarchical` से **पहले**, multiple override levels read करने से पहले एक बार।
+**Call site:** `effectiveHierarchicalLimits()` — once **before** each `/check_hierarchical`, before reading multiple override levels.
 
 ### Local cache (`sync.Map`)
 
 - Key: full Redis key (`config:user:alice`)
 - Value: `{cfg, expiry}` — `OVERRIDE_CACHE_TTL_MS` (default **5000 ms**)
 - Generation bump → **entire cache flushed** (not per-key selective)
-- Writer replica (`SetOverride`) locally भी generation advance + single key delete
+- Writer replica (`SetOverride`) also advances generation locally + deletes single key
 
 ---
 
-## NOT Pub/Sub — जानबूझकर
+## NOT Pub/Sub — by design
 
 | Approach | Verdict |
 |----------|---------|
@@ -71,7 +71,7 @@ func (s *Store) RefreshGeneration(ctx context.Context) {
 | Fixed TTL only | Rejected — up to TTL staleness after write |
 | **Poll `config:generation`** | Chosen — one GET per hierarchical check, deterministic |
 
-Trade-off: one extra Redis `GET` per hierarchical request vs instant push।
+Trade-off: one extra Redis `GET` per hierarchical request vs instant push.
 
 ---
 
@@ -84,7 +84,7 @@ Trade-off: one extra Redis `GET` per hierarchical request vs instant push।
 | Sidecar flat mode | No override merge |
 | Sidecar hierarchical mode | Limiter side merge |
 
-Admin API `:8082` (`cmd/limiter/admin_api.go`) — `X-API-Key: ADMIN_API_KEY`।
+Admin API `:8082` (`cmd/limiter/admin_api.go`) — `X-API-Key: ADMIN_API_KEY`.
 
 ---
 
@@ -97,7 +97,7 @@ Admin API `:8082` (`cmd/limiter/admin_api.go`) — `X-API-Key: ADMIN_API_KEY`।
 | Redis GET failure | Stale cache until next successful refresh or `OVERRIDE_CACHE_TTL_MS` per-key expiry |
 | Not instant global | No cross-replica push; bounded by check frequency |
 
-**Tests:** `TestOverrideSetVisibleAcrossReplicas` — write on A, `RefreshGeneration` on B → visible (TEST-PROVEN)।
+**Tests:** `TestOverrideSetVisibleAcrossReplicas` — write on A, `RefreshGeneration` on B → visible (TEST-PROVEN).
 
 ---
 
@@ -109,7 +109,7 @@ incr := pipe.Incr(ctx, generationKey)
 pipe.Exec(ctx)
 ```
 
-Override data और generation bump **एक pipeline** — readers never see new generation with old override data।
+Override data and generation bump in **one pipeline** — readers never see new generation with old override data.
 
 ---
 

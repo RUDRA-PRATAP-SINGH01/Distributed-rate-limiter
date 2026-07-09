@@ -1,6 +1,6 @@
 ﻿# Routing Architecture
 
-Intelligent routing sidecar में optional layer है (`ENABLE_ROUTING=true`)। Multiple upstream **gateways** register होते हैं; passive **health probes** + request **outcomes** Redis metrics update करते हैं; primary selection **weighted random** on computed score; failure पर **failover ordering**।
+Intelligent routing is an optional layer in the sidecar (`ENABLE_ROUTING=true`). Multiple upstream **gateways** register; passive **health probes** and request **outcomes** update Redis metrics; primary selection uses **weighted random** on computed score; on failure, **failover ordering** applies.
 
 ---
 
@@ -34,9 +34,9 @@ flowchart TB
 | `route:gw:{id}` | `id`, `url`, `weight`, `enabled`, `health_score`, `latency_ema_ms`, `success_count`, `error_count`, `total_requests`, `updated_at` |
 | `route:index` | SET of gateway IDs |
 
-Startup: `Router.Seed()` static config से gateways register (`cmd/sidecar` env `GATEWAYS_JSON` / config)।
+Startup: `Router.Seed()` registers gateways from static config (`cmd/sidecar` env `GATEWAYS_JSON` / config).
 
-Admin: `:8082` routing endpoints — weight update, enable/disable, circuit reset。
+Admin: `:8082` routing endpoints — weight update, enable/disable, circuit reset.
 
 ---
 
@@ -56,7 +56,7 @@ each tick:
 - Updates `health_score`, `latency_ema_ms` via `record_outcome.lua`
 - Cancel on sidecar SIGTERM (`probeCancel()` before HTTP drain)
 
-**Passive + active:** request-level `RecordOutcome` भी metrics feed करता है; probes unhealthy gateway को score=0 की ओर push करते हैं।
+**Passive + active:** request-level `RecordOutcome` also feeds metrics; probes push unhealthy gateways toward score=0.
 
 ---
 
@@ -73,7 +73,7 @@ score = weight × latencyFactor × healthFactor × errorFactor
 | `healthFactor` | `health_score / 100` |
 | `errorFactor` | `1 - (errorRate × ErrorPenalty)`, floor 0.05 |
 
-`Selectable(cfg)`: disabled, circuit open, zero score → excluded。
+`Selectable(cfg)`: disabled, circuit open, zero score → excluded.
 
 ### Primary selection (`PickPrimary`)
 
@@ -84,18 +84,18 @@ score = weight × latencyFactor × healthFactor × errorFactor
 
 ### Failover (`FailoverOrder`)
 
-Primary failure पर score-descending alternatives, `MaxFailoverTries` cap; `X-Gateway-Failover: true` on retry hops。
+On primary failure, score-descending alternatives, `MaxFailoverTries` cap; `X-Gateway-Failover: true` on retry hops.
 
 ---
 
 ## Circuit breaker per gateway
 
-हर gateway target `cb:{gatewayID}`:
+Each gateway target `cb:{gatewayID}`:
 
 1. `allow.lua` before forward
 2. `record.lua` after response (success/failure/timeout classification)
 
-Open gateway → `ComputeScore` returns 0 → excluded from weighted pool。
+Open gateway → `ComputeScore` returns 0 → excluded from weighted pool.
 
 ---
 
@@ -121,7 +121,7 @@ sequenceDiagram
   S-->>C: response + gateway headers
 ```
 
-Rate limit check अभी भी central limiter पर (routing upstream pick अलग है)।
+Rate limit check still goes through the central limiter (routing upstream pick is separate).
 
 ---
 

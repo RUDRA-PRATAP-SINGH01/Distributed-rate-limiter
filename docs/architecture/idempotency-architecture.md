@@ -1,6 +1,6 @@
 ﻿# Idempotency Architecture
 
-Sidecar layer mutating requests (`POST`, `PUT`, `PATCH`, `DELETE` + `Idempotency-Key`) के लिए **distributed claim → execute → complete** flow। Guarantee: **duplicate suppression + cached replay + fencing** — **NOT exactly-once** upstream execution।
+For mutating requests (`POST`, `PUT`, `PATCH`, `DELETE` + `Idempotency-Key`), the sidecar layer implements a **distributed claim → execute → complete** flow. Guarantee: **duplicate suppression + cached replay + fencing** — **NOT exactly-once** upstream execution.
 
 ---
 
@@ -31,7 +31,7 @@ stateDiagram-v2
 | `lock_until` | Processing lease (`IDEMPOTENCY_LOCK_TTL_MS`) |
 | `http_status`, `resp_headers`, `resp_body` / `body_ref` | Cached response |
 
-Large bodies: `idem:body:{scope}:{key}` STRING when > inline threshold (default 64 KiB)।
+Large bodies: `idem:body:{scope}:{key}` STRING when > inline threshold (default 64 KiB).
 
 ---
 
@@ -61,21 +61,21 @@ sequenceDiagram
   end
 ```
 
-Scope = `SHA256(tenant|user)` prefix (32 hex chars) — cross-tenant key collision नहीं।
+Scope = `SHA256(tenant|user)` prefix (32 hex chars) — prevents cross-tenant key collision.
 
 ---
 
 ## Fencing tokens
 
-1. Go `Claim()` पर fresh UUID generate।
-2. `claim.lua` stores `fence_token` on new claim या expired-lock reclaim।
+1. Go `Claim()` generates a fresh UUID.
+2. `claim.lua` stores `fence_token` on new claim or expired-lock reclaim.
 3. `complete.lua` / `fail.lua`:
    - `status == processing` required
    - `fence_token` must match ARGV
    - mismatch → `{0}` → Go `ErrStaleFence`
-4. Stale holder (crashed worker, reclaimed lock) cannot complete old execution।
+4. Stale holder (crashed worker, reclaimed lock) cannot complete old execution.
 
-**Purpose:** reclaim के बाद पुराना completer silent success नहीं कर सकता।
+**Purpose:** after reclaim, the old completer cannot silently succeed.
 
 ---
 
@@ -88,7 +88,7 @@ Scope = `SHA256(tenant|user)` prefix (32 hex chars) — cross-tenant key collisi
 | Crash **after** upstream, **before** `Complete` | Lock expires → reclaim → **second upstream possible** |
 | Replay after complete | Cached response, zero upstream |
 
-**Crash window:** `processing` lease TTL के दौरान owner dead + upstream already mutated → at-least-once upstream side effects possible। Documented limitation, not hidden。
+**Crash window:** owner dead during `processing` lease TTL + upstream already mutated → at-least-once upstream side effects possible. Documented limitation, not hidden.
 
 ---
 
@@ -102,7 +102,7 @@ Scope = `SHA256(tenant|user)` prefix (32 hex chars) — cross-tenant key collisi
 | 422 | Key reused with different request hash |
 | 503 | Redis unavailable |
 
-Key validation: `ValidateKey()` — empty / too long → error before Lua (k6 script issues)।
+Key validation: `ValidateKey()` — empty / too long → error before Lua (k6 script issues).
 
 ---
 
@@ -114,7 +114,7 @@ Key validation: `ValidateKey()` — empty / too long → error before Lua (k6 sc
 total=100  rps=3.3  200=10  errors=90 (422)
 ```
 
-Script ने invalid idempotency key format भेजा — **422 validation failures**, architecture test नहीं।
+The script sent an invalid idempotency key format — **422 validation failures**, not an architecture test.
 
 ### Runtime proof — **valid**
 
@@ -125,15 +125,15 @@ Script ने invalid idempotency key format भेजा — **422 validation f
 | 200 (upstream executed) | **1** |
 | 409 (in-progress / lost race) | **39** |
 
-Evidence: `benchmarks/testing/concurrency-and-race-testing.md`, RUNTIME-PROVEN।
+Evidence: `benchmarks/testing/concurrency-and-race-testing.md`, RUNTIME-PROVEN.
 
-Unit: `TestClaimSingleWinnerUnderConcurrency` — 1 claim, 99 in_progress (TEST-PROVEN)।
+Unit: `TestClaimSingleWinnerUnderConcurrency` — 1 claim, 99 in_progress (TEST-PROVEN).
 
 ---
 
 ## Circuit breaker coupling
 
-Idempotency enabled → sidecar `cb:central-limiter` guard on limiter HTTP; optional per-gateway CB when routing on।
+Idempotency enabled → sidecar `cb:central-limiter` guard on limiter HTTP; optional per-gateway CB when routing on.
 
 ---
 
