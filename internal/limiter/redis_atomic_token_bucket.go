@@ -36,7 +36,7 @@ func NewRedisAtomicTokenBucket(rdb redis.UniversalClient, capacity int, refillRa
 
 func (tb *RedisAtomicTokenBucket) Allow(ctx context.Context, userID string) (bool, int, error) {
 	key := fmt.Sprintf("rate:%s", userID)
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 
 	start := time.Now()
 	result, err := tb.script.Run(ctx, tb.rdb, []string{key},

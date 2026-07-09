@@ -1,7 +1,7 @@
 -- KEYS[1] = user key (e.g., "rate:user123")
 -- ARGV[1] = capacity
 -- ARGV[2] = refill_rate (tokens per second)
--- ARGV[3] = current timestamp (seconds)
+-- ARGV[3] = current timestamp (milliseconds)
 -- ARGV[4] = requested tokens (always 1)
 
 local key = KEYS[1]
@@ -21,21 +21,23 @@ if tokens == nil then
     last_refill = now
 end
 
--- Refill based on elapsed time
-local elapsed = now - last_refill
+-- Refill based on elapsed time (in ms)
+local elapsed = (now - last_refill) / 1000.0
+if elapsed < 0 then
+    elapsed = 0
+end
 local new_tokens = tokens + (elapsed * refill_rate)
 if new_tokens > capacity then
     new_tokens = capacity
 end
-new_tokens = math.floor(new_tokens)
 
 -- Check if allowed
 local allowed = 0
-local remaining = new_tokens
-if new_tokens >= requested then
+local remaining = math.floor(new_tokens)
+if remaining >= requested then
     new_tokens = new_tokens - requested
     allowed = 1
-    remaining = new_tokens
+    remaining = math.floor(new_tokens)
 end
 
 -- Write back

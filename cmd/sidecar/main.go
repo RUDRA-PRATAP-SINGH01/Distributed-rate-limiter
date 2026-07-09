@@ -18,6 +18,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,6 +106,28 @@ func NewSidecar(
 		},
 		proxy:            httputil.NewSingleHostReverseProxy(target),
 	}
+}
+
+func (s *Sidecar) StartCacheSweeper(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				now := time.Now()
+				s.cache.Range(func(key, value interface{}) bool {
+					entry, ok := value.(CacheEntry)
+					if ok && now.After(entry.ExpiresAt) {
+						s.cache.Delete(key)
+					}
+					return true
+				})
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			}
+		}
+	}()
 }
 
 func (s *Sidecar) SetIdempotency(store idempotency.Store, cfg idempotency.Config) {
@@ -723,10 +747,42 @@ func main() {
 	}
 	log.Printf("Sidecar starting on :%s, forwarding to %s, limiter mode: %s", port, upstream, mode)
 
-	if tlsCert != "" {
-		log.Fatal(http.ListenAndServeTLS(":"+port, tlsCert, tlsKey, handler))
+	sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
+	defer sweeperCancel()
+	sidecar.StartCacheSweeper(sweeperCtx, 10*time.Second)
+
+	srv := &http.Server{
+		Addr:         ":" + port,
+		Handler:      handler,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+
+	go func() {
+		var err error
+		if tlsCert != "" {
+			err = srv.ListenAndServeTLS(tlsCert, tlsKey)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down sidecar...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Fatal("Sidecar forced to shutdown:", err)
+	}
+	log.Println("Sidecar exited")
 }
 
 func connectSidecarRedis(otelCfg telemetry.Config) redis.UniversalClient {

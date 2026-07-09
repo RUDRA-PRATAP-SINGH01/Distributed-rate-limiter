@@ -2,7 +2,10 @@
 // Used between sidecars and the central limiter, and optionally on /metrics.
 package auth
 
-import "net/http"
+import (
+	"crypto/subtle"
+	"net/http"
+)
 
 const APIKeyHeader = "X-API-Key"
 const InternalAPIKeyHeader = "X-Internal-API-Key"
@@ -18,7 +21,8 @@ func RequireAPIKey(expectedKey string, next http.HandlerFunc) http.HandlerFunc {
 		if key == "" {
 			key = r.Header.Get(InternalAPIKeyHeader)
 		}
-		if key != expectedKey {
+		// ConstantTimeCompare prevents timing side-channel attacks on the API key comparison.
+		if subtle.ConstantTimeCompare([]byte(key), []byte(expectedKey)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

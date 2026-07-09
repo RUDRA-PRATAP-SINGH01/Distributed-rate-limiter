@@ -71,7 +71,7 @@ func (hl *HierarchicalLimiter) AllowWithParams(
 		return false, 0, fmt.Errorf("expected 4 keys, capacities, and refill rates")
 	}
 
-	now := time.Now().Unix()
+	now := time.Now().UnixMilli()
 
 	args := []interface{}{
 		capacities[0], capacities[1], capacities[2], capacities[3],
