@@ -35,7 +35,7 @@ docker start redis-master
 
 ## Metrics
 
-- `redis_failover_reconnects_total` — reconnect after failover
+- `/health` `redis.role` and circuit metrics during failover (`redis_failover_reconnects_total` declared but unwired — audit §14)
 - `/health` → `redis.role`, `redis.replication`
 
 ## Go benchmarks

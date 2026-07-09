@@ -182,7 +182,7 @@ Sidecar health proxies limiter `/health`. Redis visibility is indirect.
 3. `FailoverClient` receives topology update via Sentinel.
 4. Connection pool reconnects to the new master.
 5. Brief window: `Ping` failures. Circuit breaker may open (`redis` target).
-6. Metric `redis_failover_reconnects_total` is reserved for reconnect counting.
+6. Failover visibility: `/health` `redis.role`, `circuit_breaker_transitions_total{target="redis"}`. `redis_failover_reconnects_total` is reserved in metrics but not incremented yet (audit §14).
 
 ### Startup validation
 
@@ -233,9 +233,9 @@ Fail fast. An unhealthy fleet does not serve partial state.
 - **Sentinel queries**. Cached by go-redis. Negligible steady-state overhead.
 - **Replication lag**. Does not affect read path (we do not read replicas).
 - **Failover window**. All Redis ops fail. Sidecar cache may serve **denials only** (not allowances) briefly.
-- **Connection pool**. `PoolSize=100`, `MinIdleConns=10` per process. Reconnect storm after failover across many pods. Watch `redis_failover_reconnects_total` and connection limits.
+- **Connection pool**. `PoolSize=100`, `MinIdleConns=10` per process. Reconnect storm after failover across many pods. Watch `/health`, `circuit_breaker_state{target="redis"}`, and connection limits — not `redis_failover_reconnects_total` (dead metric, audit §14).
 - **AOF everysec**. Small write amplification vs RDB only. Durability trade accepted.
 
 ## Lessons learned
 
-I kept **compose profiles** for standalone and HA dual mode. Developers do not need to run Sentinel for a local quick start. `FailoverClient` with `RouteByLatency=false` was a conscious choice: Lua atomicity beats read scaling from replicas. Sentinel `resolve-hostnames` and `announce-hostnames` avoid IP drift in Docker networking. Adding replication INFO to the health endpoint shows instantly who is master during failover drills. Password on sentinel, master, and replica must stay in sync. `masterauth` in replica conf is explicit. Next step is wiring `RecordRedisFailoverReconnect` to the go-redis hook so we can measure failover SLO.
+I kept **compose profiles** for standalone and HA dual mode. Developers do not need to run Sentinel for a local quick start. `FailoverClient` with `RouteByLatency=false` was a conscious choice: Lua atomicity beats read scaling from replicas. Sentinel `resolve-hostnames` and `announce-hostnames` avoid IP drift in Docker networking. Adding replication INFO to the health endpoint shows instantly who is master during failover drills. Password on sentinel, master, and replica must stay in sync. `masterauth` in replica conf is explicit. Next step is wiring `RecordRedisFailoverReconnect()` to the go-redis hook (see audit §16).

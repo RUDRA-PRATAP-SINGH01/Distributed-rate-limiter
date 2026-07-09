@@ -86,7 +86,7 @@ Key construction happens in the sidecar handler layer (not in the limiter packag
 
 ## Operational concerns
 
-- Log which level denied when possible. `audit` store records handler `hierarchical` and `remaining` (see `internal/audit/store.go`).
+- Audit records `handler` (`check` or `hierarchical`) and `remaining` (minimum across levels on hierarchical path) — not which level denied (audit §9).
 - Document override precedence: endpoint-specific overrides should map to `endpointCap` in `AllowWithParams`, not a fifth level.
 - When debugging "unfair" 429s, dump all four key states in Redis CLI: `HGETALL` each key.
 - Run `benchmarks/enforcement/enforcement-test.js` for flat limits; hierarchical needs dedicated test vectors per level.
@@ -97,7 +97,7 @@ One Lua invocation vs four sequential calls saves ~3 RTTs (~3ms at p99). Script 
 
 `benchmarks/summary.md` knee at ~1,000 RPS applies to hierarchical checks too; each request still hits primary once but with ~4× the Lua work of flat bucket. Expect slightly lower max RPS for hierarchical endpoints vs simple `/check`.
 
-`metrics.RecordRedisDuration` in `hierarchical.go` captures end-to-end script latency. compare `handler=hierarchical` vs `handler=token_bucket` in dashboards.
+`metrics.RecordRedisDuration` in `hierarchical.go` captures end-to-end script latency. Compare `handler="hierarchical"` vs `handler="check"` in `rate_limiter_requests_total` / `rate_limiter_requests_duration_seconds`.
 
 ## Lessons learned
 
@@ -105,6 +105,6 @@ The hierarchical problem is really a **distributed transaction** problem with a 
 
 I initially wanted different algorithms per level (global leaky bucket, user token bucket). Uniform math in `hierarchical.lua` reduced cognitive load for SRE and support. one set of knobs: `capacity` and `refill_rate`.
 
-The `min_remaining` header was a product win. Users stop asking "which limit hit me?" when support can read the smallest remaining value.
+The `remaining` field in hierarchical responses reflects the tightest level (minimum across buckets) in `X-RateLimit-Remaining`, but telemetry does not record **which** level denied — audit stores `handler=hierarchical` only (audit §9, questions 20–23).
 
 Most importantly: **never deduct outside Lua.** The comment on `HierarchicalLimiter`. "partial commits are impossible". is the invariant I defend in code review.

@@ -99,7 +99,7 @@ curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/routing/gateways
 
 - Baseline stack throughput before routing test: roughly **1,000 actual RPS** sustainable (`benchmarks/summary.md`).
 - Run `routing-test.js` after compose is healthy. Check Jaeger (`:16686`) for span `routing.select`.
-- During an incident: `GET /admin/routing/gateways` for live scores. `PUT /admin/limits/...` if quota is also involved.
+- During an incident: `GET /admin/routing/gateways` for live scores. `POST /admin/limits/...` if quota is also involved.
 - Pair with `circuitbreaker/circuit-test.js` when validating gateway-c trip behavior.
 - Chaos: `high_latency.py` degrades Redis RTT. Routing scores lag; they do not go instantly wrong.
 

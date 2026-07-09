@@ -56,7 +56,10 @@ docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --
 | sidecar | rate-sidecar | 9090 | Client entry, routing, idempotency |
 | demo | demo-backend | 8081 | Upstream for benchmarks |
 | gateway-a/b/c | gateway-* | internal | Routing simulation |
-| jaeger | jaeger | 16686, 4318 | OTLP traces |
+| jaeger | jaeger | 16686, 4318 | OTLP traces (export when `OTEL_ENABLED=true`) |
+| prometheus | prometheus | 9091 | Metrics scrape console |
+| grafana | grafana | 3000 | Provisioned fleet dashboard |
+| redis-exporter | redis-exporter | 9121 | Redis server metrics for Prometheus |
 
 **Critical limiter env:**
 
@@ -70,7 +73,7 @@ ENABLE_ADMIN_API=true
 ADMIN_PORT=8082
 ADMIN_API_KEY=dev-key-change-in-prod
 INTERNAL_API_KEY=dev-internal-key-change-in-prod
-OTEL_ENABLED=true
+OTEL_ENABLED=false
 OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
 ```
 
@@ -97,7 +100,7 @@ curl -H "X-API-Key: dev-key-change-in-prod" http://localhost:8082/admin/limits/u
 
 ## Tradeoffs
 
-Dev keys in compose are convenient, but I must override them in prod. Jaeger is always on, which costs resources; Prometheus and Grafana stay commented out. On Windows Docker Desktop, networking adds latency compared to a Linux host. The `standalone` vs `ha` profile split confuses people sometimes. Using `--build` on every `up` is slow; I only use it when code changes.
+Dev keys in compose are convenient, but I must override them in prod. Jaeger, Prometheus, and Grafana all start in default compose; set `OTEL_ENABLED=true` on limiter and sidecar to export traces. On Windows Docker Desktop, networking adds latency compared to a Linux host. The `standalone` vs `ha` profile split confuses people sometimes. Using `--build` on every `up` is slow; I only use it when code changes.
 
 ## Failure modes
 

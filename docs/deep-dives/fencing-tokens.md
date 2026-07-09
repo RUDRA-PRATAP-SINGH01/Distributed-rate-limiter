@@ -90,7 +90,7 @@ Go maps `{0}` to `ErrStaleFence` in `Complete()` and `Fail()`.
 - Alert on `ErrStaleFence` rate. indicates lock TTL too short vs upstream p99.
 - Document reclaim behavior for support: user may see two charges if upstream is not idempotent. fence protects **our** cache, not their ledger.
 - Admin purge (`admin.go`) should delete both meta and body keys.
-- Correlate fence token in structured logs at claim + complete for postmortems.
+- Correlate fence token in logs at claim + complete for postmortems (structured logging not implemented — stdlib `log` only; audit §8).
 
 ## Performance implications
 

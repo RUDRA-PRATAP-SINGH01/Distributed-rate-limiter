@@ -44,15 +44,13 @@ This document traces the path of an incoming HTTP request through each layer of 
 ---
 
 ### 2. Hop 2: Sidecar Proxy ──► Central Rate Limiter
-- **Protocol**: HTTP/1.1 (optimized via Keep-Alive pool connections) targeting `/check` or `/check_hierarchical`.
-- **Data Payload**:
-  - The sidecar forwards metadata resolved about the request:
-    - User ID (`user_id`)
-    - Tenant ID (`tenant_id`)
-    - API key / Client ID
-    - Weight/cost of the target endpoint (e.g. `/export` requests might require 10 tokens instead of 1).
+- **Protocol**: HTTP/1.1 (keep-alive) to `GET /check` or `GET /check_hierarchical?endpoint=...` on the limiter (`:8080`).
+- **Headers forwarded** (`cmd/sidecar/main.go` `checkRateLimit`):
+  - `X-User-ID` (resolved user identity)
+  - `X-Internal-API-Key` when `INTERNAL_API_KEY` is set
+  - `X-Tenant-ID` when hierarchical mode or tenant header/query is present
 - **Concurrency Control (Singleflight)**:
-  - If multiple concurrent requests arrive at the sidecar for the identical user key, the sidecar uses a `go-singleflight` group to collapse them into a single HTTP query to the central limiter, preventing central network saturation.
+  - If multiple concurrent requests arrive at the sidecar for the identical user key, the sidecar uses `golang.org/x/sync/singleflight` to collapse them into a single HTTP query to the central limiter, preventing central network saturation.
 
 ---
 
@@ -70,23 +68,17 @@ This document traces the path of an incoming HTTP request through each layer of 
 ---
 
 ### 4. Hop 4: Central Rate Limiter ──► Sidecar Proxy (Response)
-- **Payload**: Returns a JSON structure indicating:
-  - `allowed`: Boolean status (`true`/`false`).
-  - `remaining`: Number of tokens left in the window.
-  - `reset`: Unix timestamp indicating when the window refills or resets.
-  - `circuit_state`: Circuit status header (if degraded).
+- **JSON body** (`cmd/limiter/main.go`): `allowed`, `remaining`; hierarchical adds `message` on allow. No `reset` field in the body.
+- **Headers**: `X-RateLimit-Limit`, `X-RateLimit-Remaining`; `Retry-After` on `429`. `circuit_state` appears only on `503` when the Redis circuit breaker blocks the check (`cmd/limiter/circuit.go`).
 - **Metric Collection**:
-  - The central limiter increments local Prometheus counters (e.g., `rate_limiter_requests_total`) to record system outcomes.
+  - The central limiter increments `rate_limiter_requests_total` and `rate_limiter_requests_duration_seconds`.
 
 ---
 
 ### 5. Hop 5: Sidecar Proxy ──► Upstream Backend Service (Forwarding)
 - **If Allowed (`allowed=true`)**:
   - The sidecar forwards the raw request to the target backend (port `8081` or routing gateway).
-  - Appends response headers informing the client:
-    - `X-Ratelimit-Limit`
-    - `X-Ratelimit-Remaining`
-    - `X-Ratelimit-Reset`
+  - Appends `X-RateLimit-Limit` and `X-RateLimit-Remaining` to the client response (`cmd/sidecar/main.go`).
 - **If Denied (`allowed=false`)**:
   - The sidecar intercepts the request flow and terminates it immediately, returning `HTTP 429 Too Many Requests`.
   - Caches the denial state in its local memory store.

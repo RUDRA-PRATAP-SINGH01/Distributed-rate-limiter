@@ -72,7 +72,7 @@ Redis is the authoritative store, not a cache. There is no local fallback that p
 - `circuit_breaker_state{target="redis"}` == 1 (open)
 - `rate_limiter_redis_duration_seconds` tail spike
 - Limiter `/health` redis section
-- `redis_failover_reconnects_total` after Sentinel recovery
+- `/health` `redis.role` after Sentinel recovery (not `redis_failover_reconnects_total` — dead metric, audit §14)
 
 **Respond:**
 

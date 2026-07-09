@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-Rate limiting decisions are opaque by default. clients see 429 without knowing whether global, tenant, or user quota blocked them, or which handler (`token_bucket`, `hierarchical`, `sliding_window`) made the call. Compliance and support need a **durable, searchable audit trail** of allow/deny decisions tied to request ID, tenant, and user.
+Rate limiting decisions are opaque by default. clients see 429 without knowing which hierarchical level blocked them. The audit store records `handler` as `check` or `hierarchical` only (not algorithm name) and does not record which quota level denied (audit §9, questions 20–23). Compliance and support need a **durable, searchable audit trail** of allow/deny decisions tied to request ID, tenant, and user.
 
 I needed append-only events with retention, index queries, and optional async ingestion so hot paths don't block on Redis index maintenance.
 

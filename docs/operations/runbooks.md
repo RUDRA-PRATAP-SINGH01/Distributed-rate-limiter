@@ -57,7 +57,7 @@ I keep scenario runbooks in-repo, linked to chaos and benchmark scripts.
 
 ### RB-2: Redis Sentinel failover
 
-**Trigger:** `/health` shows `redis.role` change or `redis_failover_reconnects_total` spike.
+**Trigger:** `/health` shows `redis.role` change (Sentinel/HA) or sustained Redis `503` from limiter/sidecar.
 
 **Steps:**
 
@@ -83,7 +83,7 @@ I keep scenario runbooks in-repo, linked to chaos and benchmark scripts.
 3. Reproduce: `k6 run -e TARGET_RPS=100 benchmarks/throughput/throughput-test.js` with same user_id
 4. If hot-key scenario: expect **99.9% 429** at 5,000 target. That is **correct**
 
-**Mitigation:** `PUT /admin/limits/user/USER_ID` bump capacity; wait `OVERRIDE_CACHE_TTL_MS` (5000ms)
+**Mitigation:** `POST /admin/limits/user/USER_ID` bump capacity; wait `OVERRIDE_CACHE_TTL_MS` (5000ms)
 
 ---
 
@@ -93,11 +93,11 @@ I keep scenario runbooks in-repo, linked to chaos and benchmark scripts.
 
 **Steps:**
 
-1. `curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/idempotency/user/KEY`
+1. `curl -H "X-API-Key: $ADMIN_API_KEY" "http://localhost:8082/admin/idempotency?user=USER_ID&key=KEY"`
 2. `curl http://localhost:8081/api/orders/count`
 3. Reproduce: `k6 run benchmarks/idempotency/idempotency-race.js`. expect **1** upstream
 4. If count > 1: check `ENABLE_IDEMPOTENCY=true`, Redis health
-5. Stuck key: `DELETE /admin/idempotency/user/KEY` after upstream verify
+5. Stuck key: `DELETE /admin/idempotency/{scope}/{key}` after upstream verify (scope from lookup response or `GET /admin/idempotency?tenant=&user=&key=`)
 
 **Benchmark reference:** 100 VUs to **1** execution, p95 **14.9 ms**
 

@@ -20,7 +20,7 @@ Sidecar rate limiters bring unique risks in production:
 1. Fail-closed everywhere: limiter, idempotency, circuit (`FAIL_OPEN=false`, `IDEMPOTENCY_FAIL_OPEN=false`).
 2. Secret rotation for `REDIS_PASSWORD`, `ADMIN_API_KEY`, `INTERNAL_API_KEY`.
 3. HA Redis via Sentinel overlay for production (`docker-compose.ha.yml`).
-4. Observability on: `OTEL_ENABLED=true`, with Prometheus enablement planned.
+4. Observability on: `OTEL_ENABLED=true`, Prometheus/Grafana in compose (or external scrape of `deploy/prometheus/prometheus.yml` targets), structured logging still absent (audit §8).
 5. Validated resilience via chaos, Sentinel drill, and benchmark gate.
 6. Audit enabled: `ENABLE_AUDIT_TRAIL=true` with retention limits.
 
@@ -98,7 +98,7 @@ AUDIT_RETENTION_HOURS=168
 AUDIT_MAX_EVENTS=100000
 ```
 
-Uncomment Prometheus and Grafana in `docker-compose.yml` for prod-like monitoring.
+Set `METRICS_REQUIRE_AUTH=true` and `METRICS_API_KEY` on limiter and sidecar when `/metrics` is reachable outside the scrape network.
 
 ### Performance gate
 

@@ -103,7 +103,7 @@ go test -bench=. -benchmem ./internal/limiter/...
 
 **Admin overrides:** `GET/PUT/DELETE http://localhost:8082/admin/limits/user/{id}` with `X-API-Key: dev-key-change-in-prod`. Runtime capacity bump without redeploy.
 
-**Monitoring:** `redis_command_duration_seconds`, allow/deny ratio per handler, 429 rate vs 503 (Redis unavailable).
+**Monitoring:** `rate_limiter_redis_duration_seconds`, allow/deny ratio per `handler` (`check` / `hierarchical`), 429 rate vs 503 (Redis unavailable).
 
 ## Performance implications
 

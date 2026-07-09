@@ -96,4 +96,4 @@ Disabled OTEL path is a boolean check per request. Enabled path adds propagation
 
 I added OTEL after routing failover bugs that logs could not explain. two gateways, one trace ID, and I could see `gateway.failover=true` on the span. The tradeoff I accepted: **startup fatality on OTEL init failure** only when enabled, so misconfigured collectors are caught in CI/staging, not silently ignored. If I extended this, I would add exemplars linking `rate_limiter_requests_duration_seconds` to trace IDs.
 
-**References:** `internal/telemetry/config.go`, `internal/telemetry/middleware.go`, `deploy/prometheus.yml`, README Observability section
+**References:** `internal/telemetry/config.go`, `internal/telemetry/middleware.go`, `deploy/prometheus/prometheus.yml`, README Observability section

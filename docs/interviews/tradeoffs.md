@@ -134,7 +134,7 @@ Operational simplicity for my scope. Sentinel met my HA bar (automatic failover,
 | Async audit | Lost audit events under overload | `audit_dropped` metric; queue sizing |
 | Override cache | Stale limits for up to 5s | TTL tuning; direct Redis read in admin |
 | Low-cardinality metrics | Cannot trace single abusive user | Audit search by tenant/user |
-| Single master | Write unavailability during failover | `redis_failover_reconnects_total`; chaos tests |
+| Single master | Write unavailability during failover | `/health`, circuit metrics, chaos tests |
 | Idempotency 24h TTL | Keys expire; retries may re-execute | Document TTL; client idempotency key discipline |
 | `StateUnknown` circuit | Gateway temporarily excluded | Admin circuit reset; Redis health |
 

@@ -138,7 +138,7 @@ flowchart LR
 | Sidecar | `rate-sidecar` | 9090 | Client-facing proxy |
 | Demo | `demo-backend` | 8081 | Sample upstream API |
 
-Prometheus and Grafana are included in `docker-compose.yml` but commented out — they pull large images and are not needed for core functionality. Config lives in `deploy/prometheus.yml` if you want to enable them.
+Prometheus (`:9091`), Grafana (`:3000`), and `redis-exporter` are included in the default `docker-compose.yml` stack alongside Jaeger. Scrape config: `deploy/prometheus/prometheus.yml`; dashboards provision from `deploy/grafana/`.
 
 ---
 
@@ -456,7 +456,7 @@ This matters under flash traffic and hot-key scenarios.
 
 ### Path Allowlist
 
-The sidecar only proxies paths matching `ALLOWED_PATHS` (default: `/`). Everything else gets 404. This prevents the sidecar from accidentally becoming an open proxy.
+When `ALLOWED_PATHS` is unset, all paths are proxied (with a startup warning). When set, only paths matching a configured prefix are allowed (`cmd/sidecar/main.go` `pathAllowed`). Compose uses `ALLOWED_PATHS=/`, which matches every normal HTTP path because prefix `/` matches any path starting with `/`; use concrete prefixes such as `/api` to restrict routing in production.
 
 ---
 
@@ -826,7 +826,7 @@ docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --
 }
 ```
 
-Metrics: `redis_failover_reconnects_total`
+Failover visibility: `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`. The counter `redis_failover_reconnects_total` is declared in `internal/metrics/metrics.go` but is not incremented by application code today (see `docs/OBSERVABILITY_FORENSIC_AUDIT.md` §14).
 
 See `deploy/redis/`, `internal/redis/`, `benchmarks/sentinel/summary.md`.
 
@@ -1135,7 +1135,7 @@ flowchart LR
 |---------|-------------|---------|---------|
 | Internal API key | `INTERNAL_API_KEY` | empty (dev warning) | Protects `/check` endpoints |
 | Admin API key | `ADMIN_API_KEY` | `dev-key-change-in-prod` | Protects override CRUD |
-| Metrics auth | `METRICS_REQUIRE_AUTH` | `false` | Lock down `/metrics` |
+| Metrics auth | `METRICS_REQUIRE_AUTH` + `METRICS_API_KEY` | `false` / empty | Lock down `/metrics` (`X-API-Key` header when enabled) |
 | Strict security | `STRICT_SECURITY` | `false` | Fail startup without internal key |
 | Query user ID | `ALLOW_QUERY_USER_ID` | `false` | Allow `?user_id=` (dev only) |
 | TLS | `TLS_CERT_FILE`, `TLS_KEY_FILE` | empty | Enable HTTPS |
@@ -1168,7 +1168,7 @@ I intentionally kept label cardinality low. No per-user labels — that would OO
 | `rate_limiter_redis_duration_seconds` | Histogram | — |
 | `rate_limiter_sidecar_cache_hits_total` | Counter | — |
 | `rate_limiter_sidecar_cache_misses_total` | Counter | — |
-| `idempotency_claims_total` | Counter | `result` (claimed, replay, in_progress, hash_mismatch, error) |
+| `idempotency_claims_total` | Counter | `result` (claimed, replay, in_progress, hash_mismatch, failed, error) |
 | `idempotency_completes_total` | Counter | — |
 | `idempotency_redis_duration_seconds` | Histogram | — |
 | `routing_decisions_total` | Counter | `gateway`, `failover` |
@@ -1180,7 +1180,7 @@ Scrape endpoints:
 - Limiter: `http://localhost:8080/metrics`
 - Sidecar: `http://localhost:9090/metrics`
 
-Prometheus config: `deploy/prometheus.yml`
+Prometheus config: `deploy/prometheus/prometheus.yml`
 
 ### Health Checks
 
@@ -1291,7 +1291,7 @@ curl -H "X-User-ID: alice" http://localhost:9090/
 # http://localhost:16686  →  Search service: rate-sidecar
 ```
 
-Docker Compose starts Jaeger (`:16686` UI, `:4318` OTLP) with tracing enabled on limiter and sidecar.
+Docker Compose starts Jaeger (`:16686` UI, `:4318` OTLP). Default compose sets `OTEL_ENABLED=false` on limiter and sidecar (`docker-compose.yml`); set `OTEL_ENABLED=true` to export traces. Logging uses Go stdlib `log` only — no structured JSON or trace/log correlation (see `docs/OBSERVABILITY_FORENSIC_AUDIT.md` §8).
 
 ---
 
@@ -1453,7 +1453,8 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │   └── gateway-sim/           Simulated payment gateways for routing demos
 │
 ├── deploy/
-│   ├── prometheus.yml       Prometheus scrape config
+│   ├── prometheus/          Prometheus scrape config
+│   ├── grafana/             Provisioned dashboards and datasources
 │   └── redis/               Redis + Sentinel configs for HA profile
 │
 ├── docs/                    Engineering documentation (start at docs/README.md)
@@ -1595,6 +1596,20 @@ With race detector:
 ```bash
 go test -race ./...
 ```
+
+### CI (GitHub Actions)
+
+`.github/workflows/ci.yml` runs on push/PR to `main`:
+
+| Job | Command | Notes |
+|-----|---------|-------|
+| `static-build` | `go mod verify`, `go vet ./...`, `go build ./...` | No lint beyond vet |
+| `test` | `go test -count=1 ./...` | Full unit test suite |
+| `race` | `go test -count=1 -race ./...` | Race detector |
+| `redis-integration` | `go test -count=1 -v ./internal/limiter/...` | Service container `redis:7-alpine`, `REDIS_TEST_ADDR=127.0.0.1:6379` |
+| `coverage` | `go test -coverprofile=coverage.out ./...` | Uploads artifact; **no coverage threshold gate** |
+
+Observability assertions in tests are limited to `/metrics` endpoint behavior and cardinality/secret leakage checks (`cmd/limiter/health_test.go`); metric values and spans are not asserted (audit §11).
 
 ### Chaos Tests
 

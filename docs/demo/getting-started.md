@@ -42,7 +42,7 @@ Once running, the stack exposes the following web interfaces and service portals
 | Service / Interface | Port | Local Endpoint URL | Description |
 | :--- | :--- | :--- | :--- |
 | **Grafana Dashboard** | `3000` | [http://localhost:3000/...](http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet) | Complete systems dashboard (preloaded) |
-| **Jaeger Tracing UI** | `16686` | [http://localhost:16686/](http://localhost:16686/) | Distributed trace visualizations |
+| **Jaeger Tracing UI** | `16686` | [http://localhost:16686/](http://localhost:16686/) | Distributed trace visualizations (export requires `OTEL_ENABLED=true`; default compose sets `false`) |
 | **Prometheus Console** | `9091` | [http://localhost:9091/](http://localhost:9091/) | Direct query console for system metrics |
 | **Sidecar Proxy Entry** | `9090` | [http://localhost:9090/check](http://localhost:9090/check) | Main sidecar rate limiter API endpoint |
 | **Limiter Health Endpoint**| `8080` | [http://localhost:8080/health](http://localhost:8080/health) | Central Rate Limiter status JSON |

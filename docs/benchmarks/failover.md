@@ -19,7 +19,7 @@ Without a drill, the "HA ready" claim in the README stays theoretical.
 
 1. **Automated drill**. `k6 run benchmarks/load-test.js` plus `docker stop redis-master`.
 2. **Observable promotion**. `docker logs redis-sentinel-1`, `/health` shows `redis.role`.
-3. **Metric tracking**. `redis_failover_reconnects_total`.
+3. **Failover signals**. `/health` `redis.role`, `circuit_breaker_transitions_total{target="redis"}` (`redis_failover_reconnects_total` is declared but not incremented — audit §14).
 4. **Recovery validation**. `docker start redis-master` becomes replica role.
 5. **Distinguish chaos vs HA**. Total Redis kill (`chaos_test.ps1`) vs graceful failover.
 
@@ -113,7 +113,7 @@ State machine: Closed to Open (50%+ failure over min samples) to Half-Open after
 ## Operational concerns
 
 - Health check: `curl http://localhost:8080/health`. Check `redis.role`, `redis.replication`.
-- Metrics: `redis_failover_reconnects_total`.
+- Signals: `/health`, circuit transitions on `redis` target (not `redis_failover_reconnects_total` until wired).
 - Admin circuit reset after drill: `curl -X DELETE -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/circuit/gateway-c`.
 - Run Sentinel drill **before** release. Run `chaos_test.ps1` on standalone profile separately.
 - Go benchmarks: `go test -bench=. -benchmem ./internal/redis/...` and `./internal/audit/...`.

@@ -12,7 +12,7 @@ Failures in rate limiting systems are subtle:
 - Without metrics, a Redis outage looks like "rate limited" to clients when they see 503 vs 429 confusion.
 - Routing drift can send traffic to gateway-c silently.
 - Idempotency keys stuck in `in_progress` are invisible without the admin API.
-- Failover is a blind spot if I do not watch `redis_failover_reconnects_total`.
+- Failover reconnects are not exported to Prometheus today: `redis_failover_reconnects_total` is declared but never incremented (`docs/OBSERVABILITY_FORENSIC_AUDIT.md` §14). Use `/health` and circuit metrics instead.
 
 ## Design goals
 
@@ -36,7 +36,7 @@ I use OTEL plus Prometheus metrics plus admin API as a trinity.
 
 ## Final architecture
 
-**OTEL env** (limiter + sidecar):
+**OTEL env** (limiter + sidecar; default compose sets `OTEL_ENABLED=false` — set `true` to export traces):
 
 ```
 OTEL_ENABLED=true
@@ -51,13 +51,12 @@ OTEL_EXPORTER_OTLP_INSECURE=true
 
 | Metric | Component | Meaning |
 |--------|-----------|---------|
-| `redis_command_duration_seconds` | limiter | Lua RTT |
-| `circuit_breaker_state{target}` | sidecar | 0=closed, 1=open, 2=half_open |
-| `circuit_breaker_rejections_total` | sidecar | Fast-fail while open |
-| `circuit_breaker_failure_rate` | sidecar | Rolling failure ratio |
+| `rate_limiter_redis_duration_seconds` | limiter | Client round-trip to Redis (Lua path) |
+| `circuit_breaker_state{target}` | limiter / sidecar | 0=closed, 1=open, 2=half_open |
+| `circuit_breaker_rejections_total` | limiter / sidecar | Fast-fail while open |
+| `circuit_breaker_failure_rate` | limiter / sidecar | Rolling failure ratio |
 | `routing_decisions_total{gateway,failover}` | sidecar | Route choices |
 | `routing_gateway_health_score{gateway}` | sidecar | 0 to 100 health |
-| `redis_failover_reconnects_total` | redis client | Post-failover reconnects |
 
 **Health:**
 
@@ -79,15 +78,15 @@ curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/audit/stats
 
 ## Tradeoffs
 
-Prometheus and Grafana are commented out in compose. Jaeger is primary; I enable the rest for prod dashboards. Per-gateway metric labels can explode cardinality. OTEL overhead is ~1 to 2% at **1,000 RPS**, which I accept; I sample at higher load. The admin API is not a metrics source: polling admin in a loop is an anti-pattern; I use it for incidents. Audit search via `admin/audit` does Redis scans and is not sub-ms at 100k events.
+Prometheus (`:9091`) and Grafana (`:3000`) run in default compose with provisioned dashboards under `deploy/grafana/`. Jaeger is always on for OTLP when `OTEL_ENABLED=true`. Per-gateway metric labels are bounded by the `GATEWAYS` seed list but arbitrary admin target IDs can leak series (audit §4). OTEL overhead is ~1 to 2% at **1,000 RPS** when enabled; sample at higher load. The admin API is not a metrics source: polling admin in a loop is an anti-pattern; I use it for incidents. Audit search via `admin/audit` does Redis scans and is not sub-ms at 100k events. Application logging is unstructured stdlib `log` with no trace correlation (audit §8).
 
 ## Failure modes
 
-Silent fail-open is dangerous: if `FAIL_OPEN=true`, 429 and 503 drop and I should watch for an allow rate spike. A circuit stuck open shows `circuit_breaker_state=1` forever; I check Redis connectivity. Trace dropout happens when Jaeger OOMs or OTEL buffers overflow. `/health` can look OK while Redis is slow; I watch `redis_command_duration_seconds` p99. If failover reconnects are not incrementing, the client is probably not using Sentinel mode.
+Silent fail-open is dangerous: if `FAIL_OPEN=true`, 429 and 503 drop and I should watch for an allow rate spike. A circuit stuck open shows `circuit_breaker_state=1` forever; I check Redis connectivity. Trace dropout happens when Jaeger OOMs or OTEL buffers overflow (only when `OTEL_ENABLED=true`). `/health` can look OK while Redis is slow; I watch `rate_limiter_redis_duration_seconds` p99. Sentinel failover is visible via `/health` `redis.role` changes and `circuit_breaker_transitions_total{target="redis"}` — not via `redis_failover_reconnects_total` (dead metric per audit §14).
 
 ## Operational concerns
 
-I plot actual RPS vs p99 using `benchmarks/graphs/latency-vs-rps.png` as a template. Alerts I care about: Redis error rate, circuit open longer than 60s, 503 rate above 1%, failover reconnect spike. During benchmarks I save `metrics/results/{test-name}.json` for post-hoc CPU correlation. For idempotency I monitor 409 in_progress rate vs 201/200 completion ratio. I run `chaos_test.ps1` quarterly to verify 503 metric spike and recovery drop.
+I plot actual RPS vs p99 using `benchmarks/graphs/latency-vs-rps.png` as a template. Alerts I care about: Redis error rate, circuit open longer than 60s, 503 rate above 1%, `/health` redis role change during HA drills. During benchmarks I save `metrics/results/{test-name}.json` for post-hoc CPU correlation. For idempotency I monitor 409 in_progress rate vs 201/200 completion ratio. I run `chaos_test.ps1` quarterly to verify 503 metric spike and recovery drop.
 
 ## Performance implications
 
@@ -108,5 +107,3 @@ I used to monitor only 429 count. During a Redis outage we got 503s and on-call 
 A Jaeger trace with a `routing.select` span helped me debug a gateway-c leak that was diluted on the metrics dashboard.
 
 Admin `/admin/circuit` was faster than Redis `HGETALL` during an incident, but I still need metrics export for automation.
-
-Next up: uncomment Prometheus and Grafana in compose with a `deploy/prometheus.yml` scrape config.

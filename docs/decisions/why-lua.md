@@ -66,7 +66,7 @@ Limiter selects algorithm via `ALGORITHM=token|sliding` and runs the correspondi
 ## Operational concerns
 
 - When changing a script, treat it as a **breaking schema change**. rolling deploys must tolerate old+new return codes briefly or flush state.
-- Use `redis_failover_reconnects_total` and `*_redis_duration_seconds` histograms per subsystem to spot script latency regressions.
+- Use `rate_limiter_redis_duration_seconds` and subsystem `*_redis_duration_seconds` histograms to spot client round-trip regressions (not server-side Lua duration).
 - Chaos tests (`chaos/chaos_test.ps1`) assume Lua-backed enforcement; disabling Redis invalidates test assumptions.
 
 ## Performance implications

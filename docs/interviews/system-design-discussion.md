@@ -208,7 +208,7 @@ flowchart TB
 |-------------|---------|
 | `rate:{user_id}` | Token bucket hash (tokens, last_refill) |
 | `sw:{user_id}` | Sliding window ZSET |
-| `hier:global` / `hier:tenant:{id}` / `hier:user:{id}` / `hier:endpoint:{id}` | Hierarchical buckets |
+| `rate:global` / `rate:tenant:{id}` / `rate:user:{id}` / `rate:endpoint:{tenant}:{path}` | Hierarchical buckets (`cmd/limiter/main.go`) |
 | `config:{level}:{id}` | Runtime override JSON |
 | `idem:{scope}:{key}` | Idempotency metadata + response cache |
 | `cb:{target}` | Circuit breaker state |

@@ -18,7 +18,7 @@ Sentinel failover is not instantaneous. Sentinels agree on subjective downtime (
 
 - Single config switch: `REDIS_MODE=sentinel` + `REDIS_SENTINEL_ADDRS`.
 - Automatic client reconnect: Via `redis.NewFailoverClient` (`internal/redis/client.go`).
-- Observable recovery: `redis_failover_reconnects_total` counter in `internal/metrics/metrics.go`.
+- Observable recovery: `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`. Counter `redis_failover_reconnects_total` is declared (`internal/metrics/metrics.go:220`) but not incremented by code today (audit §14).
 - Health endpoint truth: Limiter `/health` reports `mode: sentinel`, `role`, `replication` string.
 - No split code paths: In limiter vs sidecar. both call `redisclient.LoadConfigFromEnv()`.
 
@@ -73,7 +73,7 @@ Limiter startup: `Ping` on boot; does not dynamically re-Ping on failover but Fa
 **During incident:**
 
 1. Check Sentinel logs: `+switch-master`, `+promoted-slave`.
-2. Watch `redis_failover_reconnects_total`. should increment once per client recovery.
+2. Watch `/health` until `redis.role` reflects the new master and Redis `503` rate drops.
 3. Verify `/health` shows new master role.
 4. If stuck: manual `SENTINEL failover mymaster` (ops runbook).
 
@@ -88,6 +88,6 @@ Steady-state: no Sentinel overhead on each command. Failover window: 100% error 
 
 ## Lessons learned
 
-During my first HA demo I killed only the master container and expected instant recovery. clients errored for ~15s and I had not wired `redis_failover_reconnects_total` yet, so I could not prove reconnection in Grafana. The lesson: **measure failover time in benchmarks**, not assumptions. Sentinel is correct for self-hosted; managed Redis is correct when you want someone else to run the election.
+During my first HA demo I killed only the master container and expected instant recovery. clients errored for ~15s and `redis_failover_reconnects_total` was not wired to go-redis reconnect hooks, so Grafana could not show a reconnect counter. The lesson: **measure failover time in benchmarks and `/health`**, not assumptions. Sentinel is correct for self-hosted; managed Redis is correct when you want someone else to run the election.
 
 **References:** `docs/decisions/why-sentinel.md`, `docs/diagrams/sentinel-failover.md`, `deploy/redis/`, `benchmarks/sentinel/summary.md`

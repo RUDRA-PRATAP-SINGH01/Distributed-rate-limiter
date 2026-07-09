@@ -74,7 +74,7 @@ Sliding window uses `ZREMRANGEBYSCORE` + `ZCARD` + conditional `ZADD` with a uni
 
 ## Operational concerns
 
-- Monitor `redis_command_duration_seconds` and limiter allow/deny ratio per handler.
+- Monitor `rate_limiter_redis_duration_seconds` and limiter allow/deny ratio per `handler` label (`check` or `hierarchical`).
 - Set `EXPIRE` on bucket keys (3600s in token bucket Lua) so abandoned users do not leak memory.
 - Sliding window `expireSec` must be ≥ 1. Redis rejects sub-second TTL on some configs; `redis_sliding_window.go` enforces this.
 - Capacity overrides via admin API must propagate to `AllowWithParams` atomically. never split override read from Lua call across requests.

@@ -53,7 +53,7 @@ Init(ctx, cfg):
 | `OTEL_EXPORTER_OTLP_INSECURE` | TLS skip | true (not `false`) |
 | `OTEL_TRACES_SAMPLER_ARG` | Sample ratio 0 to 1 | 1.0 |
 
-Docker Compose (`docker-compose.yml`):
+Docker Compose (`docker-compose.yml`) ships Jaeger but sets `OTEL_ENABLED=false` on limiter and sidecar by default (SDK conflict workaround per audit §7). Enable tracing explicitly:
 
 ```yaml
 OTEL_ENABLED=true
@@ -161,9 +161,9 @@ Both the audit trail and idempotency replay respect `X-Request-ID`. Support can 
 
 **Redis HA**:
 
-- `redis_failover_reconnects_total` (defined for Sentinel reconnect tracking)
+- `redis_failover_reconnects_total` — declared in `metrics.go:220` but **not incremented** by application code today (audit §14). Use `/health` and `circuit_breaker_transitions_total{target="redis"}` for failover drills.
 
-### Prometheus scraping (`deploy/prometheus.yml`)
+### Prometheus scraping (`deploy/prometheus/prometheus.yml`)
 
 ```yaml
 scrape_configs:
@@ -173,7 +173,7 @@ scrape_configs:
     targets: ['sidecar:9090']
 ```
 
-Metrics endpoints: optional `METRICS_REQUIRE_AUTH` plus API key on both services.
+Metrics endpoints: optional `METRICS_REQUIRE_AUTH=true` with `METRICS_API_KEY` (header `X-API-Key` or `X-Internal-API-Key`) on both services.
 
 ### Trace diagram reference
 
@@ -185,8 +185,9 @@ See `docs/diagrams/tracing-flow.md` for a visual request flow.
 - **ParentBased sampling**. Child spans follow parent. Root sampling ratio applies.
 - **Health and metrics excluded from traces**. Correct for noise. Harder to debug scraper issues.
 - **No custom exemplars**. Histograms do not link to trace IDs yet.
-- **`redis_failover_reconnects_total`**. Metric is defined. Wiring to FailoverClient reconnect hook is future work.
+- **`redis_failover_reconnects_total`**. Declared only; go-redis reconnect hook not wired (audit §14).
 - **Baggage enabled**. Unused by default. Potential PII risk if misused later.
+- **Structured logging absent**. Stdlib `log` only; no `trace_id` in log lines (audit §8).
 
 ## Failure modes
 
@@ -205,7 +206,7 @@ See `docs/diagrams/tracing-flow.md` for a visual request flow.
 - Dashboards: correlate `rate_limiter_requests_total{allowed="false"}` spike with `circuit_breaker_state` and `audit_events_total{decision="denied"}`.
 - `X-Trace-ID` response header lets clients include it in support tickets.
 - Shutdown: `otelShutdown` with 5s timeout flushes the batcher on SIGTERM path (defer in main).
-- Grafana is not in the repo. Use Prometheus raw or add a dashboard layer separately.
+- Grafana dashboards are provisioned from `deploy/grafana/` in default compose (`:3000`).
 
 ## Performance implications
 

@@ -104,7 +104,7 @@ Requires passing `context.Context` into Redis commands. already done in store im
 
 ## Operational concerns
 
-- Env: `OTEL_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, sample ratio.
+- Env: `OTEL_ENABLED` (default `false` in `docker-compose.yml`), `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, sample ratio.
 - Jaeger UI: search by `X-Trace-ID` response header support teams already collect.
 - Link traces to audit via `RequestIDFromContext` matching audit `request_id`.
 - Disable in local dev (`Enabled=false`). logs confirm in `Init`.

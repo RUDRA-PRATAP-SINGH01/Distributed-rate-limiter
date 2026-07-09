@@ -44,7 +44,7 @@ Use these interactive scripts to trigger distinct behaviors and observe how the 
 * **What it does**: Shuts down the backend Redis database container.
 * **Observe**:
   - Redis Storage Health indicator turning DOWN.
-  - System Error Rate spiking immediately to 100%.
+  - Limiter Decision Error Rate (%) spiking (requires `ENABLE_AUDIT_TRAIL=true`; measures `audit_events_total{decision="error"}` — not raw HTTP 5xx).
   - Circuit Breaker State panel showing the transition to OPEN.
 * **Expected Outage Output**:
   - Redis DOWN
