@@ -73,7 +73,7 @@ ENABLE_ADMIN_API=true
 ADMIN_PORT=8082
 ADMIN_API_KEY=dev-key-change-in-prod
 INTERNAL_API_KEY=dev-internal-key-change-in-prod
-OTEL_ENABLED=false
+OTEL_ENABLED=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
 ```
 

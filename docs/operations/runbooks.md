@@ -158,7 +158,7 @@ I keep `ADMIN_API_KEY` in a secrets manager; runbooks reference `$ADMIN_API_KEY`
 
 ## Performance implications
 
-RB-6 saturation: system knee at **~1,000 actual RPS** healthy; **5,000 target to 1,353 actual** is unhealthy. Scale before tuning Lua.
+RB-6 saturation: system knee at **~870–872 actual RPS** sustainable (final benchmark, `docs/benchmarks/final-benchmark-report.md`); **5,000 target** on sliding/sidecar paths yields **285–1,504 actual RPS** with high p99 — scale or shard before tuning Lua.
 
 RB-3 hot-key: **4,940 actual RPS** with **99.9% 429**. Redis is hot but correct; fix via key sharding or higher capacity, not "disable limiter."
 

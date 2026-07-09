@@ -1,188 +1,130 @@
 ﻿# Circuit Breaker Architecture
 
-> Engineering journal. Why I built a Redis-backed distributed circuit breaker and kept fail-closed as the default.
+Distributed circuit breaker Redis hash `cb:{target}` में state रखता है। **Pre-call** `allow.lua` traffic gate; **post-call** `record.lua` metrics + transitions। Fleet-wide half-open probe budget **`HalfOpenMaxProbes=3`** (default)।
 
-## Problem Statement
+---
 
-The rate limiter fleet has several fragile dependencies: **Redis** (quota state), **central-limiter** (HTTP check), and **per-gateway upstreams** (in routing mode). When any dependency degrades, every request can keep hitting the same slow or failing path, causing cascade failure and connection exhaustion. I needed fleet-wide, coordinated backpressure. A local in-process breaker was not enough because each pod samples failures independently.
+## States
 
-## Why the problem exists
-
-The sidecar calls the central limiter on every request. The limiter runs Redis Lua on every check. When Redis is slow or the limiter is overloaded, the timeout chain drags the whole stack. Routing mode has multiple gateways. Blind retry to one unhealthy gateway is waste. Without a breaker, `FAIL_OPEN` sidecars pass traffic and bypass quota. Without coordinated state, some pods can be open while others stay closed.
-
-## Design goals
-
-1. **Three-state machine**: `closed` to `open` to `half_open` to `closed` or reopen.
-2. **Atomic allow and record** via `allow.lua` and `record.lua`.
-3. **Multiple trip signals**: failure rate, consecutive failures, latency EMA spike, timeout rate.
-4. **Half-open probe budget**. Controlled recovery validation.
-5. **Named targets**: `redis`, `central-limiter`, and dynamic `gateway-id`.
-6. **Fail-closed on Redis errors** unless `CIRCUIT_FAIL_OPEN=true`.
-
-## Alternative approaches considered
-
-| Approach | Verdict |
-|----------|---------|
-| Per-process `gobreaker` only | No fleet coordination. Uneven protection. |
-| Hystrix-style thread pools | Awkward in the Go HTTP model. Does not fit the sidecar proxy. |
-| Simple error counter in app memory | Lost on restart. No cross-instance visibility. |
-| Always fail-open on dependency errors | Production outage means unlimited traffic to broken Redis. |
-| External service mesh circuit breaking | Heavier ops. I wanted app-level semantics tied to our `ClassifyHTTP`. |
-
-## Final architecture
-
-### Redis state
-
-```
-cb:{target}  → HASH
-  state: closed | open | half_open
-  failure_count, success_count, timeout_count, latency_spike_count, total_count
-  consecutive_failures, latency_ema_ms
-  opened_at, half_open_at, half_open_calls, half_open_successes
+```mermaid
+stateDiagram-v2
+  [*] --> Closed: first call / reset
+  Closed --> Open: thresholds tripped (record.lua)
+  Open --> HalfOpen: cooldown elapsed (allow.lua)
+  HalfOpen --> Closed: enough successes (record.lua)
+  HalfOpen --> Open: probe budget exhausted OR failures
+  Closed --> Closed: successes
 ```
 
-### `allow.lua`. Pre-call gate
+| State | `allow.lua` behavior |
+|-------|---------------------|
+| **closed** | Allow all (`{1, 0, -1}`) |
+| **open** | Reject until `now - opened_at >= open_cooldown_ms` (default 30 s) |
+| **half_open** | Allow up to `half_open_max_probes` concurrent probes |
 
-```
-closed     → allow (probes_remaining = -1)
-open       → if now - opened_at >= cooldown → transition half_open, else reject
-half_open  → if half_open_calls >= max_probes → reopen; else increment probes, allow
-```
+State codes: `0=closed`, `1=open`, `2=half_open`。
 
-Returns: `{allowed, state_code, probes_remaining}` where state_code 0=closed, 1=open, 2=half_open.
+---
 
-### `record.lua`. Post-call state machine
+## `allow.lua` — global probe bound
 
-Outcome kinds (`RecordInput.Kind`):
+```lua
+-- KEYS[1] = cb:{target}
+-- ARGV: now_ms, open_cooldown_ms, half_open_max_probes
 
-| Code | Kind | Counted as failure |
-|------|------|-------------------|
-| 0 | success | no |
-| 1 | failure | yes |
-| 2 | timeout | yes (+ timeout_count) |
-| 3 | latency_spike | yes |
-
-**Closed state trip conditions** (any true after `min_samples` where applicable):
-
-- `failure_rate >= failure_rate_threshold` (default 0.5)
-- `consecutive_failures >= threshold` (default 5)
-- `latency >= threshold AND ema >= threshold` (default 500ms)
-- `timeout_rate >= threshold` (default 0.3)
-
-**Half-open recovery**:
-
-- Success increments `half_open_successes`. When `>= half_open_success_required` (default 2), the circuit closes.
-- Any failure reopens (`transition = reopened`).
-
-**Counter decay**: When `total_count > 1000`, all counters halve. Rolling window effect without separate time buckets.
-
-### Integration points
-
-**Central limiter. Redis target** (`cmd/limiter/circuit.go`):
-
-```text
-/check handler:
-  checkRedisCircuit() → Allow("redis") before Lua limit check
-  defer recordRedisCircuit() → ClassifyError on Redis op latency
+if state == 'half_open' then
+  if probes >= max_probes then
+    -- reopen — cooldown retry
+    return {0, 1, 0}
+  end
+  HINCRBY half_open_calls 1
+  return {1, 2, max_probes - probes - 1}
+end
 ```
 
-Redis circuit open returns `503` with `circuit_state` in the JSON body.
+**Global bound:** सभी processes/shared Redis — 32 concurrent callers पर भी अधिकतम **3** simultaneous half-open admissions (`TestHalfOpenConcurrentProbeBound`, `-race`)。
 
-**Sidecar. central-limiter target** (`cmd/sidecar/main.go`):
+Default config (`internal/circuitbreaker/config.go`):
 
-```text
-checkRateLimit():
-  Allow("central-limiter") → fail if open (unless CIRCUIT_FAIL_OPEN)
-  HTTP call to limiter
-  defer Record("central-limiter", ClassifyHTTP(...))
+| Field | Default | Env |
+|-------|---------|-----|
+| `HalfOpenMaxProbes` | **3** | `CB_HALF_OPEN_MAX_PROBES` |
+| `HalfOpenSuccessRequired` | 2 | `CB_HALF_OPEN_SUCCESS_REQUIRED` |
+| `OpenCooldownMs` | 30000 | `CB_OPEN_COOLDOWN_MS` |
+| `FailureRateThreshold` | 0.5 | `CB_FAILURE_RATE` |
+| `MinSamples` | 10 | `CB_MIN_SAMPLES` |
+| `ConsecutiveFailures` | 5 | `CB_CONSECUTIVE_FAILURES` |
+
+Probe budget exhaust → circuit **reopens** (not stuck half-open forever)।
+
+---
+
+## `record.lua` — post-call transitions
+
+Outcomes: `success`, `failure`, `timeout`, `latency_spike`।
+
+- Rolling counters + latency EMA (`CB_EMA_ALPHA`, default 0.2)
+- Counter halving when `total_count` grows (memory bound)
+- Open transition: failure rate, consecutive failures, timeout rate, latency spikes
+- Half-open → closed: `half_open_successes >= half_open_success_required`
+
+---
+
+## Targets
+
+| Target | Component | Guards |
+|--------|-----------|--------|
+| `cb:redis` | Limiter | Redis Lua before quota |
+| `cb:central-limiter` | Sidecar | HTTP to limiter |
+| `cb:{gatewayID}` | Sidecar routing | Per-gateway upstream |
+
+429 responses **do not** trip breaker (quota, not infra failure)।
+
+---
+
+## Call sequence
+
+```mermaid
+sequenceDiagram
+  participant S as Sidecar/Limiter
+  participant R as Redis
+  participant U as Upstream/Redis quota
+
+  S->>R: allow.lua (cb:target)
+  alt rejected
+    R-->>S: {0, open|half_open, ...}
+    S-->>Client: 503 fast-fail (~23ms open state)
+  else admitted
+    R-->>S: {1, state, probes_remaining}
+    S->>U: actual call
+    S->>R: record.lua (outcome)
+  end
 ```
 
-**Routing. gateway-id targets** (`internal/routing/router.go`, `store.go`):
+---
 
-```text
-Forward():
-  for each gateway candidate:
-    Allow(gatewayID) → skip if open
-    execute upstream
-    RecordOutcome → breaker.Record(gatewayID, success|failure|timeout)
-```
+## Fail-open danger
 
-Gateway ID is the configured identifier in `GATEWAYS` env (for example `gateway-a`).
+`CIRCUIT_FAIL_OPEN=true` → Redis errors allow traffic (default **false**)。Production में avoid।
 
-### Fail-closed: `CIRCUIT_FAIL_OPEN`
+---
 
-`circuitbreaker.LoadConfigFromEnv()`:
+## Runtime evidence
 
-```go
-if os.Getenv("CIRCUIT_FAIL_OPEN") == "true" {
-    cfg.FailOpen = true
-}
-```
+| Test | Result |
+|------|--------|
+| 32 workers half-open | admitted ≤ 3 (TEST-PROVEN) |
+| 64 concurrent /check, seeded half-open | 3 admitted, 61×503 (RUNTIME) |
+| Open state latency | ~23 ms → 503 |
 
-When `FailOpen=false` (default):
+---
 
-- `Allow()` Redis error rejects the request (`503` on limiter, error return on sidecar)
-- Sidecar limiter circuit unavailable means no forward
+## Source references
 
-When `FailOpen=true`:
-
-- Redis errors on `Allow` are ignored. Traffic proceeds (dangerous, documented in config comment)
-
-### Default thresholds (`circuitbreaker.DefaultConfig`)
-
-| Parameter | Default |
-|-----------|---------|
-| Failure rate | 50% |
-| Min samples | 10 |
-| Consecutive failures | 5 |
-| Latency threshold | 500ms |
-| Timeout rate | 30% |
-| Open cooldown | 30s |
-| Half-open max probes | 3 |
-| Half-open successes required | 2 |
-| EMA alpha | 0.2 |
-
-Env overrides: `CB_FAILURE_RATE`, `CB_MIN_SAMPLES`, `CB_CONSECUTIVE_FAILURES`, `CB_LATENCY_THRESHOLD_MS`, `CB_TIMEOUT_RATE`, `CB_OPEN_COOLDOWN_MS`, `CB_HALF_OPEN_MAX_PROBES`, `CB_HALF_OPEN_SUCCESS_REQUIRED`, `CB_EMA_ALPHA`.
-
-### Admin and ops
-
-- `Breaker.Reset(ctx, target)`. Force closed (routing `ResetCircuit` per gateway)
-- `Breaker.List(ctx)`. Scan `cb:*` keys
-
-## Tradeoffs
-
-- **Shared Redis for breaker state**. The breaker depends on Redis. Ironic but practical because the cluster is already required.
-- **Half-open probe exhaustion reopens**. Cooldown loop. Aggressive failures slow recovery.
-- **Gateway ID as target string**. Misconfiguration can create unbounded targets. Monitor key count.
-- **Fail-closed**. Availability hit during a Redis blip. I chose safety over liveness.
-- **Legacy gauge** `routing_circuit_open` still updates alongside `circuit_breaker_state`.
-
-## Failure modes
-
-| Scenario | Effect |
-|----------|--------|
-| Redis down + fail-closed | All protected paths return 503 or skip gateways |
-| Redis down + CIRCUIT_FAIL_OPEN=true | Breaker is blind. Dependencies get hammered. |
-| Flapping dependency | Rapid open and half-open cycles. Monitor transitions metric. |
-| Half-open probe quota exhausted | Circuit reopens without a full recovery test |
-| Clock skew across nodes | `now_ms` from each caller. Minor skew is usually OK. |
-| Stale open state after fix | Manual `Reset` or wait for cooldown plus half-open success |
-
-## Operational concerns
-
-- Prometheus: `circuit_breaker_state{target}`, `circuit_breaker_transitions_total`, `circuit_breaker_rejections_total`, `circuit_breaker_outcomes_total`, `circuit_breaker_failure_rate`, `circuit_breaker_latency_ema_ms`, `circuit_breaker_redis_duration_seconds`.
-- Alert when `circuit_breaker_state{target="redis"} == 1`. The limiter is effectively down for checks.
-- Alert when `central-limiter` is open. The sidecar cannot rate-limit.
-- Never set `CIRCUIT_FAIL_OPEN=true` in production without explicit risk acceptance.
-- Sidecar: `ENABLE_CIRCUIT_BREAKER` defaults on when idempotency is enabled. Routing always wires the breaker.
-
-## Performance implications
-
-- Every protected call adds **one Redis round-trip** for `Allow` and **one for `Record`** after completion.
-- Lua scripts are lightweight (sub-ms on healthy Redis). Under load, breaker Redis ops add to tail latency.
-- Counter halving prevents unbounded HASH growth without TTL churn.
-- `ClassifyHTTP` and `ClassifyError` are pure CPU. Negligible cost.
-
-## Lessons learned
-
-I **deliberately chose fail-closed as the default**. In a rate limiter, fail-open means quota bypass, which is worse during an outage. Fleet-wide Redis state fixed split-brain breakers where some pods still hit failing Redis. The half-open probe budget exhausted to reopen logic is controversial. The alternative was an indefinite half-open stall. I preferred cooldown retry. Gateway-level targets loosely coupled routing and the breaker. Same `Breaker` type, different target strings. I kept the `CIRCUIT_FAIL_OPEN` env name intentionally scary so ops will grep for it.
+| File | Role |
+|------|------|
+| `internal/circuitbreaker/store.go` | Allow/Record/Reset |
+| `internal/circuitbreaker/lua/allow.lua` | Pre-call gate |
+| `internal/circuitbreaker/lua/record.lua` | Transitions |
+| `internal/circuitbreaker/config.go` | Defaults |
+| `docs/diagrams/circuit-breaker.md` | Visual |

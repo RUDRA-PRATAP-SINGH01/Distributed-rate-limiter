@@ -63,7 +63,7 @@ I needed a limiter that:
 
 This project evolved iteratively through multiple designs—from basic in-memory limiters to a sidecar-proxy and central limiter architecture utilizing atomic Redis Lua evaluations.
 
-Read the full engineering journal: [docs/deep-dives/architecture-evolution.md](docs/deep-dives/architecture-evolution.md)
+Read the engineering documentation index: [docs/README.md](docs/README.md)
 
 ---
 
@@ -1291,7 +1291,7 @@ curl -H "X-User-ID: alice" http://localhost:9090/
 # http://localhost:16686  →  Search service: rate-sidecar
 ```
 
-Docker Compose starts Jaeger (`:16686` UI, `:4318` OTLP). Default compose sets `OTEL_ENABLED=false` on limiter and sidecar (`docker-compose.yml`); set `OTEL_ENABLED=true` to export traces. Logging uses Go stdlib `log` only — no structured JSON or trace/log correlation (see `docs/OBSERVABILITY_FORENSIC_AUDIT.md` §8).
+Docker Compose starts Jaeger (`:16686` UI, `:4318` OTLP). Default compose sets `OTEL_ENABLED=true` on limiter and sidecar. Structured logging uses `slog` with `request_id`, `trace_id`, and `span_id` correlation — see [docs/observability/structured-logging.md](docs/observability/structured-logging.md).
 
 ---
 
@@ -1434,13 +1434,15 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │
 ├── docs/                    Engineering documentation (start at docs/README.md)
 │   ├── architecture/        System design by subsystem
-│   ├── deep-dives/          Implementation journals
-│   ├── decisions/           ADRs (why Redis, Lua, sidecar, etc.)
-│   ├── failure-modes/       Outage and edge-case behavior
-│   ├── benchmarks/          Methodology and results writeups
-│   ├── operations/          Deployment, monitoring, runbooks
-│   ├── interviews/          System design interview prep
-│   └── diagrams/            Mermaid diagrams (render on GitHub)
+│   ├── algorithms/          Token bucket, sliding window, hierarchical
+│   ├── correctness/         Distributed invariants and multi-replica proof
+│   ├── observability/       Metrics, tracing, logging, Grafana
+│   ├── failure-modes/       Outage and recovery behavior
+│   ├── benchmarks/          Methodology and final evidence report
+│   ├── operations/          Deployment, configuration, runbooks
+│   ├── security/            Threat model and authentication
+│   ├── testing/             Test strategy and concurrency proof
+│   └── ci/                  Continuous integration
 │
 ├── dockerfiles/
 │   ├── Dockerfile.limiter
@@ -1480,7 +1482,7 @@ The root README covers setup, APIs, and quick starts. The [`docs/`](docs/README.
 | Start here | Contents |
 |------------|----------|
 | [docs/README.md](docs/README.md) | Master index and reading order |
-| [docs/architecture/overview.md](docs/architecture/overview.md) | Data plane vs control plane |
+| [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | Data plane vs control plane |
 | [docs/diagrams/](docs/diagrams/README.md) | All Mermaid diagrams (GitHub-renderable) |
 | [docs/operations/deployment.md](docs/operations/deployment.md) | Docker Compose and HA deployment |
 | [docs/operations/runbooks.md](docs/operations/runbooks.md) | Incident response playbooks |
@@ -1519,22 +1521,18 @@ Once healthy, open these interfaces in your browser:
 - Prometheus UI: [http://localhost:9091/](http://localhost:9091/)
 ---
 
-### Interactive Telemetry Missions
+### Interactive verification
 
-We have created several pre-configured verification tests to validate system boundaries. For detailed steps, commands, and expected metric states, refer to the [Telemetry Verification and Demo Scenarios Guide](docs/demo/demo-scenarios.md).
+See [docs/testing/test-strategy.md](docs/testing/test-strategy.md), [docs/observability/grafana-dashboards.md](docs/observability/grafana-dashboards.md), and [docs/benchmarks/reproducibility.md](docs/benchmarks/reproducibility.md) for reproducible verification steps.
 
-- Mission 1: Normal Baseline Traffic (verify steady 50 RPS metrics)
-- Mission 2: Key Exhaustion and Abuse (observe hot-key throttling)
-- Mission 3: Database Outage and Resiliency (simulate Redis crash and recovery)
-- Mission 4: Stripe Concurrency and Idempotency Races (verify concurrent locking and replays)
-- Mission 5: Multi-User Quota Isolation (validate tenant boundary limits)
-- Mission 6: System Saturation Sweep (analyze peak load processing limits)
-- Mission 7: Infrastructure Chaos Simulation (simulate dynamic gateway and Redis crashes)
+- Baseline traffic: `k6 run -e TARGET_RPS=100 benchmarks/scripts/sidecar-e2e.js`
+- Multi-replica quota: [docs/correctness/multi-replica-correctness.md](docs/correctness/multi-replica-correctness.md)
+- Redis outage / recovery: [docs/failure-modes/recovery-behavior.md](docs/failure-modes/recovery-behavior.md)
+- Idempotency concurrency: [docs/architecture/idempotency-architecture.md](docs/architecture/idempotency-architecture.md)
 
-For details, read:
-- Getting Started Guide: [docs/demo/getting-started.md](docs/demo/getting-started.md)
-- Dashboard Tour: [docs/demo/dashboard-tour.md](docs/demo/dashboard-tour.md)
-- Architecture Walkthrough: [docs/architecture/walkthrough.md](docs/architecture/walkthrough.md)
+Further reading:
+- [docs/architecture/request-lifecycle.md](docs/architecture/request-lifecycle.md)
+- [docs/observability/tracing.md](docs/observability/tracing.md)
 
 ---
 
