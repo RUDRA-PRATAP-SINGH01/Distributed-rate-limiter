@@ -22,7 +22,7 @@ services:
       - PORT=8080
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
-      - OTEL_ENABLED=false
+      - OTEL_ENABLED=true
       - OTEL_SERVICE_NAME=rate-limiter
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_EXPORTER_OTLP_INSECURE=true
@@ -144,7 +144,7 @@ services:
       - IDEMPOTENCY_LOCK_TTL_MS=60000
       - IDEMPOTENCY_COMPLETED_TTL_MS=86400000
       - IDEMPOTENCY_FAIL_OPEN=false
-      - OTEL_ENABLED=false
+      - OTEL_ENABLED=true
       - OTEL_SERVICE_NAME=rate-sidecar
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318
       - OTEL_EXPORTER_OTLP_INSECURE=true
