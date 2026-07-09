@@ -44,11 +44,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("OpenTelemetry init failed: %v", err)
 	}
-	defer func() {
-		if err := otelShutdown(context.Background()); err != nil {
-			log.Printf("OpenTelemetry shutdown error: %v", err)
-		}
-	}()
 
 	// Fail fast if Redis is down. A limiter that starts without verified connectivity
 	// would either panic on first request or silently mis-report health.
@@ -373,6 +368,9 @@ func main() {
 	}
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("Server forced to shutdown:", err)
+	}
+	if err := otelShutdown(ctx); err != nil {
+		log.Printf("OpenTelemetry shutdown error: %v", err)
 	}
 	log.Println("Server exited")
 }

@@ -613,11 +613,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("OpenTelemetry init failed: %v", err)
 	}
-	defer func() {
-		if err := otelShutdown(context.Background()); err != nil {
-			log.Printf("OpenTelemetry shutdown error: %v", err)
-		}
-	}()
 
 	ttl := 30 * time.Millisecond
 	if raw := os.Getenv("CACHE_TTL_MS"); raw != "" {
@@ -787,6 +782,9 @@ func main() {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatal("Sidecar forced to shutdown:", err)
+	}
+	if err := otelShutdown(shutdownCtx); err != nil {
+		log.Printf("OpenTelemetry shutdown error: %v", err)
 	}
 	log.Println("Sidecar exited")
 }

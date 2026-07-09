@@ -15,9 +15,14 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 )
 
+const defaultShutdownTimeout = 10 * time.Second
+
+// Shutdown flushes pending spans and shuts down the global tracer provider.
+type Shutdown func(context.Context) error
+
 // Init configures the global TracerProvider and OTLP exporter (Jaeger-compatible).
-// Returns a shutdown function that must be called on process exit.
-func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) {
+// Returns a shutdown function that must be called after HTTP drains complete.
+func Init(ctx context.Context, cfg Config) (Shutdown, error) {
 	if !cfg.Enabled {
 		log.Printf("OpenTelemetry disabled for %s", cfg.ServiceName)
 		return func(context.Context) error { return nil }, nil
@@ -63,9 +68,20 @@ func Init(ctx context.Context, cfg Config) (func(context.Context) error, error) 
 		cfg.ServiceName, cfg.OTLPEndpoint, cfg.SampleRatio)
 
 	return func(shutdownCtx context.Context) error {
-		ctx, cancel := context.WithTimeout(shutdownCtx, 5*time.Second)
+		if shutdownCtx == nil {
+			shutdownCtx = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(shutdownCtx, defaultShutdownTimeout)
 		defer cancel()
-		return tp.Shutdown(ctx)
+
+		if err := tp.ForceFlush(ctx); err != nil {
+			return fmt.Errorf("otel force flush: %w", err)
+		}
+		if err := tp.Shutdown(ctx); err != nil {
+			return fmt.Errorf("otel shutdown: %w", err)
+		}
+		log.Printf("OpenTelemetry shutdown complete for %s", cfg.ServiceName)
+		return nil
 	}, nil
 }
 
