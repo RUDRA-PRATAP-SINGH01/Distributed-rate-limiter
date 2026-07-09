@@ -104,7 +104,11 @@ func NewSidecar(
 			Timeout:   5 * time.Second,
 			Transport: telemetry.NewHTTPTransport(nil),
 		},
-		proxy:            httputil.NewSingleHostReverseProxy(target),
+		proxy: func() *httputil.ReverseProxy {
+			p := httputil.NewSingleHostReverseProxy(target)
+			p.Transport = telemetry.NewHTTPTransport(http.DefaultTransport)
+			return p
+		}(),
 	}
 }
 
@@ -215,10 +219,7 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID, idemKey string) {
 	ctx := r.Context()
-	ctx, span := telemetry.StartSpan(ctx, "sidecar.idempotency",
-		attribute.String("idempotency.key", idemKey),
-		attribute.String("user.id", userID),
-	)
+	ctx, span := telemetry.StartSpan(ctx, "sidecar.idempotency")
 	defer span.End()
 	r = r.WithContext(ctx)
 
@@ -295,6 +296,12 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 }
 
 func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scope, idemKey, fenceToken string) {
+	ctx, span := telemetry.StartSpan(r.Context(), "sidecar.upstream_proxy",
+		attribute.String("http.path", r.URL.Path),
+	)
+	defer span.End()
+	r = r.WithContext(ctx)
+
 	capturer := idempotency.NewResponseCapturer(w)
 	if s.router != nil {
 		body, _ := readRequestBody(r)
@@ -340,7 +347,6 @@ func (s *Sidecar) failIdempotent(ctx context.Context, scope, key, fenceToken str
 func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID string) {
 	ctx := r.Context()
 	ctx, span := telemetry.StartSpan(ctx, "sidecar.proxy",
-		attribute.String("user.id", userID),
 		attribute.String("http.path", r.URL.Path),
 	)
 	defer span.End()
@@ -418,7 +424,6 @@ func (s *Sidecar) writeDenial(w http.ResponseWriter, limit, remaining int, retry
 
 func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID string, idempotentReplay bool) (limitResult, error) {
 	ctx, span := telemetry.StartSpan(ctx, "sidecar.rate_limit_check",
-		attribute.String("user.id", userID),
 		attribute.Bool("hierarchical", s.useHierarchical),
 	)
 	defer span.End()
@@ -517,6 +522,7 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		span.SetAttributes(attribute.Bool("rate_limit.allowed", false))
+		telemetry.SetHTTPStatus(span, resp.StatusCode)
 		return limitResult{allowed: false, remaining: remaining, limit: limit, retryAfter: retryAfter}, nil
 	}
 	if resp.StatusCode != http.StatusOK {

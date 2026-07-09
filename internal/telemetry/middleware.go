@@ -77,7 +77,7 @@ func NewHTTPTransport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return otelhttp.NewTransport(base)
+	return &clientTransport{base: base}
 }
 
 // StartSpan begins a child span in the service tracer.

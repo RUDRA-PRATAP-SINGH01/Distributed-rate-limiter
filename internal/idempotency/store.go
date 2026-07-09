@@ -58,9 +58,7 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 		return nil, err
 	}
 
-	ctx, span := telemetry.StartSpan(ctx, "idempotency.claim",
-		attribute.String("idempotency.key", key),
-	)
+	ctx, span := telemetry.StartSpan(ctx, "idempotency.claim")
 	defer span.End()
 
 	start := time.Now()
@@ -77,13 +75,16 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 
 	if err != nil {
 		metrics.RecordIdempotencyClaim("error")
+		telemetry.RecordError(span, err)
 		return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
 	}
 
 	values, ok := result.([]interface{})
 	if !ok || len(values) < 1 {
 		metrics.RecordIdempotencyClaim("error")
-		return nil, fmt.Errorf("%w: unexpected lua result", ErrStoreUnavailable)
+		err := fmt.Errorf("%w: unexpected lua result", ErrStoreUnavailable)
+		telemetry.RecordError(span, err)
+		return nil, err
 	}
 
 	code := luautil.LuaInt(values[0])
@@ -118,7 +119,9 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 		return &ClaimResponse{Result: ResultHashMismatch}, nil
 	default:
 		metrics.RecordIdempotencyClaim("error")
-		return nil, fmt.Errorf("%w: unknown claim code %d", ErrStoreUnavailable, code)
+		err := fmt.Errorf("%w: unknown claim code %d", ErrStoreUnavailable, code)
+		telemetry.RecordError(span, err)
+		return nil, err
 	}
 }
 
@@ -128,7 +131,6 @@ func (s *RedisStore) Complete(ctx context.Context, req CompleteRequest) error {
 	}
 
 	ctx, span := telemetry.StartSpan(ctx, "idempotency.complete",
-		attribute.String("idempotency.key", req.Key),
 		attribute.Int("http.status_code", req.HTTPStatus),
 	)
 	defer span.End()
@@ -147,11 +149,13 @@ func (s *RedisStore) Complete(ctx context.Context, req CompleteRequest) error {
 	metrics.RecordIdempotencyRedisDuration(time.Since(start).Seconds())
 
 	if err != nil {
+		telemetry.RecordError(span, err)
 		return fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
 	}
 
 	values, ok := result.([]interface{})
 	if !ok || len(values) < 1 || luautil.LuaInt(values[0]) != 1 {
+		telemetry.RecordError(span, ErrStaleFence)
 		return ErrStaleFence
 	}
 
@@ -165,7 +169,6 @@ func (s *RedisStore) Fail(ctx context.Context, req FailRequest) error {
 	}
 
 	ctx, span := telemetry.StartSpan(ctx, "idempotency.fail",
-		attribute.String("idempotency.key", req.Key),
 		attribute.Int("http.status_code", req.HTTPStatus),
 	)
 	defer span.End()
@@ -183,11 +186,13 @@ func (s *RedisStore) Fail(ctx context.Context, req FailRequest) error {
 	metrics.RecordIdempotencyRedisDuration(time.Since(start).Seconds())
 
 	if err != nil {
+		telemetry.RecordError(span, err)
 		return fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
 	}
 
 	values, ok := result.([]interface{})
 	if !ok || len(values) < 1 || luautil.LuaInt(values[0]) != 1 {
+		telemetry.RecordError(span, ErrStaleFence)
 		return ErrStaleFence
 	}
 

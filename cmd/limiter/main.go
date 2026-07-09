@@ -148,7 +148,6 @@ func main() {
 			telemetry.SetHTTPStatus(span, http.StatusBadRequest)
 			return
 		}
-		span.SetAttributes(attribute.String("user.id", userID))
 
 		if r.URL.Query().Get("idempotent_replay") == "true" {
 			metrics.RecordRequestDuration("check", time.Since(start).Seconds())
@@ -278,7 +277,6 @@ func main() {
 
 			capacities, refillRates := effectiveHierarchicalLimits(cfg, overrideStore, tenantID, userID, endpoint)
 			span.SetAttributes(
-				attribute.String("user.id", userID),
 				attribute.String("tenant.id", tenantID),
 				attribute.String("endpoint", endpoint),
 			)
