@@ -9,6 +9,7 @@ import (
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -37,7 +38,7 @@ func (rw *RedisSlidingWindow) Allow(ctx context.Context, userID string) (bool, i
 	key := fmt.Sprintf("sw:%s", userID)
 	now := time.Now().UnixMilli()
 	windowStart := now - rw.window.Milliseconds()
-	member := fmt.Sprintf("%d:%d", now, time.Now().UnixNano()) // unique member avoids ZADD collisions
+	member := fmt.Sprintf("%d:%s", now, uuid.NewString()) // unique member avoids ZADD collisions
 
 	// EXPIRE must be at least 1s — Redis rejects sub-second TTL on older configs.
 	expireSec := int((rw.window.Milliseconds() + 999) / 1000)
