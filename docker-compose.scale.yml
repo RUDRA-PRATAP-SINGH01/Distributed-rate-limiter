@@ -1,0 +1,85 @@
+# Multi-replica proof overlay — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale up --build
+#
+# Adds a second limiter (8083) and sidecar (9091) sharing the same Redis/network.
+# Does not modify default single-instance compose behavior.
+
+services:
+  limiter-b:
+    profiles: ["scale"]
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.limiter
+    environment:
+      - PORT=8080
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
+      - OTEL_ENABLED=false
+      - ALGORITHM=sliding
+      - CAPACITY=10
+      - REFILL_RATE=1.0
+      - WINDOW_SEC=60
+      - ENABLE_HIERARCHICAL=true
+      - GLOBAL_CAPACITY=1000000
+      - GLOBAL_REFILL_RATE=10000.0
+      - TENANT_CAPACITY=100000
+      - TENANT_REFILL_RATE=1000.0
+      - USER_CAPACITY=100
+      - USER_REFILL_RATE=1.0
+      - ENDPOINT_CAPACITY=10
+      - ENDPOINT_REFILL_RATE=0.5
+      - ENABLE_ADMIN_API=true
+      - ADMIN_PORT=8082
+      - ADMIN_API_KEY=dev-key-change-in-prod
+      - INTERNAL_API_KEY=dev-internal-key-change-in-prod
+      - ALLOW_QUERY_USER_ID=true
+      - OVERRIDE_CACHE_TTL_MS=5000
+      - ENABLE_AUDIT_TRAIL=true
+    ports:
+      - "8083:8080"
+      - "8084:8082"
+    networks:
+      - rate-net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  sidecar-b:
+    profiles: ["scale"]
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.sidecar
+    environment:
+      - PORT=9090
+      - UPSTREAM_URL=http://demo:8081
+      - RATE_LIMITER_URL=http://limiter:8080
+      - ENABLE_ROUTING=true
+      - GATEWAYS=gateway-a|http://gateway-a:8081|100,gateway-b|http://gateway-b:8081|80,gateway-c|http://gateway-c:8081|60
+      - ROUTING_TARGET_LATENCY_MS=100
+      - ROUTING_CIRCUIT_ERROR_RATE=0.5
+      - ROUTING_CIRCUIT_MIN_SAMPLES=10
+      - ROUTING_PROBE_INTERVAL_SEC=15
+      - RATE_LIMIT=10
+      - USE_HIERARCHICAL=false
+      - FAIL_OPEN=false
+      - INTERNAL_API_KEY=dev-internal-key-change-in-prod
+      - ALLOW_QUERY_USER_ID=true
+      - ALLOWED_PATHS=/
+      - ENABLE_IDEMPOTENCY=true
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-dev-redis-password}
+      - IDEMPOTENCY_LOCK_TTL_MS=60000
+      - IDEMPOTENCY_COMPLETED_TTL_MS=86400000
+      - IDEMPOTENCY_FAIL_OPEN=false
+      - OTEL_ENABLED=false
+    ports:
+      - "9092:9090"  # 9091 is Prometheus in base compose
+    networks:
+      - rate-net
+    depends_on:
+      redis:
+        condition: service_healthy
+      limiter:
+        condition: service_healthy
+      demo:
+        condition: service_started

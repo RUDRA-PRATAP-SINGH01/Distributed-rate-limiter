@@ -195,7 +195,7 @@ A minimal HTTP server that returns `{"message": "Hello from backend"}`. It also 
 | `idempotency` | Atomic claim/complete Lua scripts, fingerprinting, response capture |
 | `limiter` | Redis-backed algorithms with embedded Lua scripts |
 | `metrics` | Prometheus counters and histograms |
-| `override` | Runtime limit override store with local TTL cache |
+| `override` | Runtime limit override store with generation-validated local cache |
 | `redis` | Redis client factory (pool size 100, min idle 10) |
 | `telemetry` | OpenTelemetry provider, HTTP middleware, Redis tracing |
 
@@ -1050,7 +1050,7 @@ sequenceDiagram
 | User | `/admin/limits/user/{id}` | Unblock a specific user |
 | Endpoint | `/admin/limits/endpoint/{tenant\|path}` | Restrict expensive endpoint |
 
-Override cache TTL defaults to 5 seconds (`OVERRIDE_CACHE_TTL_MS=5000`). Changes propagate within seconds, not instantly — a deliberate trade-off to avoid hammering Redis on every check.
+Override reads use a generation-validated local cache (`config:generation` increments on every admin write/delete; `RefreshGeneration` on each hierarchical check invalidates stale entries). `OVERRIDE_CACHE_TTL_MS` (default 5000) bounds Redis read amplification for unchanged generations — cross-replica visibility is on the **next hierarchical check** after a write, not after TTL expiry.
 
 ### Example Commands
 
@@ -1416,7 +1416,7 @@ Every design decision in this project has a cost. Here is an honest accounting.
 | **Separate admin port (8082)** | Network isolation for override API | Two ports to secure and expose |
 | **503 vs 429 separation** | Clear failure modes for operators | Clients must handle both status codes |
 | **Low-cardinality metrics** | Prometheus stays stable under load | No per-user observability |
-| **Runtime overrides with TTL cache** | Fast admin changes without redeploy | Up to 5s propagation delay |
+| **Runtime overrides with generation-validated cache** | Fast admin changes without redeploy; cross-replica visibility on next hierarchical read | One extra Redis GET (`config:generation`) per hierarchical check |
 | **Query param user ID (dev only)** | Easy local testing | Spoofable if left enabled in production |
 | **Redis idempotency store** | Fleet-wide dedup without app changes | Extra Redis memory per key; 24h TTL |
 | **409 for in-progress** | Simple client retry contract | Clients must backoff and retry |

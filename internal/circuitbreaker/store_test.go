@@ -2,6 +2,8 @@ package circuitbreaker
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -150,6 +152,58 @@ func TestHalfOpenProbeExhaustionTransitionsToOpen(t *testing.T) {
 	st, _ := b.GetState(ctx, target)
 	if st.State != StateOpen {
 		t.Fatalf("expected transition back to open, got %s", st.State)
+	}
+}
+
+func TestHalfOpenConcurrentProbeBound(t *testing.T) {
+	b, _ := setupCB(t)
+	ctx := context.Background()
+	target := "gw-concurrent"
+
+	for i := 0; i < 6; i++ {
+		_, _ = b.Allow(ctx, target)
+		_ = b.Record(ctx, target, RecordInput{Kind: OutcomeFailure, Latency: 1 * time.Millisecond})
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	cfg := b.Config()
+	maxProbes := cfg.HalfOpenMaxProbes
+	const workers = 32
+	start := make(chan struct{})
+	var (
+		wg       sync.WaitGroup
+		admitted atomic.Int64
+		rejected atomic.Int64
+	)
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			allow, err := b.Allow(ctx, target)
+			if err != nil {
+				t.Errorf("allow: %v", err)
+				return
+			}
+			if allow.Allowed {
+				admitted.Add(1)
+			} else {
+				rejected.Add(1)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := admitted.Load(); got > maxProbes {
+		t.Fatalf("admitted %d probes exceeds HalfOpenMaxProbes=%d", got, maxProbes)
+	}
+	if got := admitted.Load(); got == 0 {
+		t.Fatal("expected at least one admitted half-open probe")
+	}
+	st, _ := b.GetState(ctx, target)
+	if st.HalfOpenCalls > maxProbes {
+		t.Fatalf("redis half_open_calls=%d exceeds max=%d", st.HalfOpenCalls, maxProbes)
 	}
 }
 

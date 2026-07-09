@@ -8,7 +8,7 @@
 
 ## Problem Statement
 
-Clients send the same `Idempotency-Key` multiple times. retries after 409, network duplicates, or mobile SDK auto-retry. Without server-side deduplication, POST `/api/orders` executes multiple times. I needed exactly-once **upstream side effect** with many-safe **client retries**.
+Clients send the same `Idempotency-Key` multiple times. retries after 409, network duplicates, or mobile SDK auto-retry. Without server-side deduplication, POST `/api/orders` executes multiple times. The sidecar provides **concurrent duplicate suppression**, **cached response replay after completion**, and **fencing against stale Complete/Fail** — but **not** guaranteed at-most-once upstream side effects after crash + lease reclaim.
 
 ## Why the problem exists
 

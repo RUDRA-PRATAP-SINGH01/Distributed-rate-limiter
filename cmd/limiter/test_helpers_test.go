@@ -197,7 +197,7 @@ func newTestFixture(t *testing.T, overrideCfg func(*Config)) (*testFixture, func
 				endpoint = "default"
 			}
 			if r.URL.Query().Get("idempotent_replay") == "true" {
-				capacities, _ := effectiveHierarchicalLimits(cfg, overrideStore, tenantID, userID, endpoint)
+				capacities, _ := effectiveHierarchicalLimits(r.Context(), cfg, overrideStore, tenantID, userID, endpoint)
 				limitHeader := effectiveHierarchicalLimitHeader(capacities)
 				remaining := capacities[0]
 				for _, cap := range capacities[1:] {
@@ -221,7 +221,7 @@ func newTestFixture(t *testing.T, overrideCfg func(*Config)) (*testFixture, func
 			tenantKey := fmt.Sprintf("rate:tenant:%s", tenantID)
 			userKey := fmt.Sprintf("rate:user:%s", userID)
 			endpointKey := fmt.Sprintf("rate:endpoint:%s:%s", tenantID, endpoint)
-			capacities, refillRates := effectiveHierarchicalLimits(cfg, overrideStore, tenantID, userID, endpoint)
+			capacities, refillRates := effectiveHierarchicalLimits(r.Context(), cfg, overrideStore, tenantID, userID, endpoint)
 			allowed, remaining, err := hierarchicalLimiter.AllowWithParams(
 				ctx,
 				[]string{globalKey, tenantKey, userKey, endpointKey},

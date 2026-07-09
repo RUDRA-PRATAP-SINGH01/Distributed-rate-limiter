@@ -83,7 +83,7 @@ I keep scenario runbooks in-repo, linked to chaos and benchmark scripts.
 3. Reproduce: `k6 run -e TARGET_RPS=100 benchmarks/throughput/throughput-test.js` with same user_id
 4. If hot-key scenario: expect **99.9% 429** at 5,000 target. That is **correct**
 
-**Mitigation:** `POST /admin/limits/user/USER_ID` bump capacity; wait `OVERRIDE_CACHE_TTL_MS` (5000ms)
+**Mitigation:** `POST /admin/limits/user/USER_ID` bump capacity; change is visible on the next hierarchical check per replica (`config:generation` invalidation; no fixed 5s wait)
 
 ---
 

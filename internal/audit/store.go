@@ -24,7 +24,16 @@ type Store struct {
 	cfg     Config
 	script  *redis.Script
 	queue   chan RecordInput
-	started sync.Once
+
+	mu                sync.Mutex
+	state             storeState
+	workersOnce       sync.Once
+	shutdownBeginOnce sync.Once
+	wg                sync.WaitGroup
+	shutMu            sync.Mutex
+
+	// beforeRecord is a test-only hook invoked at the start of record().
+	beforeRecord func()
 }
 
 func NewStore(rdb redis.UniversalClient, cfg Config) *Store {
@@ -33,22 +42,6 @@ func NewStore(rdb redis.UniversalClient, cfg Config) *Store {
 		cfg:    cfg,
 		script: redis.NewScript(appendLua),
 	}
-}
-
-func (s *Store) startWorkers() {
-	s.started.Do(func() {
-		if !s.cfg.Async || s.cfg.Workers <= 0 {
-			return
-		}
-		s.queue = make(chan RecordInput, s.cfg.QueueSize)
-		for i := 0; i < s.cfg.Workers; i++ {
-			go func() {
-				for in := range s.queue {
-					_, _ = s.record(context.Background(), in)
-				}
-			}()
-		}
-	})
 }
 
 func eventKey(id string) string       { return fmt.Sprintf("audit:event:%s", id) }
@@ -63,11 +56,20 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (Event, error) {
 		return Event{}, nil
 	}
 	if s.cfg.Async {
-		s.startWorkers()
+		s.ensureWorkers()
+
+		s.mu.Lock()
+		if s.state != stateRunning {
+			s.mu.Unlock()
+			metrics.RecordAuditDropped()
+			return Event{Decision: in.Decision, RequestID: in.RequestID}, nil
+		}
 		select {
 		case s.queue <- in:
+			s.mu.Unlock()
 			return Event{Decision: in.Decision, RequestID: in.RequestID}, nil
 		default:
+			s.mu.Unlock()
 			metrics.RecordAuditDropped()
 		}
 	}
@@ -75,6 +77,9 @@ func (s *Store) Record(ctx context.Context, in RecordInput) (Event, error) {
 }
 
 func (s *Store) record(ctx context.Context, in RecordInput) (Event, error) {
+	if s.beforeRecord != nil {
+		s.beforeRecord()
+	}
 	start := time.Now()
 	id := uuid.New().String()
 	now := time.Now().UnixMilli()

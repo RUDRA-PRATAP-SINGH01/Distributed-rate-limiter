@@ -189,6 +189,48 @@ func TestFenceTokenStaleCompleteRejected(t *testing.T) {
 	}
 }
 
+func TestFenceTokenStaleFailRejected(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	cfg := DefaultConfig()
+	cfg.LockTTL = 100
+	cfg.CompletedTTL = 60_000
+	store := NewRedisStore(rdb, cfg)
+	ctx := context.Background()
+
+	workerA, err := store.Claim(ctx, "scope1", "key-fail-fence", "hash-x")
+	if err != nil || workerA.Result != ResultClaimed {
+		t.Fatalf("worker A claim: %#v %v", workerA, err)
+	}
+	staleToken := workerA.FenceToken
+
+	mr.FastForward(200 * time.Millisecond)
+
+	workerB, err := store.Claim(ctx, "scope1", "key-fail-fence", "hash-x")
+	if err != nil || workerB.Result != ResultClaimed {
+		t.Fatalf("worker B reclaim: %#v %v", workerB, err)
+	}
+
+	err = store.Fail(ctx, FailRequest{
+		Scope: "scope1", Key: "key-fail-fence", FenceToken: staleToken,
+		HTTPStatus: 503, Body: []byte("stale"),
+	})
+	if err != ErrStaleFence {
+		t.Fatalf("expected ErrStaleFence for stale owner fail, got %v", err)
+	}
+
+	err = store.Fail(ctx, FailRequest{
+		Scope: "scope1", Key: "key-fail-fence", FenceToken: workerB.FenceToken,
+		HTTPStatus: 503, Body: []byte(`{"ok":false}`),
+	})
+	if err != nil {
+		t.Fatalf("valid owner fail: %v", err)
+	}
+}
+
 func TestFailState(t *testing.T) {
 	store, _ := setupTestStore(t)
 	ctx := context.Background()

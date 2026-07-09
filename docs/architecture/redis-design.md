@@ -107,7 +107,7 @@ Scripts: `internal/limiter/lua/token_bucket.lua`, `hierarchical.lua`
 | `config:user:{id}` | same |
 | `config:endpoint:{tenant\|path}` | same |
 
-Read through `override.Store` with local `sync.Map` cache (`OVERRIDE_CACHE_TTL_MS`, default 5000 ms). Admin API on `:8082` writes; limiter merges on `/check_hierarchical`.
+Read through `override.Store` with a generation-validated local `sync.Map` cache (`config:generation` + `OVERRIDE_CACHE_TTL_MS`, default 5000 ms). Admin API on `:8082` writes; limiter calls `RefreshGeneration` before override merge on `/check_hierarchical`.
 
 #### Idempotency. HASH + STRING
 

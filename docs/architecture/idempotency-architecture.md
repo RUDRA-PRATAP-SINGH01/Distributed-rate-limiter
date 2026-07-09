@@ -4,7 +4,7 @@
 
 ## Problem Statement
 
-I needed **exactly-once client semantics** for mutating HTTP requests (POST, PUT, PATCH). When a client retries, the upstream must not execute again. Instead, the sidecar should replay the response stored from the first successful attempt. I also needed to reject reuse of the same `Idempotency-Key` with a different payload, and to reclaim locks when a slow or crashed worker holds a processing lease too long.
+I needed **duplicate-suppression with cached response replay** for mutating HTTP requests (POST, PUT, PATCH). When a client retries after a completed request, the sidecar replays the stored response instead of calling upstream again. This is **not** exactly-once upstream execution: if a worker crashes after upstream succeeds but before `Complete`, lease expiry allows another replica to reclaim and execute again. I also needed to reject reuse of the same `Idempotency-Key` with a different payload, and to reclaim locks when a slow or crashed worker holds a processing lease too long.
 
 ## Why the problem exists
 

@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -166,7 +167,10 @@ func getOverrideByLevel(store *override.Store, level, id string) (override.Confi
 
 // effectiveHierarchicalLimits merges static env defaults with Redis overrides.
 // Each level is evaluated independently in Lua; this function only supplies the numbers.
-func effectiveHierarchicalLimits(cfg Config, store *override.Store, tenantID, userID, endpoint string) ([]int, []float64) {
+func effectiveHierarchicalLimits(ctx context.Context, cfg Config, store *override.Store, tenantID, userID, endpoint string) ([]int, []float64) {
+	if store != nil {
+		store.RefreshGeneration(ctx)
+	}
 	globalCap, globalRate := cfg.GlobalCapacity, cfg.GlobalRefillRate
 	tenantCap, tenantRate := cfg.TenantCapacity, cfg.TenantRefillRate
 	userCap, userRate := cfg.UserCapacity, cfg.UserRefillRate

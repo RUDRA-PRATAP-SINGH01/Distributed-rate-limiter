@@ -116,7 +116,7 @@ On my laptop (`environment.md`), the deployed stack sustains **~1,000 actual RPS
 
 Resource planning: limiter, sidecar, and Redis each need headroom; `metrics/collect-metrics.ps1` during `run-all.ps1` samples CPU and memory.
 
-`OVERRIDE_CACHE_TTL_MS=5000` means admin limit changes propagate within 5s to sidecars without redeploy.
+`OVERRIDE_CACHE_TTL_MS=5000` bounds per-key Redis reads when generation is unchanged. Admin limit changes are visible on the **next** `/check_hierarchical` on each replica after `config:generation` increments (not after a fixed TTL delay).
 
 `ENABLE_AUDIT_TRAIL=true` adds a Redis append per decision. `BenchmarkAuditAppend` is ~300µs on miniredis; production adds RTT.
 

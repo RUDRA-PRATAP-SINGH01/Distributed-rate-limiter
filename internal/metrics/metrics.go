@@ -213,7 +213,7 @@ var (
 	AuditDropped = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "audit_dropped_total",
-			Help: "Audit events dropped when async queue is full",
+			Help: "Audit events dropped when the async queue is full or shutdown has begun",
 		},
 	)
 )

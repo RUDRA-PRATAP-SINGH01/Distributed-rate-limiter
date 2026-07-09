@@ -8,7 +8,7 @@
 
 ## Problem Statement
 
-Clients retry POSTs on timeouts, mobile networks flap, and load balancers replay requests. Without idempotency, a payment or order creation endpoint can execute twice for one logical operation. I needed Stripe-style `Idempotency-Key` semantics: at-most-once upstream execution with safe replay of stored responses.
+Clients retry POSTs on timeouts, mobile networks flap, and load balancers replay requests. Without idempotency, a payment or order creation endpoint can execute twice for one logical operation. I needed Stripe-style `Idempotency-Key` semantics: concurrent duplicate suppression, cached response replay after completion, and fencing — with an explicit crash-before-Complete window where upstream may run again after lease reclaim.
 
 ## Why the problem exists
 

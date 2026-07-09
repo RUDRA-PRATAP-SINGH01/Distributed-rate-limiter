@@ -260,7 +260,7 @@ func main() {
 			}
 
 			if r.URL.Query().Get("idempotent_replay") == "true" {
-				capacities, _ := effectiveHierarchicalLimits(cfg, overrideStore, tenantID, userID, endpoint)
+				capacities, _ := effectiveHierarchicalLimits(r.Context(), cfg, overrideStore, tenantID, userID, endpoint)
 				limitHeader := effectiveHierarchicalLimitHeader(capacities)
 				remaining := capacities[0]
 				for _, cap := range capacities[1:] {
@@ -290,7 +290,7 @@ func main() {
 			userKey := fmt.Sprintf("rate:user:%s", userID)
 			endpointKey := fmt.Sprintf("rate:endpoint:%s:%s", tenantID, endpoint)
 
-			capacities, refillRates := effectiveHierarchicalLimits(cfg, overrideStore, tenantID, userID, endpoint)
+			capacities, refillRates := effectiveHierarchicalLimits(r.Context(), cfg, overrideStore, tenantID, userID, endpoint)
 			span.SetAttributes(
 				attribute.String("tenant.id", tenantID),
 				attribute.String("endpoint", endpoint),
@@ -389,10 +389,20 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		logging.Fatal("Server forced to shutdown", "error", err)
 	}
+	if auditStore != nil && auditCfg.Enabled && auditCfg.Async {
+		logging.Info(ctx, "Draining audit queue", "component", "limiter")
+		if err := auditStore.Shutdown(ctx); err != nil {
+			logging.Error(ctx, "Audit shutdown incomplete", "component", "limiter", "error", err)
+		}
+	}
 	if err := otelShutdown(ctx); err != nil {
 		logging.Error(ctx, "OpenTelemetry shutdown error", "component", "limiter", "error", err)
 	}
-	if err := redisclient.Close(rdb); err != nil {
+	if auditStore != nil && !auditStore.RedisCloseSafe() {
+		logging.Warn(ctx, "Skipping Redis close while audit workers are still active",
+			"component", "limiter",
+		)
+	} else if err := redisclient.Close(rdb); err != nil {
 		logging.Error(ctx, "Redis close error", "component", "limiter", "error", err)
 	} else {
 		logging.Info(ctx, "Redis client closed", "component", "limiter")

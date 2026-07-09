@@ -14,7 +14,7 @@ Every HTTP request entering the system must:
 
 1. Resolve **who** is consuming quota (identity).
 2. Decide **allow or deny** before expensive upstream work.
-3. For mutating APIs with `Idempotency-Key`, guarantee **at-most-once side effects** with safe replay.
+3. For mutating APIs with `Idempotency-Key`, suppress concurrent duplicates and replay completed responses; upstream may still execute more than once if a worker crashes before `Complete` and the lease is reclaimed.
 4. Forward allowed traffic to either a static upstream (`UPSTREAM_URL`) or a **scored gateway pool** (`ENABLE_ROUTING=true`).
 
 The flow must remain correct under concurrent duplicate requests, limiter outages, and partial gateway failure.
