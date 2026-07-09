@@ -149,18 +149,13 @@
       }
     },
     {
-      "title": "System Error Rate",
+      "title": "Limiter Decision Error Rate (%)",
       "type": "stat",
-      "gridPos": {
-        "x": 12,
-        "y": 1,
-        "w": 4,
-        "h": 3
-      },
+      "description": "⚠️ Requires AUDIT_ENABLED=true on the limiter service.\n\nWhen audit telemetry is disabled (AUDIT_ENABLED=false or env unset), audit_events_total is never incremented. This panel will show 0% — identical to a zero-error state. 0% here does NOT confirm absence of errors if audit is disabled.\n\nMeasures: fraction of /check and /check_hierarchical quota evaluations that failed with a Redis backend error. Idempotent replays and circuit-breaker short-circuits are excluded from the population (they do not reach quota evaluation and emit no audit event). Ratio is mathematically bounded to [0, 100%].",
       "targets": [
         {
-          "expr": "((sum(rate(routing_outcomes_total{result=\"error\"}[$__rate_interval])) or vector(0)) + (sum(rate(audit_events_total{decision=\"error\"}[$__rate_interval])) or vector(0))) / (sum(rate(rate_limiter_requests_total{job=~\"$job\"}[$__rate_interval])) or vector(1)) * 100",
-          "legendFormat": "Error Rate"
+          "expr": "sum(rate(audit_events_total{job=\"rate-limiter\", decision=\"error\", handler=~\"check|hierarchical\"}[$__rate_interval])) / clamp_min(sum(rate(audit_events_total{job=\"rate-limiter\", handler=~\"check|hierarchical\"}[$__rate_interval])), 1e-9) * 100",
+          "legendFormat": "Decision Error Rate"
         }
       ],
       "datasource": {
@@ -170,14 +165,6 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "mappings": [],
-          "custom": {
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            }
-          },
           "min": 0,
           "max": 100,
           "thresholds": {
@@ -200,9 +187,24 @@
         }
       },
       "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "background",
         "graphMode": "area",
-        "colorMode": "value",
-        "justifyMode": "center"
+        "justifyMode": "auto"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 4,
+        "h": 3
       }
     },
     {
@@ -1830,11 +1832,68 @@
       }
     },
     {
+      "title": "Sidecar Gateway Error Rate (%)",
+      "type": "gauge",
+      "description": "Fraction of upstream gateway calls (per routing_outcomes_total) that failed with result=error — meaning the Redis Lua script for recording the outcome itself errored, or returned an unexpected result.\n\nSourced from cmd/sidecar (job=sidecar). Independent of the limiter decision path.\n\nIncludes background /health probe outcomes (probeAll). Probe failures correctly inflate this metric even at low user traffic.\n\nRatio is bounded to [0, 100%].",
+      "targets": [
+        {
+          "expr": "sum(rate(routing_outcomes_total{job=\"sidecar\", result=\"error\"}[$__rate_interval])) / clamp_min(sum(rate(routing_outcomes_total{job=\"sidecar\"}[$__rate_interval])), 1e-9) * 100",
+          "legendFormat": "Gateway Error Rate"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#10B981",
+                "value": null
+              },
+              {
+                "color": "#F59E0B",
+                "value": 5.0
+              },
+              {
+                "color": "#EF4444",
+                "value": 15.0
+              }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 69,
+        "w": 12,
+        "h": 6
+      }
+    },
+    {
       "title": "Async Audit Trail",
       "type": "row",
       "gridPos": {
         "x": 0,
-        "y": 69,
+        "y": 75,
         "w": 24,
         "h": 1
       },
@@ -1846,7 +1905,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 0,
-        "y": 70,
+        "y": 76,
         "w": 8,
         "h": 6
       },
@@ -1884,7 +1943,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 8,
-        "y": 70,
+        "y": 76,
         "w": 8,
         "h": 6
       },
@@ -1935,7 +1994,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 16,
-        "y": 70,
+        "y": 76,
         "w": 8,
         "h": 6
       },
@@ -1977,7 +2036,7 @@
       "type": "row",
       "gridPos": {
         "x": 0,
-        "y": 76,
+        "y": 82,
         "w": 24,
         "h": 1
       },
@@ -1989,7 +2048,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 0,
-        "y": 77,
+        "y": 83,
         "w": 6,
         "h": 6
       },
@@ -2027,7 +2086,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 6,
-        "y": 77,
+        "y": 83,
         "w": 6,
         "h": 6
       },
@@ -2065,7 +2124,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 12,
-        "y": 77,
+        "y": 83,
         "w": 6,
         "h": 6
       },
@@ -2103,7 +2162,7 @@
       "type": "timeseries",
       "gridPos": {
         "x": 18,
-        "y": 77,
+        "y": 83,
         "w": 6,
         "h": 6
       },
@@ -2145,7 +2204,7 @@
       "type": "text",
       "gridPos": {
         "x": 0,
-        "y": 83,
+        "y": 89,
         "w": 24,
         "h": 4
       },
