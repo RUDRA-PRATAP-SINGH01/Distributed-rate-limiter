@@ -18,7 +18,7 @@ Sentinel failover is not instantaneous. Sentinels agree on subjective downtime (
 
 - Single config switch: `REDIS_MODE=sentinel` + `REDIS_SENTINEL_ADDRS`.
 - Automatic client reconnect: Via `redis.NewFailoverClient` (`internal/redis/client.go`).
-- Observable recovery: `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`. Counter `redis_failover_reconnects_total` is declared (`internal/metrics/metrics.go:220`) but not incremented by code today (audit §14).
+- Observable recovery: `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`.
 - Health endpoint truth: Limiter `/health` reports `mode: sentinel`, `role`, `replication` string.
 - No split code paths: In limiter vs sidecar. both call `redisclient.LoadConfigFromEnv()`.
 
@@ -88,6 +88,6 @@ Steady-state: no Sentinel overhead on each command. Failover window: 100% error 
 
 ## Lessons learned
 
-During my first HA demo I killed only the master container and expected instant recovery. clients errored for ~15s and `redis_failover_reconnects_total` was not wired to go-redis reconnect hooks, so Grafana could not show a reconnect counter. The lesson: **measure failover time in benchmarks and `/health`**, not assumptions. Sentinel is correct for self-hosted; managed Redis is correct when you want someone else to run the election.
+During my first HA demo I killed only the master container and expected instant recovery. clients errored for ~15s. The lesson: **measure failover time in benchmarks and `/health`**, not assumptions. Sentinel is correct for self-hosted; managed Redis is correct when you want someone else to run the election.
 
 **References:** `docs/decisions/why-sentinel.md`, `docs/diagrams/sentinel-failover.md`, `deploy/redis/`, `benchmarks/sentinel/summary.md`

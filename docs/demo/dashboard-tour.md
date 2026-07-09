@@ -17,7 +17,7 @@ This row answers the question: *Is the system healthy, and is it actively rate l
 * **System Health Cards**:
   - **Limiter Health Status**: `sum(up{job="rate-limiter"})`
   - **Sidecar Health Status**: `sum(up{job="sidecar"})`
-  - **Redis Cluster Status**: `sum(redis_up{job="redis-exporter"})` (no `redis_failover_reconnects_total` query — metric is unwired per audit §14)
+  - **Redis Cluster Status**: `sum(redis_up{job="redis-exporter"})`
 * **Quota Traffic**:
   - **Allowed RPS** / **Rejected RPS (429)**: `rate_limiter_requests_total` by `allowed` label
 * **Limiter Decision Error Rate (%)**:

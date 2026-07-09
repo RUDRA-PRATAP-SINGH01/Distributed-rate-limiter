@@ -86,7 +86,7 @@ Every application-defined metric is declared in `internal/metrics/metrics.go` an
 | `audit_append_duration_seconds` | Histogram | `metrics.go:197` | `metrics.go:197` | `audit/store.go:106` | None | `REACHABLE` | `LOW` | `VERIFIED-BY-TEST` |
 | `audit_search_duration_seconds` | Histogram | `metrics.go:205` | `metrics.go:205` | `audit/store.go:159` | None | `REACHABLE` | `LOW` | `VERIFIED-BY-TEST` |
 | `audit_dropped_total` | Counter | `metrics.go:213` | `metrics.go:213` | `audit/store.go:71` | None | `REACHABLE` | `LOW` | `VERIFIED-BY-TEST` |
-| `redis_failover_reconnects_total` | Counter | `metrics.go:220` | `metrics.go:220` | Never mutated in Go codebase | None | `DEAD-UNUSED` | `LOW` | `DEAD` |
+| `redis_failover_reconnects_total` | Counter | *(removed Phase 3C)* | — | — | — | `REMOVED` | `N/A` | `RESOLVED` |
 
 ---
 
@@ -344,7 +344,7 @@ We audited the test files to check if explicit assertions exist for key telemetr
 ---
 
 ## 12. Documentation and Implementation Drift
-* **Sentinel HA Documentation Drift**: The HA failure runbooks state that Sentinel master elections are visible in Prometheus via `redis_failover_reconnects_total`, whereas the client failover hooks are not wired to mutate this counter in code.
+* **Sentinel HA Documentation Drift**: **RESOLVED (Phase 3C)** — dead `redis_failover_reconnects_total` counter removed; failover drills use `/health` and circuit metrics.
 * **Misleading Dashboard Labels**: **RESOLVED** — All dashboard labels and panel titles have been renamed to accurately reflect that they measure client round-trip Redis execution latency rather than server-side Lua durations.
 
 ---
@@ -361,17 +361,13 @@ We audited the test files to check if explicit assertions exist for key telemetr
 ### MEDIUM: Conflated Lua Latency Panel (RESOLVED)
 - **Status**: **RESOLVED** in Phase 2A. Panel names and legend formats corrected to specify client-side round-trip times.
 
-### MEDIUM: Dead Redis Failover Metric
-- **Component**: Metrics
-- **Location**: `internal/metrics/metrics.go:220`
-- **Evidence**: Counter is never mutated in the codebase, leaving the dashboard panel dead.
-- **Impact**: Failover recovery events are not visible in Grafana during Sentinel drill scenarios.
-- **Remediation**: Register client reconnection status listener hooks in go-redis client initialization to increment the counter.
+### MEDIUM: Dead Redis Failover Metric (RESOLVED)
+- **Status**: **RESOLVED** in Phase 3C. Counter removed from `internal/metrics/metrics.go`; no misleading reconnect/failover telemetry.
 
 ---
 
 ## 14. Dead Metrics and Dead Dashboard Queries
-* **Dead Metric**: `redis_failover_reconnects_total`
+* **Dead Metric**: `redis_failover_reconnects_total` — **REMOVED** (Phase 3C).
 * **Dead Dashboard Query**: **RESOLVED** — The query `rate(redis_failover_reconnects_total[$__rate_interval])` has been completely removed from panel `"Redis Cluster Status"`.
 
 ---
@@ -379,7 +375,6 @@ We audited the test files to check if explicit assertions exist for key telemetr
 ## 15. Missing Telemetry Roadmap
 * **P1**: Standardized structured JSON logging using Go's native `log/slog` package containing trace correlation variables (`trace_id`, `span_id`, `request_id`).
 * **P1**: Add hierarchical rejections metrics mapping rejections by enforcement level (e.g. global, tenant, user, endpoint).
-* **P1**: Connect go-redis Sentinel client connection callbacks to increment `redis_failover_reconnects_total`.
 * **P2**: Implement test assertion helpers for metrics validation.
 
 ### Hierarchical Rejection Metric Design Evaluation
@@ -401,7 +396,7 @@ We compared three options for adding visibility into blocked quota levels:
 
 ### MUST FIX BEFORE NEW FEATURES
 1. **Dashboard Corrections**: **DONE** — Replaced misleading `"System Error Rate"`, added `"Sidecar Gateway Error Rate (%)"`, fixed divide-by-zero risks using `clamp_min`, removed dead queries and OTel panels, and corrected round-trip latency panel descriptions.
-2. **Sentinel Metric Wiring**: Connect Sentinel reconnect callbacks to increment `redis_failover_reconnects_total`.
+2. **Sentinel Metric Wiring**: **RESOLVED (Phase 3C)** — dead counter removed; use `/health` and circuit metrics for failover drills.
 
 ### SHOULD IMPLEMENT NEXT
 3. **Structured JSON Logs**: Implement `log/slog` structured logging with automatic extraction and mapping of `trace_id` and `span_id` from contexts.

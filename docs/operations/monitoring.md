@@ -12,7 +12,7 @@ Failures in rate limiting systems are subtle:
 - Without metrics, a Redis outage looks like "rate limited" to clients when they see 503 vs 429 confusion.
 - Routing drift can send traffic to gateway-c silently.
 - Idempotency keys stuck in `in_progress` are invisible without the admin API.
-- Failover reconnects are not exported to Prometheus today: `redis_failover_reconnects_total` is declared but never incremented (`docs/OBSERVABILITY_FORENSIC_AUDIT.md` §14). Use `/health` and circuit metrics instead.
+- Failover drills: use `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`.
 
 ## Design goals
 
@@ -82,7 +82,7 @@ Prometheus (`:9091`) and Grafana (`:3000`) run in default compose with provision
 
 ## Failure modes
 
-Silent fail-open is dangerous: if `FAIL_OPEN=true`, 429 and 503 drop and I should watch for an allow rate spike. A circuit stuck open shows `circuit_breaker_state=1` forever; I check Redis connectivity. Trace dropout happens when Jaeger OOMs or OTEL buffers overflow (only when `OTEL_ENABLED=true`). `/health` can look OK while Redis is slow; I watch `rate_limiter_redis_duration_seconds` p99. Sentinel failover is visible via `/health` `redis.role` changes and `circuit_breaker_transitions_total{target="redis"}` — not via `redis_failover_reconnects_total` (dead metric per audit §14).
+Silent fail-open is dangerous: if `FAIL_OPEN=true`, 429 and 503 drop and I should watch for an allow rate spike. A circuit stuck open shows `circuit_breaker_state=1` forever; I check Redis connectivity. Trace dropout happens when Jaeger OOMs or OTEL buffers overflow (only when `OTEL_ENABLED=true`). `/health` can look OK while Redis is slow; I watch `rate_limiter_redis_duration_seconds` p99. Sentinel failover is visible via `/health` `redis.role` changes and `circuit_breaker_transitions_total{target="redis"}`.
 
 ## Operational concerns
 

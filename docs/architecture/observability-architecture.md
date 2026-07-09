@@ -161,7 +161,7 @@ Both the audit trail and idempotency replay respect `X-Request-ID`. Support can 
 
 **Redis HA**:
 
-- `redis_failover_reconnects_total` — declared in `metrics.go:220` but **not incremented** by application code today (audit §14). Use `/health` and `circuit_breaker_transitions_total{target="redis"}` for failover drills.
+- Failover drills: use `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`.
 
 ### Prometheus scraping (`deploy/prometheus/prometheus.yml`)
 
@@ -185,7 +185,7 @@ See `docs/diagrams/tracing-flow.md` for a visual request flow.
 - **ParentBased sampling**. Child spans follow parent. Root sampling ratio applies.
 - **Health and metrics excluded from traces**. Correct for noise. Harder to debug scraper issues.
 - **No custom exemplars**. Histograms do not link to trace IDs yet.
-- **`redis_failover_reconnects_total`**. Declared only; go-redis reconnect hook not wired (audit §14).
+- **Sentinel failover signals**: `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}` (no dedicated failover reconnect counter).
 - **Baggage enabled**. Unused by default. Potential PII risk if misused later.
 - **Structured logging absent**. Stdlib `log` only; no `trace_id` in log lines (audit §8).
 

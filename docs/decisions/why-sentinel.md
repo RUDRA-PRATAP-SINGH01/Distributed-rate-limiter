@@ -21,7 +21,7 @@ This platform stores **live enforcement state** in Redis. Minutes of write unava
 - Quorum-based failover: Three Sentinel processes in `docker-compose.ha.yml` profile.
 - Transparent reconnect: Go-redis queries Sentinels for new master address after promotion.
 - Health visibility: Limiter `/health` reports `redis.mode`, `role`, `replication`.
-- Failover visibility: `/health` `redis.role`, circuit transitions on target `redis`. `redis_failover_reconnects_total` is declared but not incremented (audit §14).
+- Failover visibility: `/health` `redis.role`, circuit transitions on target `redis`.
 
 ## Alternative approaches considered
 
@@ -83,7 +83,7 @@ Deploy: `docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile
 
 - Env: `REDIS_MASTER_NAME`, `REDIS_SENTINEL_ADDRS`, `REDIS_SENTINEL_PASSWORD` (defaults to `REDIS_PASSWORD`).
 - Run chaos drills: `chaos/` scripts, `benchmarks/sentinel/`.
-- During HA drills: confirm `/health` `redis.role` and falling 503 rate after promotion — not `redis_failover_reconnects_total` (unwired).
+- During HA drills: confirm `/health` `redis.role` and falling 503 rate after promotion.
 - After failover, verify `/health` shows `role: master` on new primary.
 
 ## Performance implications

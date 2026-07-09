@@ -216,13 +216,6 @@ var (
 			Help: "Audit events dropped when async queue is full",
 		},
 	)
-
-	RedisFailoverTotal = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "redis_failover_reconnects_total",
-			Help: "Redis client reconnections after Sentinel failover (incremented on ping recovery)",
-		},
-	)
 )
 
 func RecordRequest(handler string, allowed bool) {
@@ -339,8 +332,4 @@ func RecordAuditSearch(seconds float64) {
 
 func RecordAuditDropped() {
 	AuditDropped.Inc()
-}
-
-func RecordRedisFailoverReconnect() {
-	RedisFailoverTotal.Inc()
 }

@@ -68,7 +68,7 @@ func (r *Router) StartHealthProbes(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				r.probeAll(context.Background())
+				r.probeAll(ctx)
 			}
 		}
 	}()

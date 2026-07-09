@@ -826,7 +826,7 @@ docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --
 }
 ```
 
-Failover visibility: `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`. The counter `redis_failover_reconnects_total` is declared in `internal/metrics/metrics.go` but is not incremented by application code today (see `docs/OBSERVABILITY_FORENSIC_AUDIT.md` §14).
+Failover visibility: `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`.
 
 See `deploy/redis/`, `internal/redis/`, `benchmarks/sentinel/summary.md`.
 

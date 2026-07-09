@@ -65,7 +65,7 @@ The limiter process owns quota Lua execution; sidecars never decrement tokens di
 ## Failure modes
 
 - Redis unreachable: Limiter returns 503 from `checkRedisCircuit()` when `cb:redis` is open or Allow fails; sidecar returns 503 unless `FAIL_OPEN=true`.
-- Split brain during failover: Writes may fail until `FailoverClient` reconnects; monitor `/health` and circuit metrics — `redis_failover_reconnects_total` is not incremented today (audit §14).
+- Split brain during failover: Writes may fail until `FailoverClient` reconnects; monitor `/health` and circuit metrics.
 - Hot keys: A single abusive `user_id` concentrates on one Redis hash; hierarchical keys spread load but do not eliminate hot tenants.
 - Memory pressure: Audit `AUDIT_MAX_EVENTS` and idempotency `IDEMPOTENCY_COMPLETED_TTL_MS` cap growth; unbounded override keys need ops discipline.
 

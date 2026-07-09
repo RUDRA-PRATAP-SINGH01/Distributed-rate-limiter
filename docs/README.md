@@ -300,7 +300,7 @@ Things I know are missing or would build next:
 | **Rate limit the admin API** | Prevent ops tooling from becoming abuse vector |
 | **Formal SLO dashboards** | Wire benchmark thresholds to alerts (p99 > 100 ms, circuit open) |
 | **Multi-region quota** | Regional Redis with approximate global caps |
-| **Sentinel reconnect metric wiring** | `redis_failover_reconnects_total` is declared but not incremented; connect go-redis failover hooks (see `docs/OBSERVABILITY_FORENSIC_AUDIT.md` §14) |
+| **Sidecar Redis readiness in `/health`** | Phase 3C: sidecar `/health` checks local Redis when idempotency/routing enabled |
 | **Structured logging** | Migrate from stdlib `log` to `log/slog` with trace correlation (audit §8) |
 
 ---

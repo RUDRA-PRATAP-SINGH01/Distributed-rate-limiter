@@ -392,5 +392,10 @@ func main() {
 	if err := otelShutdown(ctx); err != nil {
 		logging.Error(ctx, "OpenTelemetry shutdown error", "component", "limiter", "error", err)
 	}
+	if err := redisclient.Close(rdb); err != nil {
+		logging.Error(ctx, "Redis close error", "component", "limiter", "error", err)
+	} else {
+		logging.Info(ctx, "Redis client closed", "component", "limiter")
+	}
 	logging.Info(nil, "Server exited", "component", "limiter")
 }

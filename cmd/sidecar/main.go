@@ -98,10 +98,7 @@ func NewSidecar(
 		failOpen:         failOpen,
 		defaultLimit:     defaultLimit,
 		useHierarchical:  useHierarchical,
-		httpClient: &http.Client{
-			Timeout:   5 * time.Second,
-			Transport: telemetry.NewHTTPTransport(nil),
-		},
+		httpClient:       newLimiterHTTPClient(loadLimiterHTTPConfigFromEnv()),
 		proxy: func() *httputil.ReverseProxy {
 			p := httputil.NewSingleHostReverseProxy(target)
 			p.Transport = telemetry.NewHTTPTransport(http.DefaultTransport)
@@ -708,9 +705,12 @@ func main() {
 	)
 
 	var sharedRdb redis.UniversalClient
+	var redisCfg redisclient.Config
+	var probeCancel context.CancelFunc
 	needsRedis := os.Getenv("ENABLE_IDEMPOTENCY") == "true" || os.Getenv("ENABLE_ROUTING") == "true"
 	if needsRedis {
-		sharedRdb = connectSidecarRedis(otelCfg)
+		redisCfg = redisclient.LoadConfigFromEnv()
+		sharedRdb = connectSidecarRedis(otelCfg, redisCfg)
 	}
 
 	if os.Getenv("ENABLE_IDEMPOTENCY") == "true" {
@@ -760,7 +760,9 @@ func main() {
 		if err := router.Seed(context.Background(), gateways); err != nil {
 			logging.Fatal("gateway seed failed", "error", err)
 		}
-		router.StartHealthProbes(context.Background())
+		probeCtx, cancel := context.WithCancel(context.Background())
+		probeCancel = cancel
+		router.StartHealthProbes(probeCtx)
 		sidecar.SetRouter(router)
 		logging.Info(nil, "Intelligent routing enabled",
 			"component", "sidecar",
@@ -770,25 +772,13 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", auth.RequireAPIKey(metricsKey, promhttp.Handler().ServeHTTP))
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp, err := sidecar.httpClient.Get(limiter + "/health")
-		if err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy"})
-			return
-		}
-		defer resp.Body.Close()
-		io.Copy(io.Discard, resp.Body) // drain body so keep-alive connections are reused
-
-		if resp.StatusCode != http.StatusOK {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy"})
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
-	})
+	mux.HandleFunc("/health", newSidecarHealthHandler(sidecarHealthDeps{
+		needsRedis:  needsRedis,
+		limiterURL:  limiter,
+		httpClient:  sidecar.httpClient,
+		redisClient: sharedRdb,
+		redisCfg:    redisCfg,
+	}))
 	mux.Handle("/", sidecar)
 
 	port := os.Getenv("PORT")
@@ -810,7 +800,6 @@ func main() {
 	)
 
 	sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
-	defer sweeperCancel()
 	sidecar.StartCacheSweeper(sweeperCtx, 10*time.Second)
 
 	srv := &http.Server{
@@ -838,6 +827,11 @@ func main() {
 	<-quit
 	logging.Info(nil, "Shutting down sidecar", "component", "sidecar")
 
+	sweeperCancel()
+	if probeCancel != nil {
+		probeCancel()
+	}
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
@@ -847,11 +841,17 @@ func main() {
 	if err := otelShutdown(shutdownCtx); err != nil {
 		logging.Error(shutdownCtx, "OpenTelemetry shutdown error", "component", "sidecar", "error", err)
 	}
+	if sharedRdb != nil {
+		if err := redisclient.Close(sharedRdb); err != nil {
+			logging.Error(shutdownCtx, "Redis close error", "component", "sidecar", "error", err)
+		} else {
+			logging.Info(shutdownCtx, "Redis client closed", "component", "sidecar")
+		}
+	}
 	logging.Info(nil, "Sidecar exited", "component", "sidecar")
 }
 
-func connectSidecarRedis(otelCfg telemetry.Config) redis.UniversalClient {
-	cfg := redisclient.LoadConfigFromEnv()
+func connectSidecarRedis(otelCfg telemetry.Config, cfg redisclient.Config) redis.UniversalClient {
 	if cfg.Mode == redisclient.ModeStandalone && cfg.Addr == "" {
 		logging.Fatal("REDIS_ADDR is required when ENABLE_IDEMPOTENCY or ENABLE_ROUTING is true")
 	}

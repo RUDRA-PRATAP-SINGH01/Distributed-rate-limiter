@@ -77,7 +77,7 @@ Comments note Sentinel-driven topology updates. go-redis reconnects to promoted 
 | Client | FailoverClient discovers new master, reconnects |
 | Old master returns | Rejoins as replica |
 
-**Metrics**. `/health` `redis.role`, `circuit_breaker_transitions_total{target="redis"}`. `redis_failover_reconnects_total` is declared but unwired (audit §14).
+**Metrics**. `/health` `redis.role`, `circuit_breaker_transitions_total{target="redis"}`.
 
 ## Tradeoffs
 
