@@ -1,0 +1,48 @@
+# Final benchmark run — commands
+
+Commit: `a1de9ecb612734840c28ea2311a8862b20e7732b`  
+Date: 2026-07-10  
+Environment: see `environment.txt`
+
+## Prerequisites
+
+```powershell
+docker compose up -d
+# optional second sidecar for multi-replica tests:
+docker run -d --name sidecar-b-test --network distributed-rate-limiter_rate-net -p 9092:9090 ...
+```
+
+## Full targeted suite
+
+```powershell
+powershell -ExecutionPolicy Bypass -File benchmarks/final/run-targeted-benchmarks.ps1
+```
+
+## Individual workloads
+
+```powershell
+$env:TARGET_RPS=1000
+k6 run -e TARGET_RPS=1000 benchmarks/scripts/direct-limiter.js
+k6 run -e TARGET_RPS=1000 benchmarks/scripts/sidecar-e2e.js
+k6 run -e TARGET_RPS=1000 -e LIMITER_URL=http://localhost:8085 benchmarks/scripts/direct-limiter.js  # token bucket container
+k6 run -e TARGET_RPS=1000 benchmarks/scripts/hierarchical-limiter.js
+k6 run benchmarks/scripts/denial-cache.js
+k6 run benchmarks/scripts/singleflight.js
+k6 run -e TARGET_RPS=500 benchmarks/scripts/multi-replica-e2e.js
+k6 run -e TARGET_RPS=300 -e DURATION=15m benchmarks/scripts/soak.js
+```
+
+## Parse raw k6 JSON stream
+
+```powershell
+python benchmarks/scripts/parse-k6-stream.py benchmarks/results/a1de9ec-final/raw/sidecar-e2e-1000-stream.json 70
+```
+
+## Regression
+
+```powershell
+go test -count=1 ./...
+go test -count=1 -race ./...
+go vet ./...
+go build ./...
+```

@@ -9,3 +9,10 @@ benchmarks/*/results/
 benchmarks/idempotency/results/
 benchmarks/metrics/results/
 benchmarks/graphs/*.png
+
+benchmarks/results/**/raw/*-stream.json
+benchmarks/results/targeted-run.log
+
+# Large raw k6 benchmark streams
+benchmarks/results/**/raw/*-stream.json
+benchmarks/results/targeted-run.log

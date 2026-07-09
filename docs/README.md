@@ -107,29 +107,29 @@ Interview-oriented synthesis: [interviews/design-decisions.md](interviews/design
 
 ## Benchmarks summary
 
-I built a k6 suite because "it works on my machine" is not a performance claim. Full details: [../benchmarks/summary.md](../benchmarks/summary.md), [../benchmarks/methodology.md](../benchmarks/methodology.md).
+Final evidence: [benchmarks/final-benchmark-report.md](benchmarks/final-benchmark-report.md) (commit `a1de9ec`, 2026-07-10). Raw artifacts: `benchmarks/results/a1de9ec-final/`.
 
-### Rate limiter throughput (i9-14900HX, 32GB RAM, Docker Compose)
+### Rate limiter throughput (i9-14900HX, 32GB RAM, Docker Compose — final run)
 
-| Target RPS | Actual RPS | p99 | Error rate | Verdict |
-|------------|------------|-----|------------|---------|
-| 100 | 100 | 11 ms | 0% | Healthy |
-| 1,000 | 1,000 | 3.2 ms | 0% | **Max sustainable** |
-| 5,000 | 1,353 | 3.5 s | 10% | Saturated |
-| 10,000 | 1,082 | 4.3 s | 15% | Collapsed |
+| Workload | Target RPS | Actual RPS | p99 | Error rate | Verdict |
+|----------|------------|------------|-----|------------|---------|
+| Sidecar e2e | 1,000 | **872** | **11 ms** | 0% | **Max sustainable** |
+| Direct sliding | 1,000 | **871** | **8 ms** | 0% | **Max sustainable** |
+| Sidecar e2e | 5,000 | 1,504 | 383 ms | 0% | Saturated |
+| Direct token bucket | 5,000 | 4,161 | 148 ms | 0% | High throughput; p99 > 100 ms |
 
-**Key finding:** ~**1,000 actual RPS** with p99 < 100 ms. Beyond that, Redis single-threaded Lua execution is the knee. latency grows exponentially and 503s appear rather than silent over-admission.
+**Key finding:** ~**870–872 actual RPS** sustainable end-to-end (p99 < 100 ms). Sliding window saturates well below 5,000 target on single Redis master.
 
-### Correctness tests
+### Correctness tests (final / prior runs)
 
 | Test | Result |
 |------|--------|
-| Hot-key (5,000 target, 10 users) | 99.9% rejected (429). correct under contention |
-| Enforcement (500/min, single user) | 98% rejected. ~10 allowed per window |
-| Idempotency race (100 VUs, 1 key) | 1 upstream execution, p95 claim 14.9 ms |
-| Idempotency replay (50 VUs, 30s) | ~942 RPS, p95 5.7 ms, 0% errors |
+| Multi-sidecar quota (60 concurrent) | **10 allowed / 50 denied** (cap=10) |
+| Idempotency burst (40 parallel, 2 sidecars) | **1×200, 39×409** |
+| Singleflight | 100 concurrent → **1 limiter call** (Go test) |
+| Denial cache hammer | p99 **7 ms** on cached denials |
 
-Run: `.\benchmarks\run-all.ps1` · `k6 run benchmarks/idempotency/idempotency-race.js`
+Run: `powershell -File benchmarks/final/run-targeted-benchmarks.ps1`
 
 ---
 

@@ -125,8 +125,8 @@ I keep scenario runbooks in-repo, linked to chaos and benchmark scripts.
 
 **Steps:**
 
-1. Check actual RPS vs **~1,000** sustainable ceiling
-2. `k6 run -e TARGET_RPS=5000 benchmarks/throughput/throughput-test.js`. if actual ~**1,353**, p99 **3.5s**, that is saturation
+1. Check actual RPS vs **~870** sustainable ceiling (final benchmark run, `docs/benchmarks/final-benchmark-report.md`)
+2. `k6 run -e TARGET_RPS=5000 benchmarks/scripts/sidecar-e2e.js` — if actual ~**1,504**, p99 **~383 ms**, that is saturation (not a Redis bug)
 3. `docker stats rate-limiter rate-sidecar rate-redis`
 4. Run `.\benchmarks\run-saturation.ps1` for knee documentation
 5. Scale horizontally or reduce per-user `CAPACITY`

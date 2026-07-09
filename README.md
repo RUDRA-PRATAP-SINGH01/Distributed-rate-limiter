@@ -1297,75 +1297,50 @@ Docker Compose starts Jaeger (`:16686` UI, `:4318` OTLP). Default compose sets `
 
 ## Benchmark Suite
 
-I built a full benchmark pipeline because "it works on my machine" is not a performance claim.
+Reproducible k6 benchmarks with raw artifacts under `benchmarks/results/`. **Full final report:** [docs/benchmarks/final-benchmark-report.md](docs/benchmarks/final-benchmark-report.md) (commit `a1de9ec`, 2026-07-10).
 
-### Test Types
+### Verified highlights (i9-14900HX, 32 GB, Docker Compose, sliding window default)
 
-```mermaid
-flowchart LR
-    subgraph tests [k6 Tests]
-        T1[Throughput<br/>100-10000 RPS]
-        T2[Saturation<br/>1500-4000 RPS]
-        T3[Hot-Key<br/>10 users @ 5000 RPS]
-        T4[Enforcement<br/>single user 500/min]
-        T5[Idempotency Race<br/>100 VUs, 1 key]
-        T6[Idempotency Replay<br/>50 VUs, cached key]
-    end
+| Workload | Target RPS | Actual RPS | p99 | Non-429 errors |
+|----------|------------|------------|-----|----------------|
+| Sidecar e2e (full proxy) | 1,000 | **872** | **11 ms** | 0% |
+| Direct limiter `/check` | 1,000 | **871** | **8 ms** | 0% |
+| Direct token bucket `/check` | 5,000 | **4,161** | 148 ms | 0% |
+| 15 min soak @ 300 RPS | 300 | **299** | **10 ms** | 0% |
 
-    subgraph output [Analysis]
-        JSON[results/*.json]
-        PARSE[parse-results.py]
-        GRAPHS[generate-graphs.py]
-    end
+**Sustainable ceiling** (p99 < 100 ms, errors < 1%): **~870–872 actual RPS** end-to-end with unique users. At **5,000 target RPS**, sliding-window paths saturate (actual **285–1,504 RPS**, p99 **382 ms–51 s**).
 
-    T1 --> JSON
-    T2 --> JSON
-    T3 --> JSON
-    T4 --> JSON
-    T5 --> JSON
-    T6 --> JSON
-    JSON --> PARSE
-    PARSE --> GRAPHS
+**Sidecar overhead** at sustainable load: **~+3.7 ms p50** vs direct limiter.
+
+### Scripts
+
+| Test | Script |
+|------|--------|
+| Direct limiter throughput | `benchmarks/scripts/direct-limiter.js` |
+| Sidecar end-to-end | `benchmarks/scripts/sidecar-e2e.js` |
+| Hierarchical | `benchmarks/scripts/hierarchical-limiter.js` |
+| Denial cache | `benchmarks/scripts/denial-cache.js` |
+| Multi-replica | `benchmarks/scripts/multi-replica-e2e.js` |
+| Soak | `benchmarks/scripts/soak.js` |
+| Legacy suite | `benchmarks/run-all.ps1` |
+
+```powershell
+docker compose up -d
+k6 run -e TARGET_RPS=1000 benchmarks/scripts/sidecar-e2e.js
+powershell -ExecutionPolicy Bypass -File benchmarks/final/run-targeted-benchmarks.ps1
+python benchmarks/scripts/parse-k6-stream.py benchmarks/results/a1de9ec-final/raw/sidecar-e2e-1000-stream.json 70
 ```
 
-| Test | Script | What It Proves |
-|------|--------|----------------|
-| Throughput | `benchmarks/throughput/throughput-test.js` | Latency at increasing load |
-| Saturation | `benchmarks/saturation/saturation-test.js` | Exact point where system collapses |
-| Hot-key | `benchmarks/hot-key/hot-key-test.js` | Redis contention under shared keys |
-| Enforcement | `benchmarks/enforcement/enforcement-test.js` | Limits are actually enforced |
-| Idempotency race | `benchmarks/idempotency/idempotency-race.js` | 100 concurrent same key → 1 execution |
-| Idempotency replay | `benchmarks/idempotency/idempotency-replay.js` | Cached replay throughput |
+### Correctness (not throughput)
 
-### Idempotency Results (Docker Compose, local)
+| Property | Evidence |
+|----------|----------|
+| Multi-sidecar quota (cap=10) | 60 concurrent → **10 allowed / 50 denied** (RUNTIME) |
+| Idempotency concurrent duplicates | 40 parallel → **1×200, 39×409** (RUNTIME) |
+| Singleflight | 100 concurrent → **1 limiter call** (TEST) |
+| CB half-open probe bound | ≤ `HalfOpenMaxProbes` (TEST + RUNTIME) |
 
-| Test | Scenario | Key Result |
-|------|----------|------------|
-| Race | 100 VUs, 1 `Idempotency-Key` | **1 upstream execution**, p95 claim **14.9 ms**, 14% `409` in-progress |
-| Replay | 50 VUs, 30s, pre-seeded key | **~942 RPS**, p95 **5.7 ms**, **0% errors**, no upstream calls |
-
-```bash
-k6 run benchmarks/idempotency/idempotency-race.js
-k6 run benchmarks/idempotency/idempotency-replay.js
-go test ./internal/idempotency/... -v
-```
-
-See `benchmarks/idempotency/summary.md` for full numbers.
-
-### Rate Limiter Results on My Machine (i9-14900HX, 32GB RAM)
-
-| Target RPS | Actual RPS | p99 | Error Rate | Verdict |
-|------------|------------|-----|------------|---------|
-| 100 | 100 | 11 ms | 0% | Healthy |
-| 1,000 | 1,000 | 3.2 ms | 0% | Max sustainable |
-| 5,000 | 1,353 | 3.5 s | 10% | Saturated |
-| 10,000 | 1,082 | 4.3 s | 15% | Collapsed |
-
-**Key finding:** The system sustains roughly **1,000 actual RPS** with p99 under 100ms. Beyond that, latency grows exponentially and 503 errors appear — the system stops accepting work rather than silently degrading.
-
-Hot-key and enforcement tests confirm correctness: 99%+ rejection rates when limits are exceeded, with sub-25ms p99 even under heavy 429 traffic.
-
-See `benchmarks/summary.md`, `benchmarks/methodology.md`, and `benchmarks/environment.md` for full details.
+See `benchmarks/README.md`, `benchmarks/methodology.md`, and `benchmarks/environment.md`.
 
 ---
 

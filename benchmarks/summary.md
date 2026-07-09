@@ -1,65 +1,46 @@
 # Benchmark Summary
 
+> **Final run (2026-07-10, commit `a1de9ec`):** see [../docs/benchmarks/final-benchmark-report.md](../docs/benchmarks/final-benchmark-report.md) and `results/a1de9ec-final/`.
+
 See [environment.md](environment.md) for machine specs and [methodology.md](methodology.md) for test design.
 
-## Key Finding
+## Key Finding (final benchmark run)
 
-Based on existing throughput data (100–10,000 RPS target):
+On i9-14900HX / 32 GB / Docker Compose / Redis 7.4 / k6 1.7.1:
 
-> System sustains **~1,000 actual RPS** with p99 < 100 ms and 0% errors.  
-> Beyond **5,000 target RPS** (actual ~1,353), p99 rises to 3.5 s with 10% errors — latency grows exponentially.
+> System sustains **~872 actual RPS** end-to-end (sidecar, 1,000 target) with **p99 11 ms** and **0% non-429 errors**.  
+> At **5,000 target RPS**, sliding-window paths saturate (actual **285–1,504 RPS**, p99 **382 ms–51 s**). Token bucket on a dedicated limiter reached **4,161 RPS** at p99 **148 ms** (unique users).
 
-Run `.\run-saturation.ps1` for finer-grained saturation data (1,500–4,000 RPS).
+## Throughput Results (final run — sidecar e2e & direct limiter)
 
-## Throughput Results
+| Target RPS | Workload | Actual RPS | p99 | Error Rate | Verdict |
+|------------|----------|------------|-----|------------|---------|
+| 100 | Direct sliding | 100 | 3.9 ms | 0% | Healthy |
+| 1,000 | Direct sliding | 871 | 8 ms | 0% | **Max sustainable** |
+| 1,000 | Sidecar e2e | 872 | 11 ms | 0% | **Max sustainable** |
+| 5,000 | Direct sliding | 285 | 51 s | 0% | Saturated |
+| 5,000 | Sidecar e2e | 1,504 | 383 ms | 0% | Saturated |
+| 5,000 | Direct token bucket | 4,161 | 148 ms | 0% | High throughput; p99 > 100 ms |
 
-| Target RPS | Actual RPS | p99 | Error Rate | Notes |
-|------------|------------|-----|------------|-------|
-| 100 | 100 | 11 ms | 0% | Pass |
-| 1,000 | 1,000 | 3.2 ms | 0% | Pass — max sustainable |
-| 5,000 | 1,353 | 3.5 s | 10% | Saturated |
-| 10,000 | 1,082 | 4.3 s | 15% | Collapsed |
+## Soak (15 min @ 300 RPS target)
 
-## Resource Utilization
+| Actual RPS | p99 | Errors | Notes |
+|------------|-----|--------|-------|
+| 299 | 10 ms | 0% | Isolated max spike 1.3 s; no sustained drift |
 
-Run benchmarks with `run-all.ps1` to collect CPU/memory via `docker stats`.  
-Example format once metrics are collected:
+## Correctness-oriented benchmarks
 
-| Actual RPS | p99 | Limiter CPU | Sidecar CPU | Redis CPU | Memory |
-|------------|-----|-------------|-------------|-----------|--------|
-| 1,000 | 3 ms | — | — | — | — |
-| 1,353 | 3.5 s | — | — | — | — |
+| Test | Result |
+|------|--------|
+| Denial cache hammer | p99 **7 ms** on 618k cached denials |
+| Multi-sidecar quota | 60 concurrent, 2 sidecars → **10 allowed / 50 denied** |
+| Idempotency burst | 40 parallel → **1×200, 39×409** |
 
-## Other Tests
+## Legacy results
 
-| Test | Actual RPS | Result | Notes |
-|------|------------|--------|-------|
-| Hot-key (5,000 target) | 4,940 | 99.9% rejected (429) | Correct — 10 users hammered |
-| Enforcement (500/min) | 8 | 98% rejected (429) | Correct — ~10 allowed per window |
-
-## Idempotency Tests
-
-See [idempotency/summary.md](idempotency/summary.md).
-
-| Test | Scenario | Result |
-|------|----------|--------|
-| Race | 100 VUs, 1 key | 1 upstream execution, p95 14.9 ms |
-| Replay | 50 VUs, 30s | ~942 RPS, p95 5.7 ms, 0% errors |
-
-```bash
-k6 run benchmarks/idempotency/idempotency-race.js
-k6 run benchmarks/idempotency/idempotency-replay.js
-```
+Older rows in `throughput/results/` (June 2026) used `throughput-test.js` via sidecar `/check`. Re-run with `benchmarks/scripts/` before citing in new documents.
 
 ## Graphs
-
-| Graph | Shows |
-|-------|-------|
-| `graphs/latency-vs-rps.png` | p50/p95/p99 vs **actual** throughput |
-| `graphs/saturation-curve.png` | Target vs actual RPS (saturation knee) |
-| `graphs/error-rate-vs-rps.png` | Failures vs actual throughput |
-| `graphs/resource-utilization.png` | CPU vs actual throughput |
-| `graphs/enforcement-allowed-vs-rejected.png` | Allowed vs rejected requests |
 
 Regenerate after new test runs:
 

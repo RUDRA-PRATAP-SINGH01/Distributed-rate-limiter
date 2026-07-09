@@ -1,0 +1,20 @@
+commit_sha=a1de9ecb612734840c28ea2311a8862b20e7732b
+timestamp=2026-07-10-final
+cpu=Intel(R) Core(TM) i9-14900HX
+cores=24
+threads=32
+ram_gb=32
+os=Microsoft Windows 11 Home Single Language 10.0.26200 64-bit
+go=go1.26.1 windows/amd64
+docker=29.5.2
+redis=Redis server v=7.4.7
+k6=k6 v1.7.1
+topology=Docker Compose: 1x limiter :8080, 1x sidecar :9090, 1x redis :6379, optional 2nd replica :8083/:9092
+algorithm_default=sliding
+capacity=10
+window_sec=60
+warmup=10s
+measure_duration=60s
+soak_duration=15m
+soak_target_rps=300
+network_path=localhost → Docker published ports

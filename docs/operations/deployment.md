@@ -112,7 +112,7 @@ Before deploy I rotate `ADMIN_API_KEY`, `INTERNAL_API_KEY`, and `REDIS_PASSWORD`
 
 ## Performance implications
 
-On my laptop (`environment.md`), the deployed stack sustains **~1,000 actual RPS** (`benchmarks/summary.md`) before p99 exceeds 100 ms.
+On my laptop (`environment.md`), the deployed stack sustains **~872 actual RPS** end-to-end with p99 < 100 ms on the final benchmark run (`docs/benchmarks/final-benchmark-report.md`).
 
 Resource planning: limiter, sidecar, and Redis each need headroom; `metrics/collect-metrics.ps1` during `run-all.ps1` samples CPU and memory.
 
