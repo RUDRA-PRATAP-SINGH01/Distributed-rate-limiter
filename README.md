@@ -2,22 +2,27 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-![Distributed Rate Limiter Fleet Dashboard](docs/diagrams/dashboard_screenshot_1.png)
+A distributed rate limiting platform in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, distributed idempotency (duplicate suppression + fencing — **not** exactly-once), OpenTelemetry tracing (Jaeger), runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
 
-![Subsystem and Idempotency Metrics](docs/diagrams/dashboard_screenshot_2.png)
+Built to study how production API gateways and SaaS platforms enforce limits at scale — not a single-process token bucket, but something that stays correct across many sidecars under concurrent load.
 
-A distributed rate limiting platform I built in Go, Redis, and Lua. It enforces traffic quotas across multiple server instances, supports hierarchical multi-tenant limits, and ships with a sidecar proxy, production-grade idempotency layer, OpenTelemetry tracing (Jaeger), runtime configuration API, Prometheus metrics, load benchmarks, and chaos tests.
+**Engineering docs:** [docs/README.md](docs/README.md) · **Limitations:** [docs/limitations.md](docs/limitations.md) · **Final benchmarks:** [docs/benchmarks/final-benchmark-report.md](docs/benchmarks/final-benchmark-report.md)
 
-I started this project because I wanted to understand how production systems like API gateways and SaaS platforms actually enforce limits at scale, not just a single-process token bucket, but something that stays correct when you have ten sidecars and a million requests per minute.
+| Verified (commit `a1de9ec`, localhost Docker) | Result |
+|-----------------------------------------------|--------|
+| Sidecar e2e @ 1000 target | **~872 actual RPS**, p99 **11 ms**, 0 errors |
+| Multi-sidecar quota (cap=10, 60 concurrent) | **10 allowed / 50 denied** |
+| Idempotency burst (2 sidecars, 40 parallel) | **1×200, 39×409** |
+| 15 min soak @ 300 RPS | **299 RPS**, p99 **10 ms**, 0 errors |
 
-**Full engineering documentation:** [docs/README.md](docs/README.md) (architecture, failure modes, benchmarks, diagrams)
+Grafana (after `docker compose up`): [http://localhost:3000](http://localhost:3000) · Jaeger: [http://localhost:16686](http://localhost:16686) · Prometheus: [http://localhost:9091](http://localhost:9091)
 
 ---
 
 ## Table of Contents
 
 - [The Problem I Was Solving](#the-problem-i-was-solving)
-- [How I Arrived at This Architecture](#how-i-arrived-at-this-architecture)
+- [Architecture Evolution](#architecture-evolution)
 - [System Architecture](#system-architecture)
 - [Components](#components)
 - [Request Flows](#request-flows)
@@ -25,6 +30,9 @@ I started this project because I wanted to understand how production systems lik
 - [Hierarchical Quota Enforcement](#hierarchical-quota-enforcement)
 - [Sidecar Proxy](#sidecar-proxy)
 - [Idempotency Layer](#idempotency-layer)
+- [Distributed Circuit Breaker](#distributed-circuit-breaker)
+- [Redis Sentinel High Availability](#redis-sentinel-high-availability)
+- [Audit Trail](#audit-trail)
 - [Intelligent Traffic Routing](#intelligent-traffic-routing)
 - [Admin API and Runtime Overrides](#admin-api-and-runtime-overrides)
 - [Security Model](#security-model)
@@ -140,6 +148,8 @@ flowchart LR
 
 Prometheus (`:9091`), Grafana (`:3000`), and `redis-exporter` are included in the default `docker-compose.yml` stack alongside Jaeger. Scrape config: `deploy/prometheus/prometheus.yml`; dashboards provision from `deploy/grafana/`.
 
+**Multi-replica scale profile** (`docker-compose.scale.yml`, profile `scale`): second limiter on host **8083/8084**, second sidecar on **9092** (host **9091** stays Prometheus — do not point multi-replica tests at 9091).
+
 ---
 
 ## Components
@@ -196,8 +206,12 @@ A minimal HTTP server that returns `{"message": "Hello from backend"}`. It also 
 | `limiter` | Redis-backed algorithms with embedded Lua scripts |
 | `metrics` | Prometheus counters and histograms |
 | `override` | Runtime limit override store with generation-validated local cache |
-| `redis` | Redis client factory (pool size 100, min idle 10) |
+| `circuitbreaker` | Redis-backed three-state circuit breaker |
+| `routing` | Weighted gateway selection + failover |
+| `audit` | Async decision audit trail |
+| `redis` | Redis client factory (standalone + Sentinel) |
 | `telemetry` | OpenTelemetry provider, HTTP middleware, Redis tracing |
+| `logging` | Structured `slog` with request/trace correlation |
 
 ---
 
@@ -241,10 +255,10 @@ sequenceDiagram
     L->>R: EVAL sliding_window.lua
     R-->>L: {allowed: 0, remaining: 0}
     L-->>S: 429 + Retry-After
-    S->>S: Cache DENIAL (TTL 5s default)
+    S->>S: Cache DENIAL (TTL CACHE_TTL_MS, default 30ms)
     S-->>C: 429 Too Many Requests
 
-    Note over C,S: Next request within TTL served from cache — no Redis call
+    Note over C,S: Next request within TTL served from cache — no limiter call
 ```
 
 ### Limiter Unavailable (503)
@@ -440,7 +454,7 @@ I only cache denials because:
 - Allowances are not stable — caching "allowed" would let users bypass quota entirely
 - Under abuse (millions of 429s), caching denials protects Redis from repeated identical checks
 
-Default cache TTL: 5 seconds (configurable via sidecar env).
+Default cache TTL: **30 ms** (`CACHE_TTL_MS` on the sidecar). Short by design — reduces abuse bursts without masking quota recovery.
 
 ### Singleflight Deduplication
 
@@ -462,7 +476,9 @@ When `ALLOWED_PATHS` is unset, all paths are proxied (with a startup warning). W
 
 ## Idempotency Layer
 
-I added a Stripe-style idempotency layer on the sidecar so client retries never double-execute upstream work or burn quota twice. State lives in Redis and every claim runs through atomic Lua — the same correctness model as the rate limiter.
+Stripe-style idempotency on the sidecar: **duplicate suppression**, **cached replay**, and **fencing tokens**. State lives in Redis; every claim runs through atomic Lua.
+
+**Guarantee:** at-least-once upstream side effects are still possible if a worker crashes after upstream success but before `Complete` and the lease is reclaimed. This is **not** exactly-once execution — see [docs/limitations.md](docs/limitations.md).
 
 ### Why Sidecar, Not the App?
 
@@ -629,7 +645,7 @@ curl http://localhost:8081/api/orders/count
 
 Docker Compose enables idempotency by default on the sidecar.
 
-See `internal/idempotency/` and `benchmarks/idempotency/summary.md` for implementation and benchmark details.
+See [docs/architecture/idempotency-architecture.md](docs/architecture/idempotency-architecture.md) and `internal/idempotency/`.
 
 ---
 
@@ -746,7 +762,7 @@ curl -X DELETE -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/circui
 | **Sliding window decay** | Adapts to changing traffic | Can delay trip on intermittent errors |
 | **Separate targets** | Isolated blast radius | More keys to monitor |
 
-See `internal/circuitbreaker/` and `benchmarks/circuitbreaker/summary.md`.
+See [docs/architecture/circuit-breaker-architecture.md](docs/architecture/circuit-breaker-architecture.md) and `internal/circuitbreaker/`.
 
 ---
 
@@ -828,7 +844,7 @@ docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --
 
 Failover visibility: `/health` `redis.role` and `circuit_breaker_transitions_total{target="redis"}`.
 
-See `deploy/redis/`, `internal/redis/`, `benchmarks/sentinel/summary.md`.
+See `deploy/redis/`, `internal/redis/`, and [docs/operations/deployment.md](docs/operations/deployment.md).
 
 ### Operational Tradeoffs
 
@@ -907,7 +923,7 @@ curl -H "X-API-Key: $ADMIN_API_KEY" http://localhost:8082/admin/audit/stats
 
 Env: `ENABLE_AUDIT_TRAIL`, `AUDIT_RETENTION_HOURS`, `AUDIT_MAX_EVENTS`, `AUDIT_ASYNC`, `AUDIT_QUEUE_SIZE`, `AUDIT_WORKERS`
 
-See `internal/audit/` and `benchmarks/audit/summary.md`.
+See [docs/architecture/audit-trail-architecture.md](docs/architecture/audit-trail-architecture.md) and `internal/audit/`.
 
 ---
 
@@ -1012,7 +1028,7 @@ curl http://localhost:8082/admin/routing/gateways \
 
 Docker Compose runs `gateway-a`, `gateway-b`, `gateway-c` simulators with routing enabled.
 
-See `internal/routing/` and `benchmarks/routing/summary.md`.
+See [docs/architecture/routing-architecture.md](docs/architecture/routing-architecture.md) and `internal/routing/`.
 
 ---
 
@@ -1340,7 +1356,7 @@ python benchmarks/scripts/parse-k6-stream.py benchmarks/results/a1de9ec-final/ra
 | Singleflight | 100 concurrent → **1 limiter call** (TEST) |
 | CB half-open probe bound | ≤ `HalfOpenMaxProbes` (TEST + RUNTIME) |
 
-See `benchmarks/README.md`, `benchmarks/methodology.md`, and `benchmarks/environment.md`.
+See [docs/benchmarks/reproducibility.md](docs/benchmarks/reproducibility.md), [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md), and [docs/benchmarks/performance-analysis.md](docs/benchmarks/performance-analysis.md).
 
 ---
 
@@ -1386,14 +1402,14 @@ Every design decision in this project has a cost. Here is an honest accounting.
 | **Sidecar proxy** | Backend stays unaware of rate limiting | Another container to deploy and monitor |
 | **Redis + Lua atomicity** | No race conditions under concurrency | External dependency; Redis outage = 503 |
 | **Denial-only cache** | Prevents quota bypass via stale "allowed" cache | Allowed requests always hit Redis |
-| **Single Redis instance** | Simple local/dev deployment | No HA failover in default setup |
-| **Hierarchical 4-level limits** | SaaS-grade quota model | More complex config and Lua script |
+| **Single Redis instance** | Simple local/dev deployment | No HA in default compose (use `docker-compose.ha.yml`) |
+| **Hierarchical 4-level limits** | SaaS-grade quota model | More complex config and Lua; not Redis Cluster-safe without redesign |
 | **Separate admin port (8082)** | Network isolation for override API | Two ports to secure and expose |
 | **503 vs 429 separation** | Clear failure modes for operators | Clients must handle both status codes |
 | **Low-cardinality metrics** | Prometheus stays stable under load | No per-user observability |
-| **Runtime overrides with generation-validated cache** | Fast admin changes without redeploy; cross-replica visibility on next hierarchical read | One extra Redis GET (`config:generation`) per hierarchical check |
+| **Runtime overrides with generation-validated cache** | Cross-replica visibility on next hierarchical read | One extra Redis GET (`config:generation`) per hierarchical check; flat `/check` ignores overrides |
 | **Query param user ID (dev only)** | Easy local testing | Spoofable if left enabled in production |
-| **Redis idempotency store** | Fleet-wide dedup without app changes | Extra Redis memory per key; 24h TTL |
+| **Redis idempotency store** | Fleet-wide duplicate suppression without app changes | Not exactly-once; crash window can re-execute upstream |
 | **409 for in-progress** | Simple client retry contract | Clients must backoff and retry |
 | **Denial-only idempotency scope** | Tenant + user isolation | Keys not global across tenants |
 | **OTLP tracing to Jaeger** | End-to-end latency breakdown | Extra network hop per span batch; sampling required at scale |
@@ -1404,52 +1420,37 @@ Every design decision in this project has a cost. Here is an honest accounting.
 
 ```
 .
-├── benchmarks/              k6 load tests, parse-results.py, graph generation
-│   ├── throughput/          Fixed RPS latency tests
-│   ├── saturation/          Fine-grained saturation sweep
-│   ├── hot-key/             Shared-key contention test
-│   ├── enforcement/         Single-user limit correctness test
-│   ├── idempotency/         Race + replay k6 tests
-│   ├── routing/             Gateway distribution tests
-│   ├── circuitbreaker/      Circuit breaker load tests
-│   ├── sentinel/            HA failover notes
-│   ├── metrics/             docker stats collection scripts
-│   └── graphs/              generate-graphs.py (PNG output gitignored)
+├── benchmarks/
+│   ├── scripts/             k6 workloads + parse-k6-stream.py
+│   ├── final/               Targeted suite runner (run-targeted-benchmarks.ps1)
+│   └── results/             Progress logs + pinned artifacts (a1de9ec-final/)
 │
 ├── chaos/                   Fault injection scripts
-│   ├── chaos_test.ps1       Redis kill + recovery
-│   ├── network_partition.py Sidecar network isolation
-│   └── high_latency.py      Latency injection
-│
 ├── cmd/
 │   ├── limiter/             Central rate limiter + admin API (8080 / 8082)
 │   ├── sidecar/             Sidecar proxy (9090)
 │   ├── demo-backend/        Sample upstream API
-│   └── gateway-sim/           Simulated payment gateways for routing demos
+│   └── gateway-sim/         Simulated payment gateways for routing demos
 │
 ├── deploy/
 │   ├── prometheus/          Prometheus scrape config
 │   ├── grafana/             Provisioned dashboards and datasources
 │   └── redis/               Redis + Sentinel configs for HA profile
 │
-├── docs/                    Engineering documentation (start at docs/README.md)
-│   ├── architecture/        System design by subsystem
+├── docs/                    Engineering knowledge base (start at docs/README.md)
+│   ├── architecture/        Subsystem design (limiter, sidecar, Redis, CB, …)
 │   ├── algorithms/          Token bucket, sliding window, hierarchical
 │   ├── correctness/         Distributed invariants and multi-replica proof
-│   ├── observability/       Metrics, tracing, logging, Grafana
+│   ├── observability/       Metrics, tracing, logging, Grafana, health
 │   ├── failure-modes/       Outage and recovery behavior
-│   ├── benchmarks/          Methodology and final evidence report
-│   ├── operations/          Deployment, configuration, runbooks
+│   ├── benchmarks/          Methodology, analysis, final evidence report
+│   ├── operations/          Deployment, configuration, runbooks, scaling
 │   ├── security/            Threat model and authentication
 │   ├── testing/             Test strategy and concurrency proof
-│   └── ci/                  Continuous integration
+│   ├── ci/                  Continuous integration
+│   └── limitations.md       Explicit non-guarantees
 │
 ├── dockerfiles/
-│   ├── Dockerfile.limiter
-│   ├── Dockerfile.sidecar
-│   ├── Dockerfile.demo
-│   └── Dockerfile.gateway
-│
 ├── internal/
 │   ├── audit/               Audit trail store + Lua
 │   ├── auth/                API key middleware
@@ -1458,16 +1459,18 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │   ├── idempotency/         Idempotency store + Lua scripts
 │   ├── routing/             Intelligent gateway routing + scoring
 │   ├── limiter/             Redis algorithms + Lua scripts
+│   ├── logging/             Structured slog helpers
 │   ├── metrics/             Prometheus instrumentation
-│   ├── override/            Runtime override store
+│   ├── override/            Runtime override store (generation cache)
 │   ├── redis/               Redis client (standalone + Sentinel)
 │   └── telemetry/           OpenTelemetry → Jaeger (OTLP)
 │
-├── tests/
-│   └── legacy/              Race condition demo
+├── scripts/                 start.ps1 / start.sh, benchmark helpers, demos
+├── tests/legacy/            Race condition demo
 │
-├── docker-compose.yml       Default stack (Redis, limiter, sidecar, demo)
+├── docker-compose.yml       Default stack
 ├── docker-compose.ha.yml    Sentinel HA overlay (--profile ha)
+├── docker-compose.scale.yml Multi-replica overlay (sidecar-b :9092)
 ├── LICENSE
 ├── go.mod
 └── README.md
@@ -1477,15 +1480,17 @@ Every design decision in this project has a cost. Here is an honest accounting.
 
 ## Documentation
 
-The root README covers setup, APIs, and quick starts. The [`docs/`](docs/README.md) folder is the engineering record: architecture, ADRs, failure modes, benchmarks, runbooks, and diagrams.
+The root README is the product overview and quick start. [`docs/`](docs/README.md) is the source-grounded engineering record — architecture, correctness, failure modes, benchmarks, and runbooks. All docs are in English.
 
 | Start here | Contents |
 |------------|----------|
-| [docs/README.md](docs/README.md) | Master index and reading order |
-| [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | Data plane vs control plane |
-| [docs/diagrams/](docs/diagrams/README.md) | All Mermaid diagrams (GitHub-renderable) |
-| [docs/operations/deployment.md](docs/operations/deployment.md) | Docker Compose and HA deployment |
-| [docs/operations/runbooks.md](docs/operations/runbooks.md) | Incident response playbooks |
+| [docs/README.md](docs/README.md) | Portal, reading order, headline evidence |
+| [docs/architecture/system-overview.md](docs/architecture/system-overview.md) | Ports, ownership, topology |
+| [docs/architecture/request-lifecycle.md](docs/architecture/request-lifecycle.md) | End-to-end request paths |
+| [docs/limitations.md](docs/limitations.md) | What the system does **not** guarantee |
+| [docs/benchmarks/final-benchmark-report.md](docs/benchmarks/final-benchmark-report.md) | Verified performance + correctness |
+| [docs/operations/deployment.md](docs/operations/deployment.md) | Docker Compose, HA, scale |
+| [docs/operations/runbooks.md](docs/operations/runbooks.md) | Incident response |
 
 ---
 
