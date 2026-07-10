@@ -17,5 +17,6 @@ const users = ['bg_user_1', 'bg_user_2', 'bg_user_3', 'bg_user_4', 'bg_user_5'];
 
 export default function () {
     const userId = users[Math.floor(Math.random() * users.length)];
-    http.get(`http://localhost:9090/check?user_id=${userId}`);
+    // Hit the sidecar proxy root — rate-limited, then forwarded to demo-backend.
+    http.get(`http://localhost:9090/?user_id=${userId}`);
 }

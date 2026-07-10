@@ -17,6 +17,21 @@ Built to study how production API gateways and SaaS platforms enforce limits at 
 
 Grafana (after `docker compose up`): [http://localhost:3000](http://localhost:3000) · Jaeger: [http://localhost:16686](http://localhost:16686) · Prometheus: [http://localhost:9091](http://localhost:9091)
 
+### See the dashboards yourself (one command)
+
+```powershell
+# Windows (from repo root)
+.\scripts\start.ps1
+```
+
+```bash
+# Linux / macOS
+chmod +x scripts/*.sh
+./scripts/start.sh
+```
+
+This starts the full Docker stack, waits until healthy, generates live traffic, and opens **Grafana + Prometheus + Jaeger** in your browser. Already running? Re-open UIs with `.\scripts\open-observability.ps1` or `./scripts/open-observability.sh`.
+
 ---
 
 ## Table of Contents
@@ -1496,34 +1511,66 @@ The root README is the product overview and quick start. [`docs/`](docs/README.m
 
 ## Running the System
 
-For a production-grade, zero-configuration Developer Experience, use our one-command startup script:
+### One-command dashboards (recommended)
 
-### One-Command Quick Start
-
-Execute the bootstrapper matching your OS from the repository root:
-
-#### Linux / macOS
-```bash
-chmod +x scripts/start.sh scripts/demo/*.sh scripts/*.sh
-./scripts/start.sh
-```
+From the repository root:
 
 #### Windows (PowerShell)
 ```powershell
 .\scripts\start.ps1
 ```
 
-The startup script will automatically spin up the entire Docker Compose network, wait for health probes to pass, and spawn a constant background load of 15 RPS. This ensures the preloaded Grafana dashboard begins rendering metrics immediately.
+#### Linux / macOS
+```bash
+chmod +x scripts/start.sh scripts/open-observability.sh
+./scripts/start.sh
+```
 
----
+What it does:
 
-### Observability Console URLs
+1. `docker compose up -d` (full stack: Redis, limiter, sidecar, Prometheus, Grafana, Jaeger, gateways)
+2. Waits for health on limiter, sidecar, Grafana, Prometheus, Jaeger
+3. Starts background traffic (~15 RPS via k6, or a built-in fallback if k6 is missing)
+4. Seeds a few idempotent requests so Jaeger has rich traces immediately
+5. Opens Grafana, Prometheus, and Jaeger in your browser
 
-Once healthy, open these interfaces in your browser:
+Optional flags:
 
-- Grafana Dashboard: [http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet](http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet) (Pre-configured datasource and auto-loaded panels)
-- Jaeger UI (Traces): [http://localhost:16686/](http://localhost:16686/)
-- Prometheus UI: [http://localhost:9091/](http://localhost:9091/)
+| Flag | Effect |
+|------|--------|
+| `-NoBrowser` / `--no-browser` | Do not open browser tabs |
+| `-NoTraffic` / `--no-traffic` | Skip background load |
+| `-Build` / `--build` | Force image rebuild |
+
+Already running? Only re-open the UIs:
+
+```powershell
+.\scripts\open-observability.ps1
+```
+
+```bash
+./scripts/open-observability.sh
+```
+
+Stop everything:
+
+```powershell
+docker compose down
+# optional: Stop-Job -Name drl-bg-traffic
+```
+
+### Observability URLs
+
+| UI | URL | Notes |
+|----|-----|-------|
+| **Grafana fleet dashboard** | [http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet](http://localhost:3000/d/dist-rate-limiter-dashboard/distributed-rate-limiter-fleet) | Anonymous access — no login. Use **Last 15 minutes**, refresh **5s**. |
+| **Prometheus** | [http://localhost:9091](http://localhost:9091) | Try `sum(rate(rate_limiter_requests_total[1m])) by (allowed)` |
+| **Jaeger** | [http://localhost:16686](http://localhost:16686) | Service `rate-sidecar`, Operation `sidecar.proxy` → open a trace → **Trace Timeline** (not System Architecture DAG) |
+| Sidecar | [http://localhost:9090](http://localhost:9090) | Client entry |
+| Limiter health | [http://localhost:8080/health](http://localhost:8080/health) | Redis connectivity |
+
+More detail: [docs/observability/grafana-dashboards.md](docs/observability/grafana-dashboards.md)
+
 ---
 
 ### Interactive verification
