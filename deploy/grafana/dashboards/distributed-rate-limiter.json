@@ -151,10 +151,10 @@
     {
       "title": "Limiter Decision Error Rate (%)",
       "type": "stat",
-      "description": "⚠️ Requires AUDIT_ENABLED=true on the limiter service.\n\nWhen audit telemetry is disabled (AUDIT_ENABLED=false or env unset), audit_events_total is never incremented. This panel will show 0% — identical to a zero-error state. 0% here does NOT confirm absence of errors if audit is disabled.\n\nMeasures: fraction of /check and /check_hierarchical quota evaluations that failed with a Redis backend error. Idempotent replays and circuit-breaker short-circuits are excluded from the population (they do not reach quota evaluation and emit no audit event). Ratio is mathematically bounded to [0, 100%].",
+      "description": "Requires ENABLE_AUDIT_TRAIL=true on the limiter.\n\nFraction of /check and /check_hierarchical audit events with decision=error (Redis/backend unavailable). When there are zero errors the panel shows 0%, not No data.",
       "targets": [
         {
-          "expr": "sum(rate(audit_events_total{job=\"rate-limiter\", decision=\"error\", handler=~\"check|hierarchical\"}[$__rate_interval])) / clamp_min(sum(rate(audit_events_total{job=\"rate-limiter\", handler=~\"check|hierarchical\"}[$__rate_interval])), 1e-9) * 100",
+          "expr": "(sum(rate(audit_events_total{job=\"rate-limiter\", decision=\"error\", handler=~\"check|hierarchical\"}[$__rate_interval])) or vector(0)) / clamp_min(sum(rate(audit_events_total{job=\"rate-limiter\", handler=~\"check|hierarchical\"}[$__rate_interval])), 1e-9) * 100",
           "legendFormat": "Decision Error Rate"
         }
       ],
@@ -320,7 +320,7 @@
       }
     },
     {
-      "title": "Redis Cluster Status",
+      "title": "Redis Status",
       "type": "stat",
       "gridPos": {
         "x": 0,
@@ -331,7 +331,7 @@
       "targets": [
         {
           "expr": "sum(redis_up{job=\"redis-exporter\"})",
-          "legendFormat": "Active Nodes"
+          "legendFormat": "Redis up"
         }
       ],
       "datasource": {
@@ -341,7 +341,32 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 2,
+                "to": 9999,
+                "result": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
+          ],
           "custom": {
             "hideFrom": {
               "tooltip": false,
@@ -362,15 +387,17 @@
                 "value": 1.0
               }
             ]
-          }
+          },
+          "decimals": 0
         }
       },
       "options": {
         "graphMode": "none",
         "colorMode": "background",
         "justifyMode": "center",
-        "textMode": "name"
-      }
+        "textMode": "value_and_name"
+      },
+      "description": "Live redis_up from redis-exporter (1=reachable). Standalone Redis in default compose \u2014 not a cluster membership count."
     },
     {
       "title": "Limiter Health Status",
@@ -384,7 +411,7 @@
       "targets": [
         {
           "expr": "sum(up{job=\"rate-limiter\"})",
-          "legendFormat": "Limiter Instances"
+          "legendFormat": "Limiter up"
         }
       ],
       "datasource": {
@@ -394,7 +421,32 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 2,
+                "to": 9999,
+                "result": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
+          ],
           "custom": {
             "hideFrom": {
               "tooltip": false,
@@ -415,14 +467,15 @@
                 "value": 1.0
               }
             ]
-          }
+          },
+          "decimals": 0
         }
       },
       "options": {
         "graphMode": "none",
         "colorMode": "background",
         "justifyMode": "center",
-        "textMode": "name"
+        "textMode": "value_and_name"
       }
     },
     {
@@ -437,7 +490,7 @@
       "targets": [
         {
           "expr": "sum(up{job=\"sidecar\"})",
-          "legendFormat": "Sidecars Running"
+          "legendFormat": "Sidecar up"
         }
       ],
       "datasource": {
@@ -447,7 +500,32 @@
       "fieldConfig": {
         "defaults": {
           "unit": "none",
-          "mappings": [],
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 2,
+                "to": 9999,
+                "result": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
+          ],
           "custom": {
             "hideFrom": {
               "tooltip": false,
@@ -468,14 +546,15 @@
                 "value": 1.0
               }
             ]
-          }
+          },
+          "decimals": 0
         }
       },
       "options": {
         "graphMode": "none",
         "colorMode": "background",
         "justifyMode": "center",
-        "textMode": "name"
+        "textMode": "value_and_name"
       }
     },
     {
@@ -528,7 +607,8 @@
         "graphMode": "none",
         "colorMode": "value",
         "justifyMode": "center"
-      }
+      },
+      "description": "Count of circuit_breaker_state==1 (OPEN) across selected $target labels. 0 means all circuits closed \u2014 expected under healthy traffic. Trip Redis/limiter to see non-zero."
     },
     {
       "title": "Traffic & Rate Limiting",
@@ -691,7 +771,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(rate_limiter_requests_total{job=~\"$job\", handler=~\"$handler\"}[$__rate_interval])) by (handler)",
+          "expr": "sum(rate(rate_limiter_requests_total{job=\"rate-limiter\", handler=~\"$handler\"}[$__rate_interval])) by (handler)",
           "legendFormat": "{{handler}}"
         }
       ],
@@ -809,7 +889,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(rate_limiter_requests_total{job=~\"$job\", allowed=\"false\", handler=~\"$handler\"}[$__rate_interval])) by (handler) / clamp_min(sum(rate(rate_limiter_requests_total{job=~\"$job\", handler=~\"$handler\"}[$__rate_interval])) by (handler), 1e-9) * 100",
+          "expr": "sum(rate(rate_limiter_requests_total{job=\"rate-limiter\", allowed=\"false\", handler=~\"$handler\"}[$__rate_interval])) by (handler) / clamp_min(sum(rate(rate_limiter_requests_total{job=\"rate-limiter\", handler=~\"$handler\"}[$__rate_interval])) by (handler), 1e-9) * 100",
           "legendFormat": "{{handler}} quota exhausted"
         }
       ],
@@ -1804,7 +1884,7 @@
           "legendFormat": "{{gateway}} failovers"
         },
         {
-          "expr": "sum(rate(routing_outcomes_total{gateway=~\"$gateway\", result=\"error\"}[$__rate_interval])) by (gateway)",
+          "expr": "sum(rate(routing_outcomes_total{gateway=~\"$gateway\", result=\"error\"}[$__rate_interval])) by (gateway) or vector(0)",
           "legendFormat": "{{gateway}} upstream errors"
         }
       ],
@@ -1834,10 +1914,10 @@
     {
       "title": "Sidecar Gateway Error Rate (%)",
       "type": "gauge",
-      "description": "Fraction of upstream gateway calls (per routing_outcomes_total) that failed with result=error — meaning the Redis Lua script for recording the outcome itself errored, or returned an unexpected result.\n\nSourced from cmd/sidecar (job=sidecar). Independent of the limiter decision path.\n\nIncludes background /health probe outcomes (probeAll). Probe failures correctly inflate this metric even at low user traffic.\n\nRatio is bounded to [0, 100%].",
+      "description": "Fraction of upstream gateway calls (per routing_outcomes_total) that failed with result=error \u2014 meaning the Redis Lua script for recording the outcome itself errored, or returned an unexpected result.\n\nSourced from cmd/sidecar (job=sidecar). Independent of the limiter decision path.\n\nIncludes background /health probe outcomes (probeAll). Probe failures correctly inflate this metric even at low user traffic.\n\nRatio is bounded to [0, 100%].",
       "targets": [
         {
-          "expr": "sum(rate(routing_outcomes_total{job=\"sidecar\", result=\"error\"}[$__rate_interval])) / clamp_min(sum(rate(routing_outcomes_total{job=\"sidecar\"}[$__rate_interval])), 1e-9) * 100",
+          "expr": "(sum(rate(routing_outcomes_total{job=\"sidecar\", result=\"error\"}[$__rate_interval])) or vector(0)) / clamp_min(sum(rate(routing_outcomes_total{job=\"sidecar\"}[$__rate_interval])), 1e-9) * 100",
           "legendFormat": "Gateway Error Rate"
         }
       ],
@@ -2200,7 +2280,7 @@
       }
     },
     {
-      "title": "Distributed Tracing — Jaeger UI",
+      "title": "Distributed Tracing \u2014 Jaeger UI",
       "type": "text",
       "gridPos": {
         "x": 0,
@@ -2211,6 +2291,88 @@
       "options": {
         "mode": "markdown",
         "content": "## Distributed Tracing\n\nTrace data is exported via **OTLP HTTP** directly to **Jaeger**. Prometheus does **not** scrape Jaeger in this deployment, so `otel_exporter_spans_sent_total` and `jaeger_collector_*` metrics are unavailable in Prometheus.\n\n**To view traces:** Open the [Jaeger UI](http://localhost:16686) and search by service name `rate-limiter` or `sidecar`."
+      }
+    },
+    {
+      "title": "Dependency Failure Latency (P99)",
+      "description": "Fail-closed path latency when Redis, open circuit, or central limiter is unavailable. Use this to reproduce outage first-request latency.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(rate_limiter_dependency_failure_duration_seconds_bucket[1m])) by (le, dependency))",
+          "legendFormat": "p99 {{dependency}}"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(rate_limiter_dependency_failure_duration_seconds_bucket[1m])) by (le, dependency))",
+          "legendFormat": "p50 {{dependency}}"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "title": "Override Config Generation (per instance)",
+      "description": "Local snapshot of Redis config:generation. Cross-replica staleness = max - min across limiter instances.",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 72,
+        "w": 12,
+        "h": 7
+      },
+      "targets": [
+        {
+          "expr": "override_config_generation",
+          "legendFormat": "{{job}} {{instance}}"
+        },
+        {
+          "expr": "max(override_config_generation) - min(override_config_generation)",
+          "legendFormat": "cross-replica lag (generations)"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
       }
     }
   ],
@@ -2261,8 +2423,9 @@
           "uid": "Prometheus"
         },
         "current": {
-          "text": "rate-limiter",
-          "value": "rate-limiter"
+          "text": "All",
+          "value": "$__all",
+          "selected": true
         },
         "label": "Job",
         "hide": 0,
@@ -2280,7 +2443,13 @@
         "label": "Handler / Endpoint",
         "hide": 0,
         "multi": true,
-        "includeAll": true
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "allValue": ".*"
       },
       {
         "name": "gateway",
@@ -2293,7 +2462,13 @@
         "label": "Routing Gateway",
         "hide": 0,
         "multi": true,
-        "includeAll": true
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "allValue": ".*"
       },
       {
         "name": "target",
@@ -2306,7 +2481,13 @@
         "label": "CB Target",
         "hide": 0,
         "multi": true,
-        "includeAll": true
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all",
+          "selected": true
+        },
+        "allValue": ".+"
       }
     ]
   },

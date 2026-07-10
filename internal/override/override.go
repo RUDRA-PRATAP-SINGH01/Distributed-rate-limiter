@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -74,8 +75,10 @@ func (s *Store) RefreshGeneration(ctx context.Context) {
 	if err == redis.Nil {
 		gen = 0
 	} else if err != nil {
+		metrics.RecordOverrideGenerationRefreshError()
 		return
 	}
+	metrics.RecordOverrideGeneration(float64(gen))
 	if gen == s.localGeneration.Load() {
 		return
 	}
@@ -84,6 +87,7 @@ func (s *Store) RefreshGeneration(ctx context.Context) {
 		return true
 	})
 	s.localGeneration.Store(gen)
+	metrics.RecordOverrideCacheInvalidation()
 }
 
 func (s *Store) getOverride(level, id string) (Config, bool) {
@@ -122,6 +126,7 @@ func (s *Store) SetOverride(level, id string, cfg Config) error {
 	gen, _ := incr.Result()
 	s.localGeneration.Store(gen)
 	s.cache.Delete(key)
+	metrics.RecordOverrideGeneration(float64(gen))
 	return nil
 }
 
@@ -137,5 +142,6 @@ func (s *Store) DeleteOverride(level, id string) error {
 	gen, _ := incr.Result()
 	s.localGeneration.Store(gen)
 	s.cache.Delete(key)
+	metrics.RecordOverrideGeneration(float64(gen))
 	return nil
 }

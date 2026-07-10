@@ -24,7 +24,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "rate_limiter_requests_duration_seconds",
 			Help:    "Request latency in seconds",
-			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
 		},
 		[]string{"handler"},
 	)
@@ -33,8 +33,19 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "rate_limiter_redis_duration_seconds",
 			Help:    "Redis operation latency in seconds",
-			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
 		},
+	)
+
+	// DependencyFailureDuration captures fail-closed paths (Redis down, limiter down,
+	// open circuit) so outage latencies beyond the happy-path 1s bucket are visible.
+	DependencyFailureDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "rate_limiter_dependency_failure_duration_seconds",
+			Help:    "Latency of requests that failed because a dependency was unavailable",
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
+		},
+		[]string{"dependency", "handler"},
 	)
 
 	CacheHits = promauto.NewCounter(
@@ -216,6 +227,27 @@ var (
 			Help: "Audit events dropped when the async queue is full or shutdown has begun",
 		},
 	)
+
+	OverrideConfigGeneration = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "override_config_generation",
+			Help: "Local snapshot of Redis config:generation after the last successful refresh",
+		},
+	)
+
+	OverrideGenerationRefreshErrors = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "override_generation_refresh_errors_total",
+			Help: "Failed GET config:generation attempts during RefreshGeneration",
+		},
+	)
+
+	OverrideCacheInvalidations = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "override_cache_invalidations_total",
+			Help: "Local override cache clears triggered by a newer config:generation",
+		},
+	)
 )
 
 func RecordRequest(handler string, allowed bool) {
@@ -232,6 +264,22 @@ func RecordRequestDuration(handler string, duration float64) {
 
 func RecordRedisDuration(duration float64) {
 	RedisDuration.Observe(duration)
+}
+
+func RecordDependencyFailure(dependency, handler string, duration float64) {
+	DependencyFailureDuration.WithLabelValues(dependency, handler).Observe(duration)
+}
+
+func RecordOverrideGeneration(gen float64) {
+	OverrideConfigGeneration.Set(gen)
+}
+
+func RecordOverrideGenerationRefreshError() {
+	OverrideGenerationRefreshErrors.Inc()
+}
+
+func RecordOverrideCacheInvalidation() {
+	OverrideCacheInvalidations.Inc()
 }
 
 func RecordCacheHit() {

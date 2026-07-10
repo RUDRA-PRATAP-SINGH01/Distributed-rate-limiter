@@ -178,6 +178,9 @@ func main() {
 		}
 
 		if !checkRedisCircuit(ctx, w, span) {
+			elapsed := time.Since(start).Seconds()
+			metrics.RecordRequestDuration("check", elapsed)
+			metrics.RecordDependencyFailure("circuit_redis", "check", elapsed)
 			telemetry.SetHTTPStatus(span, http.StatusServiceUnavailable)
 			return
 		}
@@ -185,6 +188,9 @@ func main() {
 		allowed, remaining, err := limiterInstance.Allow(ctx, userID)
 		recordRedisCircuit(ctx, err, start)
 		if err != nil {
+			elapsed := time.Since(start).Seconds()
+			metrics.RecordRequestDuration("check", elapsed)
+			metrics.RecordDependencyFailure("redis", "check", elapsed)
 			telemetry.RecordError(span, err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -281,6 +287,9 @@ func main() {
 			}
 
 			if !checkRedisCircuit(ctx, w, span) {
+				elapsed := time.Since(start).Seconds()
+				metrics.RecordRequestDuration("hierarchical", elapsed)
+				metrics.RecordDependencyFailure("circuit_redis", "hierarchical", elapsed)
 				return
 			}
 
@@ -303,6 +312,9 @@ func main() {
 			)
 			recordRedisCircuit(ctx, err, start)
 			if err != nil {
+				elapsed := time.Since(start).Seconds()
+				metrics.RecordRequestDuration("hierarchical", elapsed)
+				metrics.RecordDependencyFailure("redis", "hierarchical", elapsed)
 				telemetry.RecordError(span, err)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusServiceUnavailable)

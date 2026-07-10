@@ -211,6 +211,7 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 	ctx, span := telemetry.StartSpan(ctx, "sidecar.idempotency")
 	defer span.End()
 	r = r.WithContext(ctx)
+	start := time.Now()
 
 	if err := idempotency.ValidateKey(idemKey); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -276,6 +277,7 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 
 	result, err := s.checkRateLimit(ctx, r, userID, false)
 	if err != nil {
+		metrics.RecordDependencyFailure("central_limiter", "sidecar_idempotent", time.Since(start).Seconds())
 		logging.Error(ctx, "rate limit check failed",
 			"component", "sidecar",
 			"operation", "rate_limit_check",
@@ -365,6 +367,7 @@ func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID str
 	)
 	defer span.End()
 	r = r.WithContext(ctx)
+	start := time.Now()
 
 	cacheKey := s.cacheKey(r, userID)
 	logging.Debug(ctx, "processing proxied request",
@@ -408,6 +411,8 @@ func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID str
 		return s.checkRateLimit(ctx, r, userID, false)
 	})
 	if err != nil {
+		elapsed := time.Since(start).Seconds()
+		metrics.RecordDependencyFailure("central_limiter", "sidecar", elapsed)
 		logging.Error(ctx, "rate limit check failed",
 			"component", "sidecar",
 			"operation", "rate_limit_check",
