@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+
+tone_instructions: "You are a senior systems engineer. Provide concise, constructive feedback focused on reliability, performance, concurrency safety, and Go best practices."
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  
+  # Ignore specific files or directories from AI review
+  path_filters:
+    - "!node_modules/**"
+    - "!vendor/**"
+    - "!coverage/**"
+    - "!coverage.out"
+    - "!*.exe"
+    - "!*.bin"
+    - "!**/*.md"  # Ignore doc changes if you only want code reviews, or customize as needed
+
+chat:
+  auto_reply: true

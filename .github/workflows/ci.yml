@@ -129,3 +129,28 @@ jobs:
           path: coverage.out
           if-no-files-found: error
           retention-days: 14
+
+  # L-01: CI-gated resilience contracts (R1 fail-closed). Authoritative
+  # "chaos-tested" proof — uses production headers, not ?user_id=.
+  chaos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resilience contracts (R1 Redis down → fail-closed)
+        env:
+          INTERNAL_API_KEY: dev-internal-key-change-in-prod
+          CHAOS_LIMITER_URL: http://127.0.0.1:8080
+          CHAOS_SIDECAR_URL: http://127.0.0.1:9090
+        run: go test -count=1 -tags=chaos -timeout 25m -v ./chaos/...

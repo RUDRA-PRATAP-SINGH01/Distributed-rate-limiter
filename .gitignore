@@ -16,3 +16,19 @@ benchmarks/results/targeted-run.log
 # Large raw k6 benchmark streams
 benchmarks/results/**/raw/*-stream.json
 benchmarks/results/targeted-run.log
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc

@@ -12,6 +12,7 @@ Run from project root: python chaos/network_partition.py
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -92,7 +93,11 @@ def preflight() -> str:
     log(f"OK: sidecar={SIDECAR_CONTAINER}, limiter={LIMITER_CONTAINER}, network={network_name}")
 
     try:
-        resp = requests.get(f"{SIDECAR_URL}?user_id=net_preflight", timeout=5)
+        resp = requests.get(
+            SIDECAR_URL,
+            headers=_headers("net_preflight"),
+            timeout=5,
+        )
     except requests.RequestException as exc:
         log(f"FAIL: sidecar not reachable on localhost:9090 ({exc})")
         sys.exit(1)
@@ -105,8 +110,21 @@ def preflight() -> str:
     return network_name
 
 
+def _headers(user_id: str) -> dict:
+    key = os.environ.get("INTERNAL_API_KEY", "dev-internal-key-change-in-prod")
+    return {
+        "X-User-ID": user_id,
+        "X-Internal-API-Key": key,
+        "X-API-Key": key,
+    }
+
+
 def check_sidecar(user_suffix: str, timeout: float = 5) -> requests.Response:
-    return requests.get(f"{SIDECAR_URL}?user_id=net_{user_suffix}", timeout=timeout)
+    return requests.get(
+        SIDECAR_URL,
+        headers=_headers(f"net_{user_suffix}"),
+        timeout=timeout,
+    )
 
 
 def main() -> None:
