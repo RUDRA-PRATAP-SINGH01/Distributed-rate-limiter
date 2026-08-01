@@ -1,20 +1,26 @@
 package routing
 
 import (
-	"math/rand"
-	"time"
+	"math/rand/v2"
 )
 
 // Selector picks gateways using weighted scores with failover ordering.
+//
+// Safe for concurrent use. A Router keeps one Selector and calls PickPrimary
+// from every in-flight request, so the weighted roll must not touch shared
+// mutable state — a *rand.Rand would be a data race. The top-level math/rand/v2
+// source is goroutine-safe without serializing routing behind a mutex.
 type Selector struct {
 	cfg Config
-	rng *rand.Rand
+	// roll returns a uniform float64 in [0,1). Tests replace it to make
+	// weighted selection deterministic.
+	roll func() float64
 }
 
 func NewSelector(cfg Config) *Selector {
 	return &Selector{
-		cfg: cfg,
-		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
+		cfg:  cfg,
+		roll: rand.Float64,
 	}
 }
 
@@ -33,7 +39,7 @@ func (s *Selector) PickPrimary(states []GatewayState) (ScoredGateway, bool) {
 		return ScoredGateway{}, false
 	}
 
-	roll := s.rng.Float64() * total
+	roll := s.roll() * total
 	var acc float64
 	for _, c := range candidates {
 		acc += c.Score

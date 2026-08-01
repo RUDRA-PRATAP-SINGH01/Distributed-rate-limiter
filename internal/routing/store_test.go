@@ -6,24 +6,20 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redistest"
 )
 
-func setupRoutingStore(t *testing.T) (*RedisStore, *circuitbreaker.Breaker, *miniredis.Miniredis) {
+func setupRoutingStore(t *testing.T) (*RedisStore, *circuitbreaker.Breaker, *redistest.Server) {
 	t.Helper()
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	srv := redistest.Start(t)
+	rdb := srv.Client(t)
 	cbCfg := circuitbreaker.DefaultConfig()
 	cbCfg.MinSamples = 5
 	cbCfg.FailureRateThreshold = 0.5
 	breaker := circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
 	store := NewRedisStore(rdb, DefaultConfig())
 	store.SetBreaker(breaker)
-	return store, breaker, mr
+	return store, breaker, srv
 }
 
 func TestRegisterAndRecordOutcome(t *testing.T) {

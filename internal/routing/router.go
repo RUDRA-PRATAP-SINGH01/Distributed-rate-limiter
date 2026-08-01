@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	HeaderGatewayID     = "X-Gateway-ID"
-	HeaderGatewayScore  = "X-Gateway-Score"
+	HeaderGatewayID       = "X-Gateway-ID"
+	HeaderGatewayScore    = "X-Gateway-Score"
 	HeaderGatewayFailover = "X-Gateway-Failover"
 )
 
@@ -95,8 +95,10 @@ func (r *Router) probeAll(ctx context.Context) {
 		latency := time.Since(start)
 		success := err == nil && resp != nil && resp.StatusCode < 500
 		if resp != nil {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			// Drain so the connection returns to the pool; probe payloads are
+			// irrelevant, so read failures do not change the health verdict.
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
 		}
 		_ = r.store.UpdateHealthProbe(ctx, st.ID, success, latency)
 	}
@@ -165,7 +167,7 @@ func (r *Router) Forward(ctx context.Context, w http.ResponseWriter, req *http.R
 
 		if !success {
 			if resp != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			if err != nil {
 				lastErr = err
@@ -186,7 +188,7 @@ func (r *Router) Forward(ctx context.Context, w http.ResponseWriter, req *http.R
 			attribute.Bool("gateway.failover", failover),
 		)
 		copyResponse(w, resp)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil
 	}
 
@@ -234,7 +236,9 @@ func copyResponse(w http.ResponseWriter, resp *http.Response) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	// The status line is already sent, so a mid-stream copy failure cannot be
+	// turned into an error response — the client sees a truncated body.
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // Store exposes the Redis store for admin APIs.

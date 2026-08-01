@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
-	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -198,14 +198,14 @@ func parseGatewayState(fields map[string]string) *GatewayState {
 			URL:    fields["url"],
 			Weight: int(luautil.LuaInt(fields["weight"])),
 		},
-		Enabled:        fields["enabled"] != "0",
-		LatencyEMAMs:   parseFloat(fields["latency_ema_ms"]),
-		ErrorCount:     luautil.LuaInt(fields["error_count"]),
-		SuccessCount:   luautil.LuaInt(fields["success_count"]),
-		TotalRequests:  luautil.LuaInt(fields["total_requests"]),
-		HealthScore:    parseFloat(fields["health_score"]),
-		UpdatedAt:      luautil.LuaInt(fields["updated_at"]),
-		CircuitState:   circuitbreaker.StateClosed,
+		Enabled:       fields["enabled"] != "0",
+		LatencyEMAMs:  parseFloat(fields["latency_ema_ms"]),
+		ErrorCount:    luautil.LuaInt(fields["error_count"]),
+		SuccessCount:  luautil.LuaInt(fields["success_count"]),
+		TotalRequests: luautil.LuaInt(fields["total_requests"]),
+		HealthScore:   parseFloat(fields["health_score"]),
+		UpdatedAt:     luautil.LuaInt(fields["updated_at"]),
+		CircuitState:  circuitbreaker.StateClosed,
 	}
 	if st.Weight == 0 {
 		st.Weight = 100
@@ -219,8 +219,6 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
-
-
 
 func parseFloat(s string) float64 {
 	v, _ := strconv.ParseFloat(s, 64)
