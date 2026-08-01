@@ -84,7 +84,6 @@ func TestSlidingWindow_Init_FreshKeyFirstAllowed(t *testing.T) {
 func TestSlidingWindow_ExactLimit(t *testing.T) {
 	cases := []int{1, 3, 10, 25}
 	for _, limit := range cases {
-		limit := limit
 		t.Run(fmt.Sprintf("limit%d", limit), func(t *testing.T) {
 			_, rdb := newMR(t)
 			sw := NewRedisSlidingWindow(rdb, limit, 10*time.Second)
@@ -272,7 +271,6 @@ func TestSlidingWindow_Atomicity(t *testing.T) {
 	const goroutines = 50
 
 	for run := 0; run < 3; run++ {
-		run := run
 		t.Run(fmt.Sprintf("run%d", run), func(t *testing.T) {
 			_, rdb := newMR(t)
 			sw := NewRedisSlidingWindow(rdb, limit, 10*time.Second)

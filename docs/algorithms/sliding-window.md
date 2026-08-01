@@ -21,7 +21,8 @@ ZSET members give O(log N) insert and O(log N + M) range eviction — the standa
 | Atomic window enforcement | Single `sliding_window.lua` EVAL |
 | Key isolation | `sw:{userID}` |
 | TTL safety | `expireSec = max(1, ceil(window_ms/1000))` — Redis rejects sub-second EXPIRE on some configs |
-| Deny without ZADD | Full window → return `{0, 0}` without adding a member |
+| Deny without ZADD | Full window → return `{0, 0, retry_after_ms}` without adding a member |
+| Honest retry hint | Denial reports when the oldest entry ages out, not the window length |
 
 ## Alternative approaches considered
 
@@ -56,9 +57,9 @@ ARGV[5]  = unique member id
 
 1. `ZREMRANGEBYSCORE key 0 windowStart` — evict events at or before window start (inclusive lower bound).
 2. `count = ZCARD key`.
-3. If `count < limit`: `ZADD`, `EXPIRE`, `allowed=1`, `remaining = limit - count - 1`.
-4. Else: `allowed=0`, `remaining=0` (no ZADD on deny).
-5. Return `{allowed, remaining}`.
+3. If `count < limit`: `ZADD`, `EXPIRE`, return `{1, limit - count - 1, 0}`.
+4. Else: read the oldest member with `ZRANGE key 0 0 WITHSCORES` and return `{0, 0, retry_after_ms}` (no ZADD on deny), where `retry_after_ms = ceil(oldest_score + window_ms - now)`, floored at 1.
+5. When the ZSET is empty on a denial — only reachable with a misconfigured `limit <= 0` — `retry_after_ms` is `0`, meaning "no hint".
 
 **Go invocation** (`redis_sliding_window.go`):
 
@@ -68,6 +69,20 @@ windowStart := now - rw.window.Milliseconds()
 member := fmt.Sprintf("%d:%s", now, uuid.NewString())
 rw.script.Run(ctx, rdb, []string{key}, now, windowStart, limit, expireSec, member)
 ```
+
+## Retry-After semantics
+
+There is **no window reset instant** in a sliding log, so "wait for the window to roll over" is not a meaningful answer — that is fixed-window thinking. A slot frees the moment the oldest in-window entry ages out, which is usually far sooner than the full window.
+
+Two failure modes follow from getting this wrong. Clients that honor `Retry-After` self-throttle well below their real quota, so delivered throughput collapses. And every client denied inside the same window receives an identical value, so they all return simultaneously — reintroducing at the client layer the boundary spike this algorithm exists to prevent.
+
+`AllowWithRetryAfter` therefore returns the measured wait, and `/check` converts it to whole seconds (rounded up, minimum 1) for the `Retry-After` header. Because `ZREMRANGEBYSCORE` trims inclusively, a client that waits exactly the advertised duration finds the blocking entry already evicted and is admitted — pinned by `TestSlidingWindow_RetryAfter_WaitingThatLongSucceeds`.
+
+`Allow` keeps the plain three-value `RateLimiter` signature, and `RetryAfterLimiter` is an optional capability interface. Algorithms that cannot measure a wait return `0`, and the handler falls back to the config-derived estimate — so adding an algorithm never requires touching this path. A reply carrying only two values (a Redis still serving the previous script mid-rollout) degrades to the same fallback instead of erroring.
+
+## Memory model
+
+A member is added only when the window has room, so a key holds **at most `limit` members**. Capacity planning is therefore `active_keys × limit × ~70 bytes`, independent of arrival rate — a key under sustained denial stops growing rather than accumulating rejected attempts.
 
 ## Tradeoffs
 

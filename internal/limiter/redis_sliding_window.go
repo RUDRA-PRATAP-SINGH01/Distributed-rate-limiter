@@ -16,8 +16,14 @@ import (
 //go:embed lua/sliding_window.lua
 var slidingWindowLua string
 
-// RedisSlidingWindow implements a fixed-window counter in Redis sorted sets.
-// Better when you need "max N requests per 60s" rather than smooth token refill.
+// RedisSlidingWindow implements a sliding-window log on Redis sorted sets: one
+// ZSET member per admitted request, scored by arrival time, trimmed on every
+// call. Use it when the contract is "at most N requests in any trailing W
+// seconds" rather than token-bucket refill.
+//
+// There is no window reset instant — quota frees up continuously as individual
+// entries age out. Memory is bounded at `limit` members per key because a
+// member is only added when the window has room.
 type RedisSlidingWindow struct {
 	rdb    redis.UniversalClient
 	limit  int
@@ -34,7 +40,18 @@ func NewRedisSlidingWindow(rdb redis.UniversalClient, limit int, window time.Dur
 	}
 }
 
+// Allow satisfies the shared RateLimiter contract. Callers that want to send an
+// accurate Retry-After should use AllowWithRetryAfter instead.
 func (rw *RedisSlidingWindow) Allow(ctx context.Context, userID string) (bool, int, error) {
+	allowed, remaining, _, err := rw.AllowWithRetryAfter(ctx, userID)
+	return allowed, remaining, err
+}
+
+// AllowWithRetryAfter additionally reports how long the caller must wait before
+// a slot frees. The duration is zero when the request was allowed, and also
+// when the script cannot determine one — callers must treat zero as "no hint"
+// and fall back to their own estimate rather than retrying immediately.
+func (rw *RedisSlidingWindow) AllowWithRetryAfter(ctx context.Context, userID string) (bool, int, time.Duration, error) {
 	key := fmt.Sprintf("sw:%s", userID)
 	now := time.Now().UnixMilli()
 	windowStart := now - rw.window.Milliseconds()
@@ -63,7 +80,7 @@ func (rw *RedisSlidingWindow) Allow(ctx context.Context, userID string) (bool, i
 			"algorithm", "sliding_window",
 			"error", err,
 		)
-		return false, 0, err
+		return false, 0, 0, err
 	}
 
 	values, ok := result.([]interface{})
@@ -73,11 +90,20 @@ func (rw *RedisSlidingWindow) Allow(ctx context.Context, userID string) (bool, i
 			"operation", "redis_lua",
 			"algorithm", "sliding_window",
 		)
-		return false, 0, fmt.Errorf("unexpected lua result")
+		return false, 0, 0, fmt.Errorf("unexpected lua result")
 	}
 
 	allowed := luautil.LuaInt(values[0]) == 1
 	remaining := int(luautil.LuaInt(values[1]))
 
-	return allowed, remaining, nil
+	// Tolerate a two-element reply so a rolling deploy against a Redis still
+	// serving the previous script degrades to "no hint" instead of failing.
+	var retryAfter time.Duration
+	if len(values) >= 3 {
+		if ms := luautil.LuaInt(values[2]); ms > 0 {
+			retryAfter = time.Duration(ms) * time.Millisecond
+		}
+	}
+
+	return allowed, remaining, retryAfter, nil
 }
