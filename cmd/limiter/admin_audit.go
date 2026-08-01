@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -101,7 +102,7 @@ func registerAuditRoutes(mux *http.ServeMux, cfg Config, store *audit.Store) {
 		writeJSON(w, ev)
 	})
 
-	logging.Info(nil, "Audit trail admin API registered", "component", "admin", "action", "register_audit_api")
+	logging.Info(context.Background(), "Audit trail admin API registered", "component", "admin", "action", "register_audit_api")
 }
 
 func auditAuth(w http.ResponseWriter, r *http.Request, cfg Config) bool {

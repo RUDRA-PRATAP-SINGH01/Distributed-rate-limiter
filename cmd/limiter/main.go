@@ -23,8 +23,8 @@ import (
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
-	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -58,12 +58,12 @@ func main() {
 			logging.Fatal("Redis OpenTelemetry instrumentation failed", "error", err)
 		}
 	}
-	logging.Info(nil, "Redis connection verified", "component", "limiter", "redis", redisclient.Describe(redisCfg))
+	logging.Info(context.Background(), "Redis connection verified", "component", "limiter", "redis", redisclient.Describe(redisCfg))
 
 	auditCfg := audit.LoadConfigFromEnv()
 	auditStore = audit.NewStore(rdb, auditCfg)
 	if auditCfg.Enabled {
-		logging.Info(nil, "Audit trail enabled",
+		logging.Info(context.Background(), "Audit trail enabled",
 			"component", "limiter",
 			"retention", auditCfg.Retention.String(),
 			"max_events", auditCfg.MaxEvents,
@@ -74,7 +74,7 @@ func main() {
 	// LocalStore: circuit state for Redis must not live in Redis. Otherwise the
 	// breaker cannot open or fail-fast when Redis is down/slow (L-03 / H-04).
 	redisCircuit = circuitbreaker.NewBreaker(circuitbreaker.NewLocalStore(cbCfg))
-	logging.Info(nil, "Redis circuit breaker enabled",
+	logging.Info(context.Background(), "Redis circuit breaker enabled",
 		"component", "limiter",
 		"backend", "local",
 		"failure_rate", cbCfg.FailureRateThreshold,
@@ -90,7 +90,7 @@ func main() {
 	switch cfg.Algorithm {
 	case "sliding":
 		limiterInstance = limiter.NewRedisSlidingWindow(rdb, cfg.Capacity, time.Duration(cfg.WindowSec)*time.Second)
-		logging.Info(nil, "Using Redis sliding window algorithm",
+		logging.Info(context.Background(), "Using Redis sliding window algorithm",
 			"component", "limiter",
 			"algorithm", "sliding_window",
 			"capacity", cfg.Capacity,
@@ -100,7 +100,7 @@ func main() {
 		fallthrough
 	default:
 		limiterInstance = limiter.NewRedisAtomicTokenBucket(rdb, cfg.Capacity, cfg.RefillRate)
-		logging.Info(nil, "Using Redis token bucket algorithm",
+		logging.Info(context.Background(), "Using Redis token bucket algorithm",
 			"component", "limiter",
 			"algorithm", "token_bucket",
 		)
@@ -112,7 +112,7 @@ func main() {
 			cfg.GlobalCapacity, cfg.TenantCapacity, cfg.UserCapacity, cfg.EndpointCapacity,
 			cfg.GlobalRefillRate, cfg.TenantRefillRate, cfg.UserRefillRate, cfg.EndpointRefillRate,
 		)
-		logging.Info(nil, "Hierarchical limiter enabled",
+		logging.Info(context.Background(), "Hierarchical limiter enabled",
 			"component", "limiter",
 			"algorithm", "hierarchical",
 		)
@@ -188,7 +188,7 @@ func main() {
 			return
 		}
 
-		allowed, remaining, err := limiterInstance.Allow(ctx, userID)
+		allowed, remaining, retryAfter, err := allowWithRetryAfter(ctx, limiterInstance, userID)
 		recordRedisCircuit(ctx, err, start)
 		if err != nil {
 			elapsed := time.Since(start).Seconds()
@@ -218,7 +218,7 @@ func main() {
 		setRateLimitHeaders(w, rateLimitLimitHeader(cfg), remaining)
 
 		if !allowed {
-			w.Header().Set("Retry-After", retryAfterForCheck(cfg))
+			w.Header().Set("Retry-After", retryAfterHeader(cfg, retryAfter))
 			w.WriteHeader(http.StatusTooManyRequests)
 			json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests"})
 			telemetry.SetHTTPStatus(span, http.StatusTooManyRequests)
@@ -376,7 +376,7 @@ func main() {
 	adminSrv := startAdminServer(cfg, overrideStore, rdb, auditStore)
 
 	go func() {
-		logging.Info(nil, "Server starting", "component", "limiter", "port", cfg.Port)
+		logging.Info(context.Background(), "Server starting", "component", "limiter", "port", cfg.Port)
 		var err error
 		if cfg.TLSCertFile != "" {
 			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
@@ -392,7 +392,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	logging.Info(nil, "Shutting down server", "component", "limiter")
+	logging.Info(context.Background(), "Shutting down server", "component", "limiter")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -422,5 +422,5 @@ func main() {
 	} else {
 		logging.Info(ctx, "Redis client closed", "component", "limiter")
 	}
-	logging.Info(nil, "Server exited", "component", "limiter")
+	logging.Info(context.Background(), "Server exited", "component", "limiter")
 }

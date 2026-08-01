@@ -106,9 +106,8 @@ func TestSidecar_CacheIsolation(t *testing.T) {
 	// Case 1: tenant="ab", user="c", path="/v1"
 	// Case 2: tenant="a", user="bc", path="/v1"
 	reqA := httptest.NewRequest(http.MethodGet, "/v1", nil)
-	keyA := fixture.sidecar.cacheKey(reqA, "c") // tenantID defaults to default
 	reqA.Header.Set("X-Tenant-ID", "ab")
-	keyA = fixture.sidecar.cacheKey(reqA, "c") // "ab|c|/v1"
+	keyA := fixture.sidecar.cacheKey(reqA, "c") // "ab|c|/v1"
 
 	reqB := httptest.NewRequest(http.MethodGet, "/v1", nil)
 	reqB.Header.Set("X-Tenant-ID", "a")

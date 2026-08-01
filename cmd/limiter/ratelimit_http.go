@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"time"
 )
 
 // retryAfterForCheck derives a conservative Retry-After from the active algorithm.
-// Token bucket: time to refill one token. Sliding window: full window length.
+// Token bucket: time to refill one token. Sliding window: full window length —
+// only a fallback, since a sliding log has no shared reset instant and this
+// over-states the wait. Prefer retryAfterHeader with a measured duration.
 func retryAfterForCheck(cfg Config) string {
 	switch cfg.Algorithm {
 	case "sliding":
@@ -19,6 +22,20 @@ func retryAfterForCheck(cfg Config) string {
 		}
 		return fmt.Sprintf("%d", seconds)
 	}
+}
+
+// retryAfterHeader prefers the limiter's measured wait over the config-derived
+// estimate. RFC 9110 requires whole seconds, so sub-second waits round up to 1
+// rather than inviting an immediate retry.
+func retryAfterHeader(cfg Config, measured time.Duration) string {
+	if measured <= 0 {
+		return retryAfterForCheck(cfg)
+	}
+	seconds := int(math.Ceil(measured.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	return fmt.Sprintf("%d", seconds)
 }
 
 // retryAfterForHierarchical uses the slowest refill rate across levels.
@@ -43,21 +60,6 @@ func retryAfterForHierarchical(cfg Config) string {
 
 func rateLimitLimitHeader(cfg Config) string {
 	return fmt.Sprintf("%d", cfg.Capacity)
-}
-
-// Static header helper when overrides are not in play (legacy / docs).
-func hierarchicalRateLimitLimitHeader(cfg Config) string {
-	limit := cfg.GlobalCapacity
-	if cfg.TenantCapacity < limit {
-		limit = cfg.TenantCapacity
-	}
-	if cfg.UserCapacity < limit {
-		limit = cfg.UserCapacity
-	}
-	if cfg.EndpointCapacity < limit {
-		limit = cfg.EndpointCapacity
-	}
-	return fmt.Sprintf("%d", limit)
 }
 
 func setRateLimitHeaders(w http.ResponseWriter, limit string, remaining int) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -101,13 +102,13 @@ func LoadConfig() Config {
 		logging.Fatal("STRICT_SECURITY=true requires a non-default ADMIN_API_KEY when ADMIN_API is enabled")
 	}
 	if cfg.InternalAPIKey == "" {
-		logging.Warn(nil, "INTERNAL_API_KEY is not set — /check endpoints are reachable without authentication",
+		logging.Warn(context.Background(), "INTERNAL_API_KEY is not set — /check endpoints are reachable without authentication",
 			"component", "limiter",
 			"security_dev_mode", true,
 		)
 	}
 	if cfg.EnableAdminAPI && (cfg.AdminAPIKey == "" || cfg.AdminAPIKey == "dev-key-change-in-prod") {
-		logging.Warn(nil, "ADMIN_API_KEY is using default dev placeholder — admin endpoints are insecure",
+		logging.Warn(context.Background(), "ADMIN_API_KEY is using default dev placeholder — admin endpoints are insecure",
 			"component", "limiter",
 			"security_dev_mode", true,
 		)
@@ -140,7 +141,7 @@ func mustParseIntEnv(key, defaultVal string, strict bool) int {
 			logging.Fatal(msg)
 		}
 		if raw != defaultVal {
-			logging.Warn(nil, msg+", using default "+defaultVal,
+			logging.Warn(context.Background(), msg+", using default "+defaultVal,
 				"component", "limiter",
 				"config_key", key,
 			)
@@ -160,7 +161,7 @@ func mustParseFloatEnv(key, defaultVal string, strict bool) float64 {
 			logging.Fatal(msg)
 		}
 		if raw != defaultVal {
-			logging.Warn(nil, msg+", using default "+defaultVal,
+			logging.Warn(context.Background(), msg+", using default "+defaultVal,
 				"component", "limiter",
 				"config_key", key,
 			)

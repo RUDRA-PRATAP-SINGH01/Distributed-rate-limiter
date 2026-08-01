@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -41,9 +42,10 @@ func startAdminServer(cfg Config, store *override.Store, rdb redis.UniversalClie
 	}
 
 	go func() {
-		logging.Info(nil, "Admin API listening", "component", "admin", "addr", cfg.AdminAddr())
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logging.Error(nil, "Admin server error", "component", "admin", "error", err)
+		ctx := context.Background()
+		logging.Info(ctx, "Admin API listening", "component", "admin", "addr", cfg.AdminAddr())
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logging.Error(ctx, "Admin server error", "component", "admin", "error", err)
 		}
 	}()
 

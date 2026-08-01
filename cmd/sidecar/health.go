@@ -69,7 +69,7 @@ func checkLimiterHealth(ctx context.Context, client *http.Client, limiterURL str
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode == http.StatusOK
 }

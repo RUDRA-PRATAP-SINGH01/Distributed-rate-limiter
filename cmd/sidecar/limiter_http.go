@@ -14,10 +14,10 @@ import (
 // LimiterHTTPConfig bounds outbound calls to the central limiter.
 // A synchronous rate-limit check must fail fast when the limiter is unavailable.
 type LimiterHTTPConfig struct {
-	ClientTimeout        time.Duration
-	DialTimeout          time.Duration
+	ClientTimeout         time.Duration
+	DialTimeout           time.Duration
 	ResponseHeaderTimeout time.Duration
-	TLSHandshakeTimeout  time.Duration
+	TLSHandshakeTimeout   time.Duration
 }
 
 func defaultLimiterHTTPConfig() LimiterHTTPConfig {

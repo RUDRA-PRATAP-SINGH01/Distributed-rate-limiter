@@ -1,7 +1,8 @@
 // Sidecar proxy: sits in front of the application and enforces limits before upstream work runs.
 //
 // Architecture pattern (service mesh lite):
-//   Client -> Sidecar -> [central limiter + Redis] -> upstream backend
+//
+//	Client -> Sidecar -> [central limiter + Redis] -> upstream backend
 //
 // Denials can be cached briefly to protect Redis under abuse; allowances always re-check
 // so token counts stay accurate. singleflight collapses concurrent misses for the same key.
@@ -11,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,10 +20,10 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"syscall"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
@@ -30,9 +32,9 @@ import (
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/identity"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/routing"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
-	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
@@ -220,7 +222,7 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 
 	body, err := idempotency.ReadBody(r, s.idempotencyCfg.MaxBodyBytes)
 	if err != nil {
-		if err == idempotency.ErrBodyTooLarge {
+		if errors.Is(err, idempotency.ErrBodyTooLarge) {
 			http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -545,18 +547,25 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 		telemetry.RecordError(span, err)
 		return limitResult{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	statusCode = resp.StatusCode
 	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
 
+	// A malformed header keeps the local default rather than a partially
+	// scanned value, so a limiter bug cannot silently widen the quota shown
+	// to clients.
 	limit := s.defaultLimit
 	if val := resp.Header.Get("X-RateLimit-Limit"); val != "" {
-		fmt.Sscanf(val, "%d", &limit)
+		if parsed, convErr := strconv.Atoi(val); convErr == nil {
+			limit = parsed
+		}
 	}
 	remaining := 0
 	if val := resp.Header.Get("X-RateLimit-Remaining"); val != "" {
-		fmt.Sscanf(val, "%d", &remaining)
+		if parsed, convErr := strconv.Atoi(val); convErr == nil {
+			remaining = parsed
+		}
 	}
 	retryAfter := resp.Header.Get("Retry-After")
 
@@ -669,7 +678,7 @@ func main() {
 
 	failOpen := os.Getenv("FAIL_OPEN") == "true"
 	if failOpen {
-		logging.Warn(nil, "FAIL_OPEN enabled — sidecar forwards traffic when limiter or Redis is down",
+		logging.Warn(context.Background(), "FAIL_OPEN enabled — sidecar forwards traffic when limiter or Redis is down",
 			"component", "sidecar",
 			"fail_open", true,
 		)
@@ -687,15 +696,21 @@ func main() {
 	allowedPaths := parseAllowedPaths(os.Getenv("ALLOWED_PATHS"))
 
 	if len(allowedPaths) == 0 {
-		logging.Warn(nil, "ALLOWED_PATHS is not set — all paths are proxied",
+		logging.Warn(context.Background(), "ALLOWED_PATHS is not set — all paths are proxied",
 			"component", "sidecar",
 			"security_dev_mode", true,
 		)
 	}
 
+	// Silently falling back on a typo would run the fleet at the wrong quota,
+	// so a malformed RATE_LIMIT stops startup instead.
 	defaultLimit := 10
 	if l := os.Getenv("RATE_LIMIT"); l != "" {
-		fmt.Sscanf(l, "%d", &defaultLimit)
+		parsed, err := strconv.Atoi(l)
+		if err != nil || parsed <= 0 {
+			logging.Fatal("RATE_LIMIT must be a positive integer")
+		}
+		defaultLimit = parsed
 	}
 
 	tlsCert := os.Getenv("TLS_CERT_FILE")
@@ -742,7 +757,7 @@ func main() {
 			cbCfg := circuitbreaker.LoadConfigFromEnv()
 			sidecar.SetLimiterCircuit(circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg)))
 		}
-		logging.Info(nil, "Idempotency layer enabled",
+		logging.Info(context.Background(), "Idempotency layer enabled",
 			"component", "sidecar",
 			"lock_ttl_ms", idemCfg.LockTTL,
 			"completed_ttl_ms", idemCfg.CompletedTTL,
@@ -769,7 +784,7 @@ func main() {
 		probeCancel = cancel
 		router.StartHealthProbes(probeCtx)
 		sidecar.SetRouter(router)
-		logging.Info(nil, "Intelligent routing enabled",
+		logging.Info(context.Background(), "Intelligent routing enabled",
 			"component", "sidecar",
 			"gateway_count", len(gateways),
 		)
@@ -797,7 +812,7 @@ func main() {
 	if useHierarchical {
 		mode = "hierarchical /check_hierarchical"
 	}
-	logging.Info(nil, "Sidecar starting",
+	logging.Info(context.Background(), "Sidecar starting",
 		"component", "sidecar",
 		"port", port,
 		"upstream", upstream,
@@ -830,7 +845,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	logging.Info(nil, "Shutting down sidecar", "component", "sidecar")
+	logging.Info(context.Background(), "Shutting down sidecar", "component", "sidecar")
 
 	sweeperCancel()
 	if probeCancel != nil {
@@ -853,7 +868,7 @@ func main() {
 			logging.Info(shutdownCtx, "Redis client closed", "component", "sidecar")
 		}
 	}
-	logging.Info(nil, "Sidecar exited", "component", "sidecar")
+	logging.Info(context.Background(), "Sidecar exited", "component", "sidecar")
 }
 
 func connectSidecarRedis(otelCfg telemetry.Config, cfg redisclient.Config) redis.UniversalClient {
@@ -872,6 +887,6 @@ func connectSidecarRedis(otelCfg telemetry.Config, cfg redisclient.Config) redis
 			logging.Fatal("Redis OpenTelemetry instrumentation failed", "error", err)
 		}
 	}
-	logging.Info(nil, "Sidecar Redis connected", "component", "sidecar", "redis", redisclient.Describe(cfg))
+	logging.Info(context.Background(), "Sidecar Redis connected", "component", "sidecar", "redis", redisclient.Describe(cfg))
 	return rdb
 }

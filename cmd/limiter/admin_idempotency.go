@@ -46,18 +46,18 @@ func registerIdempotencyRoutes(mux *http.ServeMux, cfg Config, rdb redis.Univers
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
-		if rec == nil {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		if rec.Headers == nil {
-			rec.Headers = map[string]string{}
-		}
-		out := map[string]interface{}{
-			"record":            rec,
-			"lock_remaining_ms": rec.LockRemainingMs(),
-		}
-		json.NewEncoder(w).Encode(out)
+			if rec == nil {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			if rec.Headers == nil {
+				rec.Headers = map[string]string{}
+			}
+			out := map[string]interface{}{
+				"record":            rec,
+				"lock_remaining_ms": rec.LockRemainingMs(),
+			}
+			json.NewEncoder(w).Encode(out)
 		case http.MethodDelete:
 			if err := store.DeleteRecord(r.Context(), scope, key); err != nil {
 				logging.Error(r.Context(), "admin idempotency delete failed",
@@ -116,7 +116,7 @@ func registerIdempotencyRoutes(mux *http.ServeMux, cfg Config, rdb redis.Univers
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"scope":             scope,
-			"record":              rec,
+			"record":            rec,
 			"lock_remaining_ms": rec.LockRemainingMs(),
 		})
 	})

@@ -43,13 +43,13 @@ func TestAdmin_Authentication(t *testing.T) {
 	}
 
 	invalidKeys := []string{
-		"",                            // Missing
-		"wrong-key",                   // Wrong key
-		"test-admin-key-extra",        // Prefix-correct
-		"extra-test-admin-key",        // Suffix-correct
-		"test-admn-key",               // Same length (almost correct)
-		"test-admin key",              // Internal whitespace mutation
-		"test-admin-Key",              // Case mutation
+		"",                     // Missing
+		"wrong-key",            // Wrong key
+		"test-admin-key-extra", // Prefix-correct
+		"extra-test-admin-key", // Suffix-correct
+		"test-admn-key",        // Same length (almost correct)
+		"test-admin key",       // Internal whitespace mutation
+		"test-admin-Key",       // Case mutation
 	}
 
 	for _, route := range routes {

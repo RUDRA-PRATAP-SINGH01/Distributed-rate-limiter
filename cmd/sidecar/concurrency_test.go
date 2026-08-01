@@ -22,10 +22,10 @@ func TestSidecar_SingleflightCollapse(t *testing.T) {
 	fixture.limiterHandler.blockChan = blockChan
 
 	var (
-		allowed    atomic.Int64
-		denied     atomic.Int64
-		errs       atomic.Int64
-		wg         sync.WaitGroup
+		allowed atomic.Int64
+		denied  atomic.Int64
+		errs    atomic.Int64
+		wg      sync.WaitGroup
 	)
 
 	// Make concurrent requests
@@ -96,10 +96,10 @@ func TestSidecar_ConcurrentDenialCacheMiss(t *testing.T) {
 
 	const numRequests = 50
 	var (
-		allowed    atomic.Int64
-		denied     atomic.Int64
-		errs       atomic.Int64
-		wg         sync.WaitGroup
+		allowed atomic.Int64
+		denied  atomic.Int64
+		errs    atomic.Int64
+		wg      sync.WaitGroup
 	)
 
 	var upstreamCalled int64
@@ -256,4 +256,3 @@ func TestSidecar_SingleflightKeyIsolation(t *testing.T) {
 		t.Errorf("expected exactly 2 rate limiter calls (1 per key), got %d", fixture.limiterHandler.callCount)
 	}
 }
-

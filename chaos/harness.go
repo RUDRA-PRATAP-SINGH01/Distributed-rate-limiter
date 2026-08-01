@@ -17,13 +17,13 @@ import (
 
 // Harness drives a minimal Compose stack for resilience contracts.
 type Harness struct {
-	t          *testing.T
-	composeDir string
+	t            *testing.T
+	composeDir   string
 	composeFiles []string
-	project    string
-	LimiterURL string
-	SidecarURL string
-	startedByUs bool
+	project      string
+	LimiterURL   string
+	SidecarURL   string
+	startedByUs  bool
 }
 
 func repoRoot(t *testing.T) string {
@@ -44,12 +44,12 @@ func StartChaosStack(t *testing.T) *Harness {
 	}
 
 	h := &Harness{
-		t:          t,
-		composeDir: repoRoot(t),
+		t:            t,
+		composeDir:   repoRoot(t),
 		composeFiles: []string{"docker-compose.chaos.yml"},
-		project:    "rate-chaos",
-		LimiterURL: envOr("CHAOS_LIMITER_URL", "http://127.0.0.1:8080"),
-		SidecarURL: envOr("CHAOS_SIDECAR_URL", "http://127.0.0.1:9090"),
+		project:      "rate-chaos",
+		LimiterURL:   envOr("CHAOS_LIMITER_URL", "http://127.0.0.1:8080"),
+		SidecarURL:   envOr("CHAOS_SIDECAR_URL", "http://127.0.0.1:9090"),
 	}
 
 	// If caller already pointed at a live stack, don't start Compose.
@@ -69,6 +69,10 @@ func StartChaosStack(t *testing.T) *Harness {
 	return h
 }
 
+// composeTimeout bounds a single docker compose invocation. Builds are the slow
+// case; without a deadline a wedged daemon hangs the whole CI job.
+const composeTimeout = 10 * time.Minute
+
 func (h *Harness) compose(args ...string) {
 	h.t.Helper()
 	cmdArgs := []string{"compose", "-p", h.project}
@@ -76,7 +80,9 @@ func (h *Harness) compose(args ...string) {
 		cmdArgs = append(cmdArgs, "-f", f)
 	}
 	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.Command("docker", cmdArgs...)
+	ctx, cancel := context.WithTimeout(context.Background(), composeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", cmdArgs...)
 	cmd.Dir = h.composeDir
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
