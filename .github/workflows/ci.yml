@@ -14,6 +14,8 @@ permissions:
   contents: read
 
 jobs:
+  # Every job resolves Go from go.mod. The `toolchain` directive there pins a
+  # patched release, which is what keeps the vuln job green — see M-07.
   static-build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -38,6 +40,48 @@ jobs:
 
       - name: Build Binaries
         run: go build ./...
+
+  # M-07: static analysis beyond `go vet`. Config and rationale for every
+  # enabled/excluded linter live in .golangci.yml.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+  # M-07: fails the build on any known CVE reachable from our call graph,
+  # covering both the standard library and third-party modules.
+  vuln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Scan for known vulnerabilities
+        run: govulncheck ./...
 
   test:
     runs-on: ubuntu-latest
@@ -71,6 +115,9 @@ jobs:
       - name: Run Tests with Race Detector
         run: go test -count=1 -race ./...
 
+  # M-07: every package that executes Lua against Redis runs a second time on a
+  # real server. miniredis runs Lua on gopher-lua with its own clock, so a
+  # script can pass in-memory and still break in production.
   redis-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -95,13 +142,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify Redis Connection and Run Integration Tests
+      - name: Run Integration Tests Against Real Redis
         env:
           REDIS_TEST_ADDR: 127.0.0.1:6379
+        # -p 1 because the suites share one database and each harness flushes it
+        # on setup. A handful of tests that need to kill the server mid-run skip
+        # here with a logged reason; they still run in the miniredis pass above.
         run: |
-          echo "PROVING REAL REDIS MODE: REDIS_TEST_ADDR is set to $REDIS_TEST_ADDR"
-          # Run integration tests in internal/limiter package
-          go test -count=1 -v ./internal/limiter/...
+          echo "REAL REDIS MODE: REDIS_TEST_ADDR=$REDIS_TEST_ADDR"
+          go test -count=1 -p 1 -v \
+            ./internal/limiter/... \
+            ./internal/circuitbreaker/... \
+            ./internal/idempotency/... \
+            ./internal/audit/... \
+            ./internal/routing/...
 
   coverage:
     runs-on: ubuntu-latest

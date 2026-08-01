@@ -64,7 +64,7 @@ flowchart TB
 | Value | Implementation | Redis key pattern | Semantics |
 |-------|----------------|-------------------|-----------|
 | `token` (default) | `RedisAtomicTokenBucket` | `rate:{userID}` | Continuous refill + deduct |
-| `sliding` | `RedisSlidingWindow` | `sw:{userID}` | Fixed window ZSET counter |
+| `sliding` | `RedisSlidingWindow` | `sw:{userID}` | Sliding-window log (ZSET of request timestamps); no reset instant |
 | hierarchical (flag) | `HierarchicalLimiter` | `rate:global`, `rate:tenant:*`, `rate:user:*`, `rate:endpoint:*` | All four must allow |
 
 Default compose: `ALGORITHM=sliding`, `ENABLE_HIERARCHICAL=true` (`docker-compose.yml`).

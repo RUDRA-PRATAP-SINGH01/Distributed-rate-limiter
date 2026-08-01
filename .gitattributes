@@ -1,0 +1,11 @@
+# gofmt writes LF. Without this, a Windows checkout gets CRLF working copies and
+# `gofmt -l` reports every file as unformatted, which makes the lint gate
+# unusable locally even when CI is clean.
+*.go text eol=lf
+*.lua text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+*.ps1 text eol=crlf

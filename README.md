@@ -1628,11 +1628,14 @@ go test -race ./...
 
 | Job | Command | Notes |
 |-----|---------|-------|
-| `static-build` | `go mod verify`, `go vet ./...`, `go build ./...` | No lint beyond vet |
+| `static-build` | `go mod verify`, `go vet ./...`, `go build ./...` | Compiles every binary |
+| `lint` | `golangci-lint run ./...` | Config and per-linter rationale in `.golangci.yml` |
+| `vuln` | `govulncheck ./...` | Fails on CVEs reachable from our call graph, stdlib included |
 | `test` | `go test -count=1 ./...` | Full unit test suite |
 | `race` | `go test -count=1 -race ./...` | Race detector |
-| `redis-integration` | `go test -count=1 -v ./internal/limiter/...` | Service container `redis:7-alpine`, `REDIS_TEST_ADDR=127.0.0.1:6379` |
+| `redis-integration` | `go test -count=1 -p 1 -v` on every Lua-bearing package | Service container `redis:7-alpine`, `REDIS_TEST_ADDR=127.0.0.1:6379` |
 | `coverage` | `go test -coverprofile=coverage.out ./...` | Uploads artifact; **no coverage threshold gate** |
+| `chaos` | `go test -tags=chaos ./chaos/...` | Fail-closed resilience contracts on a compose stack |
 
 Observability assertions in tests are limited to `/metrics` endpoint behavior and cardinality/secret leakage checks (`cmd/limiter/health_test.go`); metric values and spans are not asserted (audit §11).
 

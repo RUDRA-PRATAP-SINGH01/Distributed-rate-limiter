@@ -25,10 +25,13 @@
 | Job | Command | Purpose |
 |-----|---------|---------|
 | `static-build` | `go vet`, `go build ./...` | Compile all binaries |
+| `lint` | `golangci-lint run ./...` | Static analysis beyond vet (`.golangci.yml`) |
+| `vuln` | `govulncheck ./...` | Reachable CVEs in deps and stdlib |
 | `test` | `go test -count=1 ./...` | Unit + handler tests |
 | `race` | `go test -race ./...` | Data race detection |
-| `redis-integration` | `go test ./internal/limiter/...` | Real Redis (`REDIS_TEST_ADDR`) |
+| `redis-integration` | `go test -p 1` on all Lua-bearing packages | Real Redis (`REDIS_TEST_ADDR`) |
 | `coverage` | `-coverprofile=coverage.out` | Artifact upload |
+| `chaos` | `go test -tags=chaos ./chaos/...` | Fail-closed resilience contracts |
 
 All jobs: Go version from `go.mod`, module cache enabled.
 
@@ -57,10 +60,21 @@ All jobs: Go version from `go.mod`, module cache enabled.
 ```bash
 go test ./...
 go test -race ./...
-go test -v ./internal/limiter/...   # needs Redis on 6379 or REDIS_TEST_ADDR
 go test -coverprofile=coverage.out ./...
 go tool cover -func=coverage.out
+golangci-lint run ./...
+govulncheck ./...
+
+# Same suites against a real server instead of miniredis.
+docker run -d --name drl-redis-test -p 6399:6379 redis:7-alpine
+REDIS_TEST_ADDR=127.0.0.1:6399 go test -p 1 ./internal/limiter/... \
+  ./internal/circuitbreaker/... ./internal/idempotency/... \
+  ./internal/audit/... ./internal/routing/...
 ```
+
+Test harnesses get their instance from `internal/redistest`: a real client when
+`REDIS_TEST_ADDR` is set, miniredis otherwise. Tests that need to kill the
+server mid-run call `SkipIfReal` and only run in the miniredis pass.
 
 ---
 

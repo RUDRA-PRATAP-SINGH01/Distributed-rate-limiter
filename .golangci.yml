@@ -1,0 +1,95 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - chaos
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    # Leaked response bodies exhaust the connection pool in a proxy that fans
+    # out to a limiter and an upstream on every request.
+    - bodyclose
+    # noctx catches outbound calls that drop the request deadline. contextcheck
+    # is deliberately NOT enabled: on this codebase roughly half its reports are
+    # false positives on handlers that do pass r.Context(), and the one genuine
+    # instance (override.getOverride) is tracked as audit finding M-02.
+    - noctx
+    # Rate-limit arithmetic is float and integer math; silent truncation or
+    # overflow in a quota calculation is a correctness bug, not a style nit.
+    - durationcheck
+    - gosec
+    - nilerr
+    - errorlint
+    - copyloopvar
+    - makezero
+    - unconvert
+    - wastedassign
+
+  settings:
+    errcheck:
+      # Encoding a response body cannot be recovered from — the status line is
+      # already on the wire. Every other error must be handled.
+      exclude-functions:
+        - (*encoding/json.Encoder).Encode
+        - (net/http.ResponseWriter).Write
+    gosec:
+      excludes:
+        # G104 duplicates errcheck.
+        - G104
+        # G704 flags forwarding a request to a configured target as SSRF. That
+        # is the sidecar's and router's entire job; the trust boundary is the
+        # gateway allowlist, not the HTTP call.
+        - G704
+        # G101 fires on header NAMES such as "X-Internal-API-Key", not values.
+        - G101
+        # G404 covers load-spreading and traffic simulation, neither of which
+        # is a security decision. Auth secrets never come from math/rand.
+        - G404
+    staticcheck:
+      checks:
+        - all
+        # QF* are refactor suggestions (tagged switches and the like), not
+        # correctness findings, and they mostly land on table-driven tests.
+        - -QF1003
+        # ST1000 wants a doc comment on every package. These are internal/
+        # packages with no external importers, so the useful documentation
+        # lives on the exported types instead.
+        - -ST1000
+
+  exclusions:
+    generated: lax
+    rules:
+      # Tests deliberately ignore errors during teardown and drive edge cases
+      # that trip security heuristics.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - noctx
+          - bodyclose
+      # Developer-only binaries: a demo backend and a gateway simulator used by
+      # the benchmark harness. They never take production traffic.
+      - path: cmd/(demo-backend|gateway-sim)/
+        linters:
+          - gosec
+      # Test tooling that shells out to docker for fault injection.
+      - path: chaos/
+        linters:
+          - gosec
+      # Asserts on purpose that the logger tolerates a nil context, since
+      # startup paths log before any request context exists.
+      - path: internal/logging/logger_test\.go
+        linters:
+          - staticcheck
+      - path: tests/legacy/
+        linters:
+          - errcheck
+          - gosec
+          - noctx
+
+formatters:
+  enable:
+    - gofmt
