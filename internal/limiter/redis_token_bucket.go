@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -35,7 +36,7 @@ func (tb *RedisTokenBucket) Allow(userID string) (bool, int, error) {
 	var tokens float64
 	var lastRefill time.Time
 
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		tokens = float64(tb.capacity)
 		lastRefill = time.Now()
 	} else if err != nil {

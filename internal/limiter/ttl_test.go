@@ -40,7 +40,6 @@ func TestTokenBucket_TTLMatchesRefillHorizon(t *testing.T) {
 		{10, 0.0001}, // must clamp to 24h, not 3600 or 100000
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run("", func(t *testing.T) {
 			tb, rdb, _ := newTB(t, tc.cap, tc.rate)
 			uid := "ttl-user"

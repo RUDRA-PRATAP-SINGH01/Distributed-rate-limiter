@@ -1,4 +1,4 @@
-// Redis client factory with standalone and Sentinel failover support.
+// Package redis is the client factory with standalone and Sentinel failover support.
 package redis
 
 import (

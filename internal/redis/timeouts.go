@@ -9,18 +9,20 @@ import (
 
 // ClientTimeouts are the effective go-redis timeout/retry settings applied by New().
 type ClientTimeouts struct {
-	DialTimeout      time.Duration
-	ReadTimeout      time.Duration
-	WriteTimeout     time.Duration
-	PoolTimeout      time.Duration
-	MaxRetries       int // command-level retries (0 = disabled)
-	DialerRetries    int
-	MinRetryBackoff  time.Duration
-	MaxRetryBackoff  time.Duration
+	DialTimeout     time.Duration
+	ReadTimeout     time.Duration
+	WriteTimeout    time.Duration
+	PoolTimeout     time.Duration
+	MaxRetries      int // command-level retries (0 = disabled)
+	DialerRetries   int
+	MinRetryBackoff time.Duration
+	MaxRetryBackoff time.Duration
 }
 
 // Default timeouts target a deterministic outage budget:
-//   pool wait (1s) + one dial attempt (500ms) + read/write (1s) per command,
+//
+//	pool wait (1s) + one dial attempt (500ms) + read/write (1s) per command,
+//
 // with no command-level retries and a single dial attempt.
 const (
 	defaultDialTimeout   = 500 * time.Millisecond

@@ -1,4 +1,5 @@
-// Runtime limit overrides stored in Redis with a generation-validated local cache.
+// Package override holds runtime limit overrides stored in Redis with a
+// generation-validated local cache.
 //
 // A monotonic Redis generation counter (config:generation) increments on every
 // write/delete. Before serving a cached entry, replicas compare the local
@@ -8,6 +9,7 @@ package override
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -72,7 +74,7 @@ func EndpointOverrideID(tenantID, endpoint string) string {
 // Call once per hierarchical check before reading multiple override levels.
 func (s *Store) RefreshGeneration(ctx context.Context) {
 	gen, err := s.rdb.Get(ctx, generationKey).Int64()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		gen = 0
 	} else if err != nil {
 		metrics.RecordOverrideGenerationRefreshError()

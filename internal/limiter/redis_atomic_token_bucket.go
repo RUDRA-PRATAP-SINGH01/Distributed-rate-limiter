@@ -73,5 +73,3 @@ func (tb *RedisAtomicTokenBucket) Allow(ctx context.Context, userID string) (boo
 
 	return allowed, remaining, nil
 }
-
-

@@ -1,4 +1,4 @@
-// Prometheus metrics for the rate limiter fleet.
+// Package metrics holds the Prometheus metrics for the rate limiter fleet.
 //
 // Labels are intentionally low-cardinality (handler + allowed) — never per-user —
 // because unbounded label values would OOM the Prometheus TSDB under real traffic.

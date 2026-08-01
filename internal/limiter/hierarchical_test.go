@@ -235,7 +235,6 @@ func TestHierarchical_GlobalContention(t *testing.T) {
 	)
 
 	for i := 0; i < numIdentities; i++ {
-		i := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

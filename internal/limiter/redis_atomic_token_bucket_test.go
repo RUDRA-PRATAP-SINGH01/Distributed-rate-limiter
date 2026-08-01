@@ -54,7 +54,6 @@ func allow1(t *testing.T, tb *RedisAtomicTokenBucket, uid string) (bool, int) {
 
 func TestTokenBucket_Init_FreshKeyFullCapacity(t *testing.T) {
 	for _, cap := range []int{1, 5, 100} {
-		cap := cap
 		t.Run(fmt.Sprintf("cap%d", cap), func(t *testing.T) {
 			tb, rdb, _ := newTB(t, cap, 1.0)
 			uid := fmt.Sprintf("init-fresh-%d", cap)
@@ -98,7 +97,6 @@ func TestTokenBucket_ExactExhaustion(t *testing.T) {
 		{50, 0.0001},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(fmt.Sprintf("cap%d", tc.cap), func(t *testing.T) {
 			tb, rdb, _ := newTB(t, tc.cap, tc.rate)
 			uid := fmt.Sprintf("exhaust-%d", tc.cap)
@@ -153,7 +151,6 @@ func TestTokenBucket_FractionalRefill_PreservesSubTokenState(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(fmt.Sprintf("rate%.3f", tc.rate), func(t *testing.T) {
 			ctx := context.Background()
 			tb, rdb, _ := newTB(t, 5, tc.rate)
@@ -202,7 +199,6 @@ func TestTokenBucket_FractionalRefill_EventuallyAllows(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(fmt.Sprintf("rate%.3f", tc.rate), func(t *testing.T) {
 			ctx := context.Background()
 			tb, rdb, _ := newTB(t, 5, tc.rate)
@@ -491,7 +487,6 @@ func TestTokenBucket_MultiKeyConcurrency(t *testing.T) {
 	barrier := make(chan struct{})
 
 	for k := 0; k < numKeys; k++ {
-		k := k
 		uid := fmt.Sprintf("multikey-%d", k)
 		for i := 0; i < goroutinesPerKey; i++ {
 			wg.Add(1)
