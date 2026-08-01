@@ -152,7 +152,7 @@ func newTestFixture(t *testing.T, overrideCfg func(*Config)) (*testFixture, func
 		if !checkRedisCircuit(ctx, w, oteltrace.SpanFromContext(ctx)) {
 			return
 		}
-		allowed, remaining, err := limiterInstance.Allow(ctx, userID)
+		allowed, remaining, retryAfter, err := allowWithRetryAfter(ctx, limiterInstance, userID)
 		recordRedisCircuit(ctx, err, start)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -163,7 +163,7 @@ func newTestFixture(t *testing.T, overrideCfg func(*Config)) (*testFixture, func
 		w.Header().Set("Content-Type", "application/json")
 		setRateLimitHeaders(w, rateLimitLimitHeader(cfg), remaining)
 		if !allowed {
-			w.Header().Set("Retry-After", retryAfterForCheck(cfg))
+			w.Header().Set("Retry-After", retryAfterHeader(cfg, retryAfter))
 			w.WriteHeader(http.StatusTooManyRequests)
 			json.NewEncoder(w).Encode(map[string]string{"error": "Too many requests"})
 			return

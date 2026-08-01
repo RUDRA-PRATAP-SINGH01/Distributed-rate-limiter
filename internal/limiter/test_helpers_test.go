@@ -5,6 +5,7 @@ package limiter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -161,7 +162,7 @@ func readHierarchyTokens(t *testing.T, rdb redis.UniversalClient, keys []string)
 	for i, k := range keys {
 		ctx := context.Background()
 		raw, err := rdb.HGet(ctx, k, "tokens").Result()
-		if err == redis.Nil {
+		if errors.Is(err, redis.Nil) {
 			out[i] = -1
 			continue
 		}
