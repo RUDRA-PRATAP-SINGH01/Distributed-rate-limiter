@@ -2,6 +2,7 @@ package idempotency
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -30,7 +31,7 @@ func TestCompleteStaleFenceRecordsSpanError(t *testing.T) {
 		Headers:    map[string]string{"Content-Type": "application/json"},
 		Body:       []byte(`{"ok":true}`),
 	})
-	if err != ErrStaleFence {
+	if !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("expected ErrStaleFence, got %v", err)
 	}
 
@@ -54,7 +55,8 @@ func TestFailRedisErrorRecordsSpanError(t *testing.T) {
 	sr := tracetest.NewSpanRecorder()
 	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr)))
 
-	store, mr := setupTestStore(t)
+	store, srv := setupTestStore(t)
+	srv.SkipIfReal(t, "kills the server mid-test to force a Redis error")
 	ctx := context.Background()
 
 	claim, err := store.Claim(ctx, "scope1", "trace-fail-redis", "hash-1")
@@ -62,7 +64,7 @@ func TestFailRedisErrorRecordsSpanError(t *testing.T) {
 		t.Fatalf("claim failed: %#v %v", claim, err)
 	}
 
-	mr.Close()
+	srv.Stop(t)
 
 	err = store.Fail(ctx, FailRequest{
 		Scope:      "scope1",

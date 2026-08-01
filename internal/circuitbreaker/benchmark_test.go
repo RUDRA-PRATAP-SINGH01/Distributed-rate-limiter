@@ -5,15 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redistest"
 )
 
 func BenchmarkCircuitAllow(b *testing.B) {
-	mr, _ := miniredis.Run()
-	defer mr.Close()
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	br := NewBreaker(NewRedisStore(rdb, DefaultConfig()))
+	br := NewBreaker(NewRedisStore(redistest.Start(b).Client(b), DefaultConfig()))
 	ctx := context.Background()
 
 	b.ResetTimer()
@@ -23,10 +19,7 @@ func BenchmarkCircuitAllow(b *testing.B) {
 }
 
 func BenchmarkCircuitRecord(b *testing.B) {
-	mr, _ := miniredis.Run()
-	defer mr.Close()
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	br := NewBreaker(NewRedisStore(rdb, DefaultConfig()))
+	br := NewBreaker(NewRedisStore(redistest.Start(b).Client(b), DefaultConfig()))
 	ctx := context.Background()
 
 	b.ResetTimer()
@@ -40,10 +33,7 @@ func BenchmarkCircuitRecord(b *testing.B) {
 }
 
 func BenchmarkCircuitAllowRecordParallel(b *testing.B) {
-	mr, _ := miniredis.Run()
-	defer mr.Close()
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	br := NewBreaker(NewRedisStore(rdb, DefaultConfig()))
+	br := NewBreaker(NewRedisStore(redistest.Start(b).Client(b), DefaultConfig()))
 	ctx := context.Background()
 
 	b.RunParallel(func(pb *testing.PB) {

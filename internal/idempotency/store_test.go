@@ -2,26 +2,22 @@ package idempotency
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redistest"
 )
 
-func setupTestStore(t *testing.T) (*RedisStore, *miniredis.Miniredis) {
+func setupTestStore(t *testing.T) (*RedisStore, *redistest.Server) {
 	t.Helper()
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("miniredis: %v", err)
-	}
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	srv := redistest.Start(t)
 	cfg := DefaultConfig()
 	cfg.LockTTL = 5_000
 	cfg.CompletedTTL = 60_000
-	return NewRedisStore(rdb, cfg), mr
+	return NewRedisStore(srv.Client(t), cfg), srv
 }
 
 func TestClaimSingleWinnerUnderConcurrency(t *testing.T) {
@@ -120,15 +116,11 @@ func TestHashMismatch(t *testing.T) {
 }
 
 func TestExpiredLockReclaim(t *testing.T) {
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	srv := redistest.Start(t)
 	cfg := DefaultConfig()
 	cfg.LockTTL = 100
 	cfg.CompletedTTL = 60_000
-	store := NewRedisStore(rdb, cfg)
+	store := NewRedisStore(srv.Client(t), cfg)
 	ctx := context.Background()
 
 	claim, err := store.Claim(ctx, "scope1", "key-expire", "hash-x")
@@ -136,7 +128,7 @@ func TestExpiredLockReclaim(t *testing.T) {
 		t.Fatalf("initial claim: %#v %v", claim, err)
 	}
 
-	mr.FastForward(200 * time.Millisecond)
+	srv.FastForward(200 * time.Millisecond)
 
 	reclaim, err := store.Claim(ctx, "scope1", "key-expire", "hash-x")
 	if err != nil {
@@ -148,15 +140,11 @@ func TestExpiredLockReclaim(t *testing.T) {
 }
 
 func TestFenceTokenStaleCompleteRejected(t *testing.T) {
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	srv := redistest.Start(t)
 	cfg := DefaultConfig()
 	cfg.LockTTL = 100
 	cfg.CompletedTTL = 60_000
-	store := NewRedisStore(rdb, cfg)
+	store := NewRedisStore(srv.Client(t), cfg)
 	ctx := context.Background()
 
 	workerA, err := store.Claim(ctx, "scope1", "key-fence", "hash-x")
@@ -165,7 +153,7 @@ func TestFenceTokenStaleCompleteRejected(t *testing.T) {
 	}
 	staleToken := workerA.FenceToken
 
-	mr.FastForward(200 * time.Millisecond)
+	srv.FastForward(200 * time.Millisecond)
 
 	workerB, err := store.Claim(ctx, "scope1", "key-fence", "hash-x")
 	if err != nil || workerB.Result != ResultClaimed {
@@ -176,7 +164,7 @@ func TestFenceTokenStaleCompleteRejected(t *testing.T) {
 		Scope: "scope1", Key: "key-fence", FenceToken: staleToken,
 		HTTPStatus: 200, Body: []byte("stale"),
 	})
-	if err != ErrStaleFence {
+	if !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("expected ErrStaleFence for stale owner, got %v", err)
 	}
 
@@ -190,15 +178,11 @@ func TestFenceTokenStaleCompleteRejected(t *testing.T) {
 }
 
 func TestFenceTokenStaleFailRejected(t *testing.T) {
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	srv := redistest.Start(t)
 	cfg := DefaultConfig()
 	cfg.LockTTL = 100
 	cfg.CompletedTTL = 60_000
-	store := NewRedisStore(rdb, cfg)
+	store := NewRedisStore(srv.Client(t), cfg)
 	ctx := context.Background()
 
 	workerA, err := store.Claim(ctx, "scope1", "key-fail-fence", "hash-x")
@@ -207,7 +191,7 @@ func TestFenceTokenStaleFailRejected(t *testing.T) {
 	}
 	staleToken := workerA.FenceToken
 
-	mr.FastForward(200 * time.Millisecond)
+	srv.FastForward(200 * time.Millisecond)
 
 	workerB, err := store.Claim(ctx, "scope1", "key-fail-fence", "hash-x")
 	if err != nil || workerB.Result != ResultClaimed {
@@ -218,7 +202,7 @@ func TestFenceTokenStaleFailRejected(t *testing.T) {
 		Scope: "scope1", Key: "key-fail-fence", FenceToken: staleToken,
 		HTTPStatus: 503, Body: []byte("stale"),
 	})
-	if err != ErrStaleFence {
+	if !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("expected ErrStaleFence for stale owner fail, got %v", err)
 	}
 

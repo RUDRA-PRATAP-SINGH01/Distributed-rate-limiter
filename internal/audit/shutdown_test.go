@@ -9,29 +9,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redistest"
 	"github.com/redis/go-redis/v9"
 )
 
-func newAsyncStore(t *testing.T, workers, queueSize int) (*Store, *miniredis.Miniredis, redis.UniversalClient) {
+func newAsyncStore(t *testing.T, workers, queueSize int) (*Store, *redistest.Server, redis.UniversalClient) {
 	t.Helper()
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	srv := redistest.Start(t)
 	cfg := DefaultConfig()
 	cfg.Async = true
 	cfg.Workers = workers
 	cfg.QueueSize = queueSize
 	cfg.Retention = time.Hour
+	// Tight timeouts keep the shutdown-budget assertions meaningful when Redis
+	// stops answering.
 	rdb := redis.NewClient(&redis.Options{
-		Addr:         mr.Addr(),
+		Addr:         srv.Addr(),
 		DialTimeout:  100 * time.Millisecond,
 		ReadTimeout:  100 * time.Millisecond,
 		WriteTimeout: 100 * time.Millisecond,
 		MaxRetries:   -1,
 	})
-	return NewStore(rdb, cfg), mr, rdb
+	return NewStore(rdb, cfg), srv, rdb
 }
 
 func sampleInput(i int) RecordInput {
@@ -46,8 +45,7 @@ func sampleInput(i int) RecordInput {
 }
 
 func TestShutdown_EmptyQueue(t *testing.T) {
-	store, mr, rdb := newAsyncStore(t, 2, 8)
-	defer mr.Close()
+	store, _, rdb := newAsyncStore(t, 2, 8)
 	defer rdb.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -66,8 +64,7 @@ func TestShutdown_EmptyQueue(t *testing.T) {
 }
 
 func TestShutdown_DrainsPendingEvents(t *testing.T) {
-	store, mr, rdb := newAsyncStore(t, 1, 32)
-	defer mr.Close()
+	store, _, rdb := newAsyncStore(t, 1, 32)
 	defer rdb.Close()
 
 	ctx := context.Background()
@@ -94,8 +91,7 @@ func TestShutdown_DrainsPendingEvents(t *testing.T) {
 }
 
 func TestShutdown_ConcurrentRecordNoPanic(t *testing.T) {
-	store, mr, rdb := newAsyncStore(t, 4, 256)
-	defer mr.Close()
+	store, _, rdb := newAsyncStore(t, 4, 256)
 	defer rdb.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -137,13 +133,14 @@ func TestShutdown_ConcurrentRecordNoPanic(t *testing.T) {
 }
 
 func TestShutdown_RedisUnavailableBounded(t *testing.T) {
-	store, mr, rdb := newAsyncStore(t, 1, 4)
+	store, srv, rdb := newAsyncStore(t, 1, 4)
+	srv.SkipIfReal(t, "kills the server to make queued writes hang")
 
 	ctx := context.Background()
 	if _, err := store.Record(ctx, sampleInput(0)); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	mr.Close()
+	srv.Stop(t)
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -163,8 +160,7 @@ func TestShutdown_RedisUnavailableBounded(t *testing.T) {
 }
 
 func TestShutdown_RedisCloseOrdering(t *testing.T) {
-	store, mr, rdb := newAsyncStore(t, 1, 4)
-	defer mr.Close()
+	store, _, rdb := newAsyncStore(t, 1, 4)
 
 	ctx := context.Background()
 	if _, err := store.Record(ctx, sampleInput(0)); err != nil {
@@ -185,17 +181,16 @@ func TestShutdown_RedisCloseOrdering(t *testing.T) {
 	if err := rdb.Close(); err != nil {
 		t.Fatalf("redis close: %v", err)
 	}
-	if _, err := store.Record(ctx, sampleInput(1)); err == nil {
-		// dropped without touching redis
-	}
+	// The record is dropped after shutdown; either outcome is acceptable as
+	// long as it never reaches Redis, which the counter below asserts.
+	_, _ = store.Record(ctx, sampleInput(1))
 	if redisOps.Load() != 0 {
 		t.Fatalf("record after shutdown should not execute redis, ops=%d", redisOps.Load())
 	}
 }
 
 func TestShutdown_Idempotent(t *testing.T) {
-	store, mr, rdb := newAsyncStore(t, 2, 8)
-	defer mr.Close()
+	store, _, rdb := newAsyncStore(t, 2, 8)
 	defer rdb.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -222,8 +217,7 @@ func TestShutdown_Idempotent(t *testing.T) {
 }
 
 func TestShutdown_RecordAfterShutdownDropped(t *testing.T) {
-	store, mr, rdb := newAsyncStore(t, 1, 4)
-	defer mr.Close()
+	store, _, rdb := newAsyncStore(t, 1, 4)
 	defer rdb.Close()
 
 	ctx := context.Background()
@@ -248,8 +242,7 @@ func TestShutdown_RecordAfterShutdownDropped(t *testing.T) {
 }
 
 func TestShutdown_TimeoutThenResume(t *testing.T) {
-	store, mr, rdb := newAsyncStore(t, 1, 4)
-	defer mr.Close()
+	store, _, rdb := newAsyncStore(t, 1, 4)
 	defer rdb.Close()
 
 	block := make(chan struct{})
@@ -286,7 +279,8 @@ func TestShutdown_TimeoutThenResume(t *testing.T) {
 
 func TestShutdown_HighContentionRaceStress(t *testing.T) {
 	for round := 0; round < 5; round++ {
-		store, mr, rdb := newAsyncStore(t, 4, 128)
+		store, srv, rdb := newAsyncStore(t, 4, 128)
+		srv.SkipIfReal(t, "tears the server down between rounds")
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 
 		var wg sync.WaitGroup
@@ -311,7 +305,7 @@ func TestShutdown_HighContentionRaceStress(t *testing.T) {
 		close(stop)
 		wg.Wait()
 		cancel()
-		mr.Close()
+		srv.Stop(t)
 		rdb.Close()
 
 		if err != nil {

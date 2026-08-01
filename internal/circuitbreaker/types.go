@@ -36,10 +36,10 @@ type RecordInput struct {
 
 // AllowResult is returned by Allow before a protected call.
 type AllowResult struct {
-	Allowed           bool
-	State             State
-	ProbesRemaining   int
-	RejectionReason   string
+	Allowed         bool
+	State           State
+	ProbesRemaining int
+	RejectionReason string
 }
 
 // Snapshot is the live circuit state (local memory or Redis-backed).

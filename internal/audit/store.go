@@ -3,14 +3,15 @@ package audit
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -20,10 +21,10 @@ var appendLua string
 
 // Store persists audit events in Redis with searchable indexes.
 type Store struct {
-	rdb     redis.UniversalClient
-	cfg     Config
-	script  *redis.Script
-	queue   chan RecordInput
+	rdb    redis.UniversalClient
+	cfg    Config
+	script *redis.Script
+	queue  chan RecordInput
 
 	mu                sync.Mutex
 	state             storeState
@@ -44,8 +45,8 @@ func NewStore(rdb redis.UniversalClient, cfg Config) *Store {
 	}
 }
 
-func eventKey(id string) string       { return fmt.Sprintf("audit:event:%s", id) }
-func tsIndexKey() string              { return "audit:idx:ts" }
+func eventKey(id string) string           { return fmt.Sprintf("audit:event:%s", id) }
+func tsIndexKey() string                  { return "audit:idx:ts" }
 func tenantIndexKey(tenant string) string { return fmt.Sprintf("audit:idx:tenant:%s", tenant) }
 func userIndexKey(user string) string     { return fmt.Sprintf("audit:idx:user:%s", user) }
 func requestIndexKey(req string) string   { return fmt.Sprintf("audit:idx:req:%s", req) }
@@ -149,7 +150,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Event, error) {
 // GetByRequestID finds the latest event for a request ID.
 func (s *Store) GetByRequestID(ctx context.Context, requestID string) (*Event, error) {
 	id, err := s.rdb.Get(ctx, requestIndexKey(requestID)).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
 	if err != nil {
@@ -273,7 +274,6 @@ func parseEvent(fields map[string]string) *Event {
 	}
 	return ev
 }
-
 
 // PurgeTenant removes tenant index entries older than retention (ops).
 func (s *Store) PurgeTenant(ctx context.Context, tenantID string) (int64, error) {

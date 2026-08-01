@@ -7,16 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redistest"
 )
 
-func setupCB(t *testing.T) (*Breaker, *miniredis.Miniredis) {
+func setupCB(t *testing.T) (*Breaker, *redistest.Server) {
 	t.Helper()
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	srv := redistest.Start(t)
 	cfg := DefaultConfig()
 	cfg.MinSamples = 5
 	cfg.ConsecutiveFailures = 6
@@ -24,8 +20,7 @@ func setupCB(t *testing.T) (*Breaker, *miniredis.Miniredis) {
 	cfg.OpenCooldownMs = 100
 	cfg.HalfOpenMaxProbes = 2
 	cfg.HalfOpenSuccessRequired = 2
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	return NewBreaker(NewRedisStore(rdb, cfg)), mr
+	return NewBreaker(NewRedisStore(srv.Client(t), cfg)), srv
 }
 
 func TestClosedToOpenOnFailures(t *testing.T) {
@@ -111,7 +106,7 @@ func TestTimeoutTripsCircuit(t *testing.T) {
 	cfg.MinSamples = 3
 	cfg.TimeoutRateThreshold = 0.3
 	cfg.ConsecutiveFailures = 100
-	b := NewBreaker(NewRedisStore(redis.NewClient(&redis.Options{Addr: setupMini(t)}), cfg))
+	b := NewBreaker(NewRedisStore(redistest.Start(t).Client(t), cfg))
 	ctx := context.Background()
 	target := "limiter"
 
@@ -222,14 +217,4 @@ func TestReset(t *testing.T) {
 	if st.State != StateClosed || st.TotalCount != 0 {
 		t.Fatalf("expected clean closed state, got %+v", st)
 	}
-}
-
-func setupMini(t *testing.T) string {
-	t.Helper()
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(mr.Close)
-	return mr.Addr()
 }

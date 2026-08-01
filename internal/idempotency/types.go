@@ -62,10 +62,10 @@ type Config struct {
 // DefaultConfig returns production-oriented defaults (Stripe-style 24h retention).
 func DefaultConfig() Config {
 	return Config{
-		LockTTL:         60_000,       // 60s processing lease
-		CompletedTTL:    86_400_000,   // 24h
-		MaxBodyBytes:    1_048_576,    // 1 MB
-		InlineThreshold: 65_536,       // 64 KB inline in HASH
+		LockTTL:         60_000,     // 60s processing lease
+		CompletedTTL:    86_400_000, // 24h
+		MaxBodyBytes:    1_048_576,  // 1 MB
+		InlineThreshold: 65_536,     // 64 KB inline in HASH
 		FailOpen:        false,
 	}
 }

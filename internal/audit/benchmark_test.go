@@ -4,16 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redistest"
 )
 
 func BenchmarkAuditAppend(b *testing.B) {
-	mr, _ := miniredis.Run()
-	defer mr.Close()
 	cfg := DefaultConfig()
 	cfg.Async = false
-	store := NewStore(redis.NewClient(&redis.Options{Addr: mr.Addr()}), cfg)
+	store := NewStore(redistest.Start(b).Client(b), cfg)
 	ctx := context.Background()
 	in := RecordInput{
 		RequestID: "bench-req",
@@ -31,11 +28,9 @@ func BenchmarkAuditAppend(b *testing.B) {
 }
 
 func BenchmarkAuditSearch(b *testing.B) {
-	mr, _ := miniredis.Run()
-	defer mr.Close()
 	cfg := DefaultConfig()
 	cfg.Async = false
-	store := NewStore(redis.NewClient(&redis.Options{Addr: mr.Addr()}), cfg)
+	store := NewStore(redistest.Start(b).Client(b), cfg)
 	ctx := context.Background()
 	for i := 0; i < 100; i++ {
 		_, _ = store.record(ctx, RecordInput{UserID: "u1", Decision: DecisionAllowed, Reason: "x", Handler: "check"})

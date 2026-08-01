@@ -8,12 +8,12 @@ import (
 
 // Config controls audit retention and capacity.
 type Config struct {
-	Enabled        bool
-	Retention      time.Duration
-	MaxEvents      int64
-	Async          bool
-	QueueSize      int
-	Workers        int
+	Enabled   bool
+	Retention time.Duration
+	MaxEvents int64
+	Async     bool
+	QueueSize int
+	Workers   int
 }
 
 func DefaultConfig() Config {

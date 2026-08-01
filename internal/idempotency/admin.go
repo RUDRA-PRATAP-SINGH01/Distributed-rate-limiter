@@ -2,6 +2,7 @@ package idempotency
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -37,7 +38,7 @@ func (s *RedisStore) GetRecord(ctx context.Context, scope, key string) (*AdminRe
 	mk := metaKey(scope, key)
 	fields, err := s.rdb.HGetAll(ctx, mk).Result()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 	if len(fields) == 0 {
 		return nil, nil
@@ -45,7 +46,7 @@ func (s *RedisStore) GetRecord(ctx context.Context, scope, key string) (*AdminRe
 
 	ttl, err := s.rdb.PTTL(ctx, mk).Result()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 
 	rec := &AdminRecord{
@@ -74,8 +75,8 @@ func (s *RedisStore) GetRecord(ctx context.Context, scope, key string) (*AdminRe
 	var body []byte
 	if fields["body_ref"] == "external" {
 		body, err = s.rdb.Get(ctx, bodyKey(scope, key)).Bytes()
-		if err != nil && err != redis.Nil {
-			return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return nil, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 		}
 	} else if b := fields["resp_body"]; b != "" {
 		body = []byte(b)
@@ -102,7 +103,7 @@ func (s *RedisStore) DeleteRecord(ctx context.Context, scope, key string) error 
 	pipe.Del(ctx, metaKey(scope, key), bodyKey(scope, key))
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 	return nil
 }

@@ -5,22 +5,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redistest"
 )
 
-func setupAudit(t *testing.T) (*Store, *miniredis.Miniredis) {
+func setupAudit(t *testing.T) (*Store, *redistest.Server) {
 	t.Helper()
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatal(err)
-	}
+	srv := redistest.Start(t)
 	cfg := DefaultConfig()
 	cfg.Async = false
 	cfg.Retention = time.Hour
 	cfg.MaxEvents = 1000
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	return NewStore(rdb, cfg), mr
+	return NewStore(srv.Client(t), cfg), srv
 }
 
 func TestRecordAndGet(t *testing.T) {
@@ -96,7 +91,7 @@ func TestIndexCleanupOnTrim(t *testing.T) {
 }
 
 func TestRetentionTrim(t *testing.T) {
-	store, mr := setupAudit(t)
+	store, srv := setupAudit(t)
 	ctx := context.Background()
 	store.cfg.Retention = time.Millisecond * 100
 	store.cfg.MaxEvents = 2
@@ -109,5 +104,5 @@ func TestRetentionTrim(t *testing.T) {
 	if stats["events_indexed"] > 2 {
 		t.Fatalf("expected max_events trim, got %d", stats["events_indexed"])
 	}
-	mr.FastForward(time.Second)
+	srv.FastForward(time.Second)
 }

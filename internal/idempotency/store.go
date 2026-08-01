@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
-	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
@@ -76,7 +76,7 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 	if err != nil {
 		metrics.RecordIdempotencyClaim("error")
 		telemetry.RecordError(span, err)
-		return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 
 	values, ok := result.([]interface{})
@@ -150,7 +150,7 @@ func (s *RedisStore) Complete(ctx context.Context, req CompleteRequest) error {
 
 	if err != nil {
 		telemetry.RecordError(span, err)
-		return fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 
 	values, ok := result.([]interface{})
@@ -187,7 +187,7 @@ func (s *RedisStore) Fail(ctx context.Context, req FailRequest) error {
 
 	if err != nil {
 		telemetry.RecordError(span, err)
-		return fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+		return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 	}
 
 	values, ok := result.([]interface{})
@@ -200,13 +200,12 @@ func (s *RedisStore) Fail(ctx context.Context, req FailRequest) error {
 	return nil
 }
 
-
 // ReadBody reads and restores the request body for fingerprinting and proxying.
 func ReadBody(r *http.Request, maxBytes int64) ([]byte, error) {
 	if r.Body == nil {
 		return nil, nil
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	limited := io.LimitReader(r.Body, maxBytes+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
