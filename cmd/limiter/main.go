@@ -71,9 +71,12 @@ func main() {
 	}
 
 	cbCfg := circuitbreaker.LoadConfigFromEnv()
-	redisCircuit = circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
+	// LocalStore: circuit state for Redis must not live in Redis. Otherwise the
+	// breaker cannot open or fail-fast when Redis is down/slow (L-03 / H-04).
+	redisCircuit = circuitbreaker.NewBreaker(circuitbreaker.NewLocalStore(cbCfg))
 	logging.Info(nil, "Redis circuit breaker enabled",
 		"component", "limiter",
+		"backend", "local",
 		"failure_rate", cbCfg.FailureRateThreshold,
 		"cooldown_ms", cbCfg.OpenCooldownMs,
 	)

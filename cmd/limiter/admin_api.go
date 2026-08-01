@@ -30,7 +30,7 @@ func startAdminServer(cfg Config, store *override.Store, rdb redis.UniversalClie
 	registerLimitRoutes(mux, cfg, store, "global", cfg.GlobalCapacity, cfg.GlobalRefillRate)
 	registerIdempotencyRoutes(mux, cfg, rdb)
 	registerRoutingRoutes(mux, cfg, rdb)
-	registerCircuitRoutes(mux, cfg, rdb)
+	registerCircuitRoutes(mux, cfg, rdb, redisCircuit)
 	registerAuditRoutes(mux, cfg, auditTrail)
 
 	srv := &http.Server{

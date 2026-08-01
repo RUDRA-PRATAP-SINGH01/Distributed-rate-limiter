@@ -42,7 +42,7 @@ type AllowResult struct {
 	RejectionReason   string
 }
 
-// Snapshot is the live circuit state stored in Redis.
+// Snapshot is the live circuit state (local memory or Redis-backed).
 type Snapshot struct {
 	Target              string  `json:"target"`
 	State               State   `json:"state"`

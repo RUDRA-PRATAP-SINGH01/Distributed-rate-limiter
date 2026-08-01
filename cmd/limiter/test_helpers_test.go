@@ -83,7 +83,7 @@ func newTestFixture(t *testing.T, overrideCfg func(*Config)) (*testFixture, func
 	cbCfg := circuitbreaker.DefaultConfig()
 	cbCfg.MinSamples = 2
 	cbCfg.ConsecutiveFailures = 2
-	redisCircuit = circuitbreaker.NewBreaker(circuitbreaker.NewRedisStore(rdb, cbCfg))
+	redisCircuit = circuitbreaker.NewBreaker(circuitbreaker.NewLocalStore(cbCfg))
 
 	auditCfg := audit.DefaultConfig()
 	auditStore = audit.NewStore(rdb, auditCfg)
@@ -261,7 +261,7 @@ func newTestFixture(t *testing.T, overrideCfg func(*Config)) (*testFixture, func
 	registerLimitRoutes(adminMux, cfg, overrideStore, "global", cfg.GlobalCapacity, cfg.GlobalRefillRate)
 	registerIdempotencyRoutes(adminMux, cfg, rdb)
 	registerRoutingRoutes(adminMux, cfg, rdb)
-	registerCircuitRoutes(adminMux, cfg, rdb)
+	registerCircuitRoutes(adminMux, cfg, rdb, redisCircuit)
 	registerAuditRoutes(adminMux, cfg, auditStore)
 
 	adminSrv := httptest.NewServer(adminMux)

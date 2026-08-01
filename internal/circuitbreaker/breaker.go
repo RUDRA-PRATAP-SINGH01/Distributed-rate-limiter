@@ -10,17 +10,30 @@ import (
 
 // Breaker is the high-level circuit breaker API used by services.
 type Breaker struct {
-	store *RedisStore
+	store Store
 	cfg   Config
 }
 
-func NewBreaker(store *RedisStore) *Breaker {
-	return &Breaker{store: store, cfg: store.cfg}
+// NewBreaker wraps a Store. Pass NewLocalStore when protecting Redis (state must
+// not live in Redis). Pass NewRedisStore for fleet-shared targets.
+func NewBreaker(store Store) *Breaker {
+	return &Breaker{store: store, cfg: configOf(store)}
+}
+
+func configOf(store Store) Config {
+	switch s := store.(type) {
+	case *RedisStore:
+		return s.cfg
+	case *LocalStore:
+		return s.cfg
+	default:
+		return DefaultConfig()
+	}
 }
 
 func (b *Breaker) Config() Config { return b.cfg }
 
-func (b *Breaker) Store() *RedisStore { return b.store }
+func (b *Breaker) Store() Store { return b.store }
 
 func (b *Breaker) Allow(ctx context.Context, target string) (AllowResult, error) {
 	return b.store.Allow(ctx, target)

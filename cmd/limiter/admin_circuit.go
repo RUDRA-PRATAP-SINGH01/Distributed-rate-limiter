@@ -10,11 +10,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-func registerCircuitRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalClient) {
-	if rdb == nil {
-		return
+// registerCircuitRoutes exposes circuit state for ops.
+//
+// target=redis is served from redisBreaker (LocalStore) so state remains
+// readable/resettable while Redis is down. Other targets use Redis-backed state.
+func registerCircuitRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalClient, redisBreaker *circuitbreaker.Breaker) {
+	var redisStore *circuitbreaker.RedisStore
+	if rdb != nil {
+		redisStore = circuitbreaker.NewRedisStore(rdb, circuitbreaker.LoadConfigFromEnv())
 	}
-	store := circuitbreaker.NewRedisStore(rdb, circuitbreaker.LoadConfigFromEnv())
 	prefix := "/admin/circuit/"
 
 	mux.HandleFunc("/admin/circuit", func(w http.ResponseWriter, r *http.Request) {
@@ -26,11 +30,30 @@ func registerCircuitRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalCl
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		snaps, err := store.ListTargets(r.Context())
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+
+		var snaps []circuitbreaker.Snapshot
+		if redisBreaker != nil {
+			local, err := redisBreaker.List(r.Context())
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			snaps = append(snaps, local...)
 		}
+		if redisStore != nil {
+			remote, err := redisStore.ListTargets(r.Context())
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			for _, s := range remote {
+				if s.Target == circuitbreaker.TargetRedis {
+					continue // local breaker is authoritative for redis
+				}
+				snaps = append(snaps, s)
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(snaps)
 	})
@@ -50,14 +73,14 @@ func registerCircuitRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalCl
 
 		switch r.Method {
 		case http.MethodGet:
-			snap, err := store.GetState(r.Context(), target)
+			snap, err := getCircuitSnapshot(r, target, redisBreaker, redisStore)
 			if err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
 			json.NewEncoder(w).Encode(snap)
 		case http.MethodDelete:
-			if err := store.Reset(r.Context(), target); err != nil {
+			if err := resetCircuit(r, target, redisBreaker, redisStore); err != nil {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
@@ -71,4 +94,24 @@ func registerCircuitRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalCl
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+}
+
+func getCircuitSnapshot(r *http.Request, target string, redisBreaker *circuitbreaker.Breaker, redisStore *circuitbreaker.RedisStore) (circuitbreaker.Snapshot, error) {
+	if target == circuitbreaker.TargetRedis && redisBreaker != nil {
+		return redisBreaker.GetState(r.Context(), target)
+	}
+	if redisStore == nil {
+		return circuitbreaker.Snapshot{Target: target, State: circuitbreaker.StateClosed}, nil
+	}
+	return redisStore.GetState(r.Context(), target)
+}
+
+func resetCircuit(r *http.Request, target string, redisBreaker *circuitbreaker.Breaker, redisStore *circuitbreaker.RedisStore) error {
+	if target == circuitbreaker.TargetRedis && redisBreaker != nil {
+		return redisBreaker.Reset(r.Context(), target)
+	}
+	if redisStore == nil {
+		return nil
+	}
+	return redisStore.Reset(r.Context(), target)
 }
