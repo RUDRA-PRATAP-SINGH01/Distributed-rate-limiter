@@ -61,7 +61,7 @@ func (tb *RedisTokenBucket) Allow(userID string) (bool, int, error) {
 	}
 
 	tb.rdb.HSet(ctx, key, "tokens", newTokens, "last_refill", now.Unix())
-	tb.rdb.Expire(ctx, key, 1*time.Hour)
+	tb.rdb.Expire(ctx, key, time.Duration(bucketTTLSeconds(tb.capacity, tb.refillRate))*time.Second)
 
 	return allowed, int(newTokens), nil
 }

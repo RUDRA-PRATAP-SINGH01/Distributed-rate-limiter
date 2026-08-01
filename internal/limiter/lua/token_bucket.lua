@@ -3,12 +3,29 @@
 -- ARGV[2] = refill_rate (tokens per second)
 -- ARGV[3] = current timestamp (milliseconds)
 -- ARGV[4] = requested tokens (always 1)
+--
+-- TTL = ceil(capacity / refill_rate), clamped to [1, 86400].
+-- Idle keys expire once a full empty→full refill window has passed (L-02).
 
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local refill_rate = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
 local requested = tonumber(ARGV[4])
+
+local function bucket_ttl_sec(cap, rate)
+    if cap == nil or rate == nil or rate <= 0 then
+        return 1
+    end
+    local t = math.ceil(cap / rate)
+    if t < 1 then
+        t = 1
+    end
+    if t > 86400 then
+        t = 86400
+    end
+    return t
+end
 
 -- Get current bucket state
 local bucket = redis.call('HMGET', key, 'tokens', 'last_refill')
@@ -42,6 +59,6 @@ end
 
 -- Write back
 redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill', now)
-redis.call('EXPIRE', key, 3600)
+redis.call('EXPIRE', key, bucket_ttl_sec(capacity, refill_rate))
 
 return {allowed, remaining}
