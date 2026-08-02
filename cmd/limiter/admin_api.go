@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/audit"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/override"
 	"github.com/redis/go-redis/v9"
@@ -82,7 +83,7 @@ func handleLimitOverride(
 	level, id string,
 	defaultCfg override.Config,
 ) {
-	if r.Header.Get("X-API-Key") != apiKey {
+	if !auth.SecureCompare(r.Header.Get(auth.APIKeyHeader), apiKey) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -91,7 +92,7 @@ func handleLimitOverride(
 
 	switch r.Method {
 	case http.MethodGet:
-		cfg, found := getOverrideByLevel(store, level, id)
+		cfg, found := getOverrideByLevel(r.Context(), store, level, id)
 		if !found {
 			cfg = defaultCfg
 			w.Header().Set("X-Override-Applied", "false")
@@ -112,7 +113,7 @@ func handleLimitOverride(
 		if newCfg.RefillRate <= 0 {
 			newCfg.RefillRate = defaultCfg.RefillRate
 		}
-		if err := store.SetOverride(level, id, newCfg); err != nil {
+		if err := store.SetOverride(r.Context(), level, id, newCfg); err != nil {
 			logging.Error(r.Context(), "admin set override failed",
 				"component", "admin",
 				"action", "set_override",
@@ -131,7 +132,7 @@ func handleLimitOverride(
 		)
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodDelete:
-		if err := store.DeleteOverride(level, id); err != nil {
+		if err := store.DeleteOverride(r.Context(), level, id); err != nil {
 			logging.Error(r.Context(), "admin delete override failed",
 				"component", "admin",
 				"action", "delete_override",
@@ -152,16 +153,16 @@ func handleLimitOverride(
 	}
 }
 
-func getOverrideByLevel(store *override.Store, level, id string) (override.Config, bool) {
+func getOverrideByLevel(ctx context.Context, store *override.Store, level, id string) (override.Config, bool) {
 	switch level {
 	case "global":
-		return store.GetGlobalOverride()
+		return store.GetGlobalOverride(ctx)
 	case "user":
-		return store.GetUserOverride(id)
+		return store.GetUserOverride(ctx, id)
 	case "tenant":
-		return store.GetTenantOverride(id)
+		return store.GetTenantOverride(ctx, id)
 	case "endpoint":
-		return store.GetEndpointOverride(parseEndpointOverrideTenant(id), parseEndpointOverridePath(id))
+		return store.GetEndpointOverride(ctx, parseEndpointOverrideTenant(id), parseEndpointOverridePath(id))
 	default:
 		return override.Config{}, false
 	}
@@ -170,25 +171,25 @@ func getOverrideByLevel(store *override.Store, level, id string) (override.Confi
 // effectiveHierarchicalLimits merges static env defaults with Redis overrides.
 // Each level is evaluated independently in Lua; this function only supplies the numbers.
 func effectiveHierarchicalLimits(ctx context.Context, cfg Config, store *override.Store, tenantID, userID, endpoint string) ([]int, []float64) {
-	if store != nil {
-		store.RefreshGeneration(ctx)
-	}
 	globalCap, globalRate := cfg.GlobalCapacity, cfg.GlobalRefillRate
 	tenantCap, tenantRate := cfg.TenantCapacity, cfg.TenantRefillRate
 	userCap, userRate := cfg.UserCapacity, cfg.UserRefillRate
 	endpointCap, endpointRate := cfg.EndpointCapacity, cfg.EndpointRefillRate
 
-	if ov, ok := store.GetGlobalOverride(); ok {
-		globalCap, globalRate = ov.Capacity, ov.RefillRate
-	}
-	if ov, ok := store.GetTenantOverride(tenantID); ok {
-		tenantCap, tenantRate = ov.Capacity, ov.RefillRate
-	}
-	if ov, ok := store.GetUserOverride(userID); ok {
-		userCap, userRate = ov.Capacity, ov.RefillRate
-	}
-	if ov, ok := store.GetEndpointOverride(tenantID, endpoint); ok {
-		endpointCap, endpointRate = ov.Capacity, ov.RefillRate
+	if store != nil {
+		store.RefreshGeneration(ctx)
+		if ov, ok := store.GetGlobalOverride(ctx); ok {
+			globalCap, globalRate = ov.Capacity, ov.RefillRate
+		}
+		if ov, ok := store.GetTenantOverride(ctx, tenantID); ok {
+			tenantCap, tenantRate = ov.Capacity, ov.RefillRate
+		}
+		if ov, ok := store.GetUserOverride(ctx, userID); ok {
+			userCap, userRate = ov.Capacity, ov.RefillRate
+		}
+		if ov, ok := store.GetEndpointOverride(ctx, tenantID, endpoint); ok {
+			endpointCap, endpointRate = ov.Capacity, ov.RefillRate
+		}
 	}
 
 	return []int{globalCap, tenantCap, userCap, endpointCap},

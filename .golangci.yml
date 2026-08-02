@@ -13,9 +13,9 @@ linters:
     # out to a limiter and an upstream on every request.
     - bodyclose
     # noctx catches outbound calls that drop the request deadline. contextcheck
-    # is deliberately NOT enabled: on this codebase roughly half its reports are
-    # false positives on handlers that do pass r.Context(), and the one genuine
-    # instance (override.getOverride) is tracked as audit finding M-02.
+    # is deliberately NOT enabled: it false-positives on handlers that already
+    # pass r.Context(). M-02 (override.getOverride using context.Background)
+    # is resolved by threading ctx through the override store.
     - noctx
     # Rate-limit arithmetic is float and integer math; silent truncation or
     # overflow in a quota calculation is a correctness bug, not a style nit.

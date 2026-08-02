@@ -48,20 +48,20 @@ func (s *Store) key(level, id string) string {
 	return fmt.Sprintf("config:%s:%s", level, id)
 }
 
-func (s *Store) GetGlobalOverride() (Config, bool) {
-	return s.getOverride("global", "default")
+func (s *Store) GetGlobalOverride(ctx context.Context) (Config, bool) {
+	return s.getOverride(ctx, "global", "default")
 }
 
-func (s *Store) GetUserOverride(userID string) (Config, bool) {
-	return s.getOverride("user", userID)
+func (s *Store) GetUserOverride(ctx context.Context, userID string) (Config, bool) {
+	return s.getOverride(ctx, "user", userID)
 }
 
-func (s *Store) GetTenantOverride(tenantID string) (Config, bool) {
-	return s.getOverride("tenant", tenantID)
+func (s *Store) GetTenantOverride(ctx context.Context, tenantID string) (Config, bool) {
+	return s.getOverride(ctx, "tenant", tenantID)
 }
 
-func (s *Store) GetEndpointOverride(tenantID, endpoint string) (Config, bool) {
-	return s.getOverride("endpoint", EndpointOverrideID(tenantID, endpoint))
+func (s *Store) GetEndpointOverride(ctx context.Context, tenantID, endpoint string) (Config, bool) {
+	return s.getOverride(ctx, "endpoint", EndpointOverrideID(tenantID, endpoint))
 }
 
 // EndpointOverrideID scopes endpoint limits per tenant — two tenants can share a path
@@ -92,7 +92,10 @@ func (s *Store) RefreshGeneration(ctx context.Context) {
 	metrics.RecordOverrideCacheInvalidation()
 }
 
-func (s *Store) getOverride(level, id string) (Config, bool) {
+// getOverride loads an override level from cache or Redis.
+// On cache miss with a cancelled context or Redis timeout/error, it returns
+// (Config{}, false) so the caller safely falls back to static defaults (M-02).
+func (s *Store) getOverride(ctx context.Context, level, id string) (Config, bool) {
 	key := s.key(level, id)
 
 	if val, ok := s.cache.Load(key); ok {
@@ -103,7 +106,6 @@ func (s *Store) getOverride(level, id string) (Config, bool) {
 		s.cache.Delete(key)
 	}
 
-	ctx := context.Background()
 	data, err := s.rdb.HGetAll(ctx, key).Result()
 	if err != nil || len(data) == 0 {
 		return Config{}, false
@@ -116,9 +118,8 @@ func (s *Store) getOverride(level, id string) (Config, bool) {
 	return cfg, true
 }
 
-func (s *Store) SetOverride(level, id string, cfg Config) error {
+func (s *Store) SetOverride(ctx context.Context, level, id string, cfg Config) error {
 	key := s.key(level, id)
-	ctx := context.Background()
 	pipe := s.rdb.Pipeline()
 	pipe.HSet(ctx, key, "capacity", cfg.Capacity, "refill_rate", cfg.RefillRate)
 	incr := pipe.Incr(ctx, generationKey)
@@ -132,9 +133,8 @@ func (s *Store) SetOverride(level, id string, cfg Config) error {
 	return nil
 }
 
-func (s *Store) DeleteOverride(level, id string) error {
+func (s *Store) DeleteOverride(ctx context.Context, level, id string) error {
 	key := s.key(level, id)
-	ctx := context.Background()
 	pipe := s.rdb.Pipeline()
 	pipe.Del(ctx, key)
 	incr := pipe.Incr(ctx, generationKey)
