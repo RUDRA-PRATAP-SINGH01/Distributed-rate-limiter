@@ -8,7 +8,7 @@ Production path: `RedisAtomicTokenBucket` in `internal/limiter/redis_atomic_toke
 
 ## Why the problem exists
 
-Token bucket state is a pair of numbers (`tokens`, `last_refill`) that change together every request. Splitting that across Go goroutines or multiple Redis commands creates a classic read-modify-write race. I prototyped the non-atomic path in `internal/limiter/redis_token_bucket.go`; load tests showed occasional over-admission. The comment on `RedisAtomicTokenBucket` documents why Lua replaced it.
+Token bucket state is a pair of numbers (`tokens`, `last_refill`) that change together every request. Splitting that across Go goroutines or multiple Redis commands creates a classic read-modify-write race. An early non-atomic Go prototype was eliminated (H-03), and production strictly uses `RedisAtomicTokenBucket` with Lua.
 
 Refill math also needs sub-second precision for fairness: fractional tokens accumulate in Redis as floats; `math.floor()` applies only to the allow/deny comparison and the returned `remaining`, not to the stored balance (`redis_atomic_token_bucket_test.go`, Suite 1C).
 
@@ -18,7 +18,7 @@ Refill math also needs sub-second precision for fairness: fractional tokens accu
 |------|----------------|
 | One atomic round-trip | Single `EVAL` via `redis.NewScript` |
 | Key isolation | `rate:{userID}` per identity (`fmt.Sprintf("rate:%s", userID)`) |
-| Millisecond refill | `time.Now().UnixMilli()` passed as ARGV[3] |
+| Millisecond refill | `redis.call('TIME')` in Lua; ARGV[3] is ignored (rolling-deploy compat) |
 | Denied = no deduct | Script compares `floor(new_tokens) >= requested` before subtracting |
 | Memory hygiene | `EXPIRE key 3600` on every write |
 | Observable | `metrics.RecordRedisDuration` after each script |
@@ -27,7 +27,7 @@ Refill math also needs sub-second precision for fairness: fractional tokens accu
 
 | Approach | Verdict |
 |----------|---------|
-| Go GET → compute → SET | Race under concurrency — reference only (`redis_token_bucket.go`) |
+| Go GET → compute → SET | Race under concurrency — rejected and removed (H-03) |
 | Redis INCR without refill | No smooth refill; fixed-window semantics |
 | MULTI/EXEC without Lua | Last writer wins under contention |
 | Per-sidecar in-memory bucket | Effective limit multiplies by replica count |
@@ -44,14 +44,14 @@ Lua on the Redis primary is the production default.
 KEYS[1]  = rate:{id}
 ARGV[1]  = capacity
 ARGV[2]  = refill_rate (tokens/second)
-ARGV[3]  = now (milliseconds)
+ARGV[3]  = client now (ms) — unused; Lua uses redis.call('TIME')
 ARGV[4]  = requested (always 1)
 ```
 
 **Algorithm steps:**
 
 1. `HMGET tokens,last_refill` — first visit initializes to full `capacity`.
-2. `elapsed = (now - last_refill) / 1000.0`; clamp negative skew to 0.
+2. `elapsed = (redis_now - last_refill) / 1000.0`; clamp negative skew to 0.
 3. `new_tokens = min(capacity, tokens + elapsed * refill_rate)`.
 4. If `floor(new_tokens) >= requested`: deduct, `allowed = 1`; else `allowed = 0`.
 5. `HMSET` + `EXPIRE 3600`; return `{allowed, remaining}`.
