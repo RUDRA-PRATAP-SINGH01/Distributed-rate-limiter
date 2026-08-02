@@ -382,13 +382,11 @@ flowchart TD
 
 **When I use this:** When I want smooth refill — "10 tokens, refill 1 per second." Allows bursts up to capacity, then steady rate.
 
-Set `ALGORITHM=token` to use this.
+### 5. Atomic Token Bucket (Production Architecture)
 
-### 5. Non-Atomic Redis Token Bucket (Intentionally Broken)
+Production uses `RedisAtomicTokenBucket` (`internal/limiter/redis_atomic_token_bucket.go` with embedded `lua/token_bucket.lua`). 
 
-Location: `internal/limiter/redis_token_bucket.go`
-
-This uses separate `HGET`/`HSET` calls without Lua. I keep it in the codebase as a demonstration of why atomicity matters — the race condition is visible under concurrent load. See `tests/legacy/race_demo.go`.
+An early naive non-atomic prototype (separate `HGET`/`HSET` commands) suffered from lost updates and over-admission under concurrent load. It was removed (H-03) in favor of the atomic single-EVAL Lua implementation.
 
 ---
 
@@ -834,11 +832,12 @@ docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up --
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REDIS_MODE` | `standalone` | `standalone` or `sentinel` |
-| `REDIS_ADDR` | `localhost:6379` | Standalone address |
+| `REDIS_MODE` | `standalone` | `standalone`, `sentinel`, or `cluster` |
+| `REDIS_ADDR` | `localhost:6379` | Standalone address or cluster seed address |
 | `REDIS_MASTER_NAME` | `mymaster` | Sentinel master name |
-| `REDIS_SENTINEL_ADDRS` | — | Comma-separated sentinel hosts |
-| `REDIS_PASSWORD` | — | Master/replica password |
+| `REDIS_SENTINEL_ADDRS` | — | Comma-separated sentinel hosts (`s1:26379,s2:26379`) |
+| `REDIS_CLUSTER_ADDRS` | — | Comma-separated cluster nodes (`c1:6379,c2:6379`). Note: Cluster requires `ENABLE_HIERARCHICAL=false`. |
+| `REDIS_PASSWORD` | — | Master/replica/cluster password |
 | `REDIS_SENTINEL_PASSWORD` | same as password | Sentinel auth |
 
 ### Health & Observability

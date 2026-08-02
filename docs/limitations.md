@@ -10,7 +10,7 @@ Authoritative list of what this system **does not** guarantee.
 |------------|--------|----------|
 | Single Redis master | All quota, idempotency, CB, routing, audit indexes share one Redis process in default Compose | SOURCE-PROVEN |
 | Throughput knee | ~870–872 actual RPS sustainable end-to-end on tested laptop (i9-14900HX, Docker) | BENCHMARK-PROVEN |
-| Redis Cluster | Hierarchical Lua touches up to **four keys** atomically — **not** Cluster hash-tag safe | SOURCE-PROVEN |
+| Redis Cluster | Multi-key hierarchical Lua is unsupported on Redis Cluster (CROSSSLOT); refused fast at boot when `ENABLE_HIERARCHICAL=true`. Flat `/check` is Cluster-safe (audit multi-key index appends also require single-slot). | SOURCE-PROVEN |
 | Linear multi-replica scale | Two replicas proven for correctness, not throughput linearity | RUNTIME-PROVEN |
 
 ---
