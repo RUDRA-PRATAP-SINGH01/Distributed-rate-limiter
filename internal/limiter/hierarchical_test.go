@@ -435,3 +435,63 @@ func TestHierarchical_ContextCancellation(t *testing.T) {
 		}
 	}
 }
+
+// ── Suite 3I: Server Time Source (M-01) ──────────────────────────────────────
+// Redis TIME must drive hierarchical refill, independent of Go process wall-clock.
+
+func TestHierarchical_UsesRedisTimeNotClientClock(t *testing.T) {
+	if isRealRedis {
+		t.Skip("SetTime not available on real Redis")
+	}
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mr.SetTime(t0)
+
+	hl := NewHierarchicalLimiter(rdb, 10, 10, 5, 10, 10.0, 10.0, 1.0, 10.0) // User level bottleneck: cap=5, rate=1.0
+	keys := []string{"hier:time:global", "hier:time:tenant", "hier:time:user", "hier:time:endpoint"}
+
+	// Exhaust user bottleneck (5 requests).
+	for i := 0; i < 5; i++ {
+		ok, _, err := hl.Allow(context.Background(), keys[0], keys[1], keys[2], keys[3])
+		if err != nil {
+			t.Fatalf("request %d: %v", i+1, err)
+		}
+		if !ok {
+			t.Fatalf("request %d should be allowed", i+1)
+		}
+	}
+	ok, _, err := hl.Allow(context.Background(), keys[0], keys[1], keys[2], keys[3])
+	if err != nil {
+		t.Fatalf("6th request: %v", err)
+	}
+	if ok {
+		t.Fatal("6th request should be denied (user level exhausted)")
+	}
+
+	// Advance Redis time by 2 seconds -> user level gets 2 tokens refilled.
+	mr.SetTime(t0.Add(2 * time.Second))
+
+	for i := 0; i < 2; i++ {
+		ok, _, err := hl.Allow(context.Background(), keys[0], keys[1], keys[2], keys[3])
+		if err != nil {
+			t.Fatalf("post-refill request %d: %v", i+1, err)
+		}
+		if !ok {
+			t.Fatalf("post-refill request %d should be allowed", i+1)
+		}
+	}
+	ok, _, err = hl.Allow(context.Background(), keys[0], keys[1], keys[2], keys[3])
+	if err != nil {
+		t.Fatalf("3rd post-refill request: %v", err)
+	}
+	if ok {
+		t.Fatal("3rd post-refill request should be denied (only 2 refilled)")
+	}
+}

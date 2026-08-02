@@ -1,22 +1,26 @@
 -- KEYS[1] = user key (e.g., "sw:user123")
--- ARGV[1] = current timestamp (milliseconds)
--- ARGV[2] = window start (milliseconds)
+-- ARGV[1] = client timestamp (milliseconds) — not used as `now`
+-- ARGV[2] = client window start (milliseconds) — not used as windowStart
 -- ARGV[3] = limit (max requests per window)
 -- ARGV[4] = key TTL in seconds (at least 1; derived from window duration)
 -- ARGV[5] = unique member id
 --
+-- Time source: redis.call('TIME') on the primary (M-01). ARGV[1] and ARGV[2]
+-- were computed from one Go clock in a single call, so their difference is the
+-- configured window duration (clock-skew free). Old binaries keep working
+-- without an extra ARGV slot.
 -- Returns {allowed, remaining, retry_after_ms}. This is a sliding log, not a
 -- fixed window: there is no shared reset instant, so on denial the wait is the
 -- time until the OLDEST in-window entry ages out, never the full window.
 
 local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local windowStart = tonumber(ARGV[2])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local windowMs = tonumber(ARGV[1]) - tonumber(ARGV[2])
+local windowStart = now - windowMs
 local limit = tonumber(ARGV[3])
 local windowSec = tonumber(ARGV[4])
 local member = ARGV[5]
-
-local windowMs = now - windowStart
 
 redis.call('ZREMRANGEBYSCORE', key, 0, windowStart)
 local count = redis.call('ZCARD', key)

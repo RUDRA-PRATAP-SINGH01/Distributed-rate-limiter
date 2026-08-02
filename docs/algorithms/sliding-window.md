@@ -46,18 +46,20 @@ Unique member IDs (`fmt.Sprintf("%d:%s", now, uuid.NewString())`) plus Lua atomi
 
 ```
 KEYS[1]  = sw:{id}
-ARGV[1]  = now (ms)
-ARGV[2]  = windowStart = now - window_ms
+ARGV[1]  = client now (ms) — not used as `now`
+ARGV[2]  = client windowStart (ms) — not used as windowStart
 ARGV[3]  = limit
 ARGV[4]  = expireSec (≥ 1)
 ARGV[5]  = unique member id
 ```
 
+Lua takes `now` from `redis.call('TIME')` on the primary so replica clocks cannot over/under-grant the window. ARGV[1] and ARGV[2] stay a same-Go-clock pair so their difference is the configured window duration without adding a sixth ARGV slot (rolling-deploy compatible). `windowStart = redis_now - (ARGV[1] - ARGV[2])`.
+
 **Algorithm steps:**
 
 1. `ZREMRANGEBYSCORE key 0 windowStart` — evict events at or before window start (inclusive lower bound).
 2. `count = ZCARD key`.
-3. If `count < limit`: `ZADD`, `EXPIRE`, return `{1, limit - count - 1, 0}`.
+3. If `count < limit`: `ZADD` with Redis TIME as the score, `EXPIRE`, return `{1, limit - count - 1, 0}`.
 4. Else: read the oldest member with `ZRANGE key 0 0 WITHSCORES` and return `{0, 0, retry_after_ms}` (no ZADD on deny), where `retry_after_ms = ceil(oldest_score + window_ms - now)`, floored at 1.
 5. When the ZSET is empty on a denial — only reachable with a misconfigured `limit <= 0` — `retry_after_ms` is `0`, meaning "no hint".
 

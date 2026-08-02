@@ -64,6 +64,8 @@ func (rw *RedisSlidingWindow) AllowWithRetryAfter(ctx context.Context, userID st
 	}
 
 	start := time.Now()
+	// ARGV[1]/[2] stay a same-clock (now, windowStart) pair so Lua can take
+	// their difference as the window duration. Lua's `now` comes from TIME.
 	result, err := rw.script.Run(ctx, rw.rdb, []string{key},
 		now,
 		windowStart,

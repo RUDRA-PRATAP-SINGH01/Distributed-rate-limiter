@@ -1,15 +1,19 @@
 -- KEYS[1..4]: global_key, tenant_key, user_key, endpoint_key
 -- ARGV[1..4]: capacities (global, tenant, user, endpoint)
 -- ARGV[5..8]: refill_rates (global, tenant, user, endpoint)
--- ARGV[9]: current timestamp (milliseconds)
+-- ARGV[9]: current timestamp (milliseconds) — IGNORED, kept for rolling-deploy compat
 -- ARGV[10]: requested tokens (always 1)
 --
+-- Time source: redis.call('TIME') on the primary (M-01).
+-- ARGV[9] is accepted but unused so old binaries don't break during deploys.
 -- Per-level TTL = ceil(capacity / refill_rate), clamped to [1, 86400] (L-02).
 
 local levels = 4
 local allowed = 1
 local min_remaining = math.huge
-local now = tonumber(ARGV[9])
+-- ARGV[9] deliberately ignored (legacy client timestamp).
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local requested = tonumber(ARGV[10])
 
 local function bucket_ttl_sec(cap, rate)

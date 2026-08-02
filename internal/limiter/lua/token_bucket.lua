@@ -1,16 +1,20 @@
 -- KEYS[1] = user key (e.g., "rate:user123")
 -- ARGV[1] = capacity
 -- ARGV[2] = refill_rate (tokens per second)
--- ARGV[3] = current timestamp (milliseconds)
+-- ARGV[3] = current timestamp (milliseconds) — IGNORED, kept for rolling-deploy compat
 -- ARGV[4] = requested tokens (always 1)
 --
+-- Time source: redis.call('TIME') on the primary (M-01).
+-- ARGV[3] is accepted but unused so old binaries don't break during deploys.
 -- TTL = ceil(capacity / refill_rate), clamped to [1, 86400].
 -- Idle keys expire once a full empty→full refill window has passed (L-02).
 
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local refill_rate = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
+-- ARGV[3] deliberately ignored (legacy client timestamp).
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local requested = tonumber(ARGV[4])
 
 local function bucket_ttl_sec(cap, rate)

@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -396,4 +397,66 @@ func TestSlidingWindow_PropertyActiveCountNeverExceedsLimit(t *testing.T) {
 	}
 
 	_ = rdb
+}
+
+// ── Suite 2J: Server Time Source (M-01) ──────────────────────────────────────
+// Redis TIME must drive sliding window eviction, independent of Go process wall-clock.
+
+func TestSlidingWindow_UsesRedisTimeNotClientClock(t *testing.T) {
+	if isRealRedis {
+		t.Skip("SetTime not available on real Redis")
+	}
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mr.SetTime(t0)
+
+	const limit = 3
+	window := 5 * time.Second
+	sw := NewRedisSlidingWindow(rdb, limit, window)
+	uid := "sw-time-test"
+
+	// Exhaust window at t0 (3 requests).
+	for i := 0; i < limit; i++ {
+		ok, _, err := sw.Allow(context.Background(), uid)
+		if err != nil {
+			t.Fatalf("request %d: %v", i+1, err)
+		}
+		if !ok {
+			t.Fatalf("request %d should be allowed", i+1)
+		}
+	}
+	ok, _, err := sw.Allow(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("4th request: %v", err)
+	}
+	if ok {
+		t.Fatal("4th request should be denied (window full)")
+	}
+
+	// Advance Redis time past the window (6 seconds) -> all 3 entries age out.
+	mr.SetTime(t0.Add(6 * time.Second))
+
+	for i := 0; i < limit; i++ {
+		ok, _, err := sw.Allow(context.Background(), uid)
+		if err != nil {
+			t.Fatalf("post-window request %d: %v", i+1, err)
+		}
+		if !ok {
+			t.Fatalf("post-window request %d should be allowed", i+1)
+		}
+	}
+	ok, _, err = sw.Allow(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("4th post-window request: %v", err)
+	}
+	if ok {
+		t.Fatal("4th post-window request should be denied (window full again)")
+	}
 }

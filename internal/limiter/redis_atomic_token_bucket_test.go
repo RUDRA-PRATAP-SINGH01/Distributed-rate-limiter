@@ -647,3 +647,64 @@ func TestTokenBucket_PropertyStoredTokensBounded(t *testing.T) {
 		}
 	}
 }
+
+// ── Suite 1M: Server Time Source (M-01) ──────────────────────────────────────
+// Redis TIME must drive token refill, independent of Go process wall-clock.
+
+func TestTokenBucket_UsesRedisTimeNotClientClock(t *testing.T) {
+	if isRealRedis {
+		t.Skip("SetTime not available on real Redis")
+	}
+	// Use an isolated miniredis instance to avoid mutating the shared clock.
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mr.SetTime(t0)
+
+	tb := NewRedisAtomicTokenBucket(rdb, 5, 1.0) // 5 capacity, 1.0 token/s
+	uid := "redis-time-test"
+
+	// Exhaust all 5 tokens at t0.
+	for i := 0; i < 5; i++ {
+		ok, _, err := tb.Allow(context.Background(), uid)
+		if err != nil {
+			t.Fatalf("request %d: %v", i+1, err)
+		}
+		if !ok {
+			t.Fatalf("request %d should be allowed", i+1)
+		}
+	}
+	ok, _, err := tb.Allow(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("6th request: %v", err)
+	}
+	if ok {
+		t.Fatal("6th request should be denied (bucket exhausted)")
+	}
+
+	// Advance Redis time by 3 seconds — exactly 3 tokens should refill.
+	mr.SetTime(t0.Add(3 * time.Second))
+
+	for i := 0; i < 3; i++ {
+		ok, _, err := tb.Allow(context.Background(), uid)
+		if err != nil {
+			t.Fatalf("post-refill request %d: %v", i+1, err)
+		}
+		if !ok {
+			t.Fatalf("post-refill request %d should be allowed", i+1)
+		}
+	}
+	ok, _, err = tb.Allow(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("4th post-refill request: %v", err)
+	}
+	if ok {
+		t.Fatal("4th post-refill request should be denied (only 3 refilled)")
+	}
+}
