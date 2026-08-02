@@ -8,9 +8,9 @@ Redis is this system's **authoritative coordination layer** — quota, idempoten
 
 | Concern | Implementation |
 |---------|----------------|
-| Modes | `standalone` (default) or `sentinel` (`FailoverClient`) |
+| Modes | `standalone` (default), `sentinel` (`FailoverClient`), or `cluster` (`ClusterClient`, single-key paths) |
 | Pool | `PoolSize=100`, `MinIdleConns=10` (defaults) |
-| Config | `LoadConfigFromEnv()` — `REDIS_MODE`, `REDIS_ADDR`, `REDIS_SENTINEL_ADDRS`, `REDIS_MASTER_NAME`, … |
+| Config | `LoadConfigFromEnv()` — `REDIS_MODE`, `REDIS_ADDR`, `REDIS_SENTINEL_ADDRS`, `REDIS_CLUSTER_ADDRS`, `REDIS_MASTER_NAME`, … |
 | Health | `Ping()`, `Describe()` |
 | Shutdown | `Close()` — limiter sidecar ordering after audit drain |
 

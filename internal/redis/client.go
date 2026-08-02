@@ -1,4 +1,4 @@
-// Package redis is the client factory with standalone and Sentinel failover support.
+// Package redis is the client factory with standalone, Sentinel, and Cluster support.
 package redis
 
 import (
@@ -19,8 +19,9 @@ func NewClient(addr, password string) redis.UniversalClient {
 	return New(cfg)
 }
 
-// New returns a UniversalClient for standalone or Sentinel mode.
+// New returns a UniversalClient for standalone, Sentinel, or Cluster mode.
 // FailoverClient handles master election, replica promotion, and automatic reconnection.
+// ClusterClient manages multi-node shard routing (supported for single-key paths).
 func New(cfg Config) redis.UniversalClient {
 	pool := cfg.PoolSize
 	if pool <= 0 {
@@ -52,7 +53,20 @@ func New(cfg Config) redis.UniversalClient {
 		}
 		applyFailoverTimeouts(opts, timeouts)
 		return redis.NewFailoverClient(opts)
-	default:
+	case ModeCluster:
+		clusterAddrs := cfg.ClusterAddrs
+		if len(clusterAddrs) == 0 {
+			clusterAddrs = []string{cfg.Addr}
+		}
+		opts := &redis.ClusterOptions{
+			Addrs:        clusterAddrs,
+			Password:     cfg.Password,
+			PoolSize:     pool,
+			MinIdleConns: minIdle,
+		}
+		applyClusterTimeouts(opts, timeouts)
+		return redis.NewClusterClient(opts)
+	case ModeStandalone, "":
 		opts := &redis.Options{
 			Addr:         cfg.Addr,
 			Password:     cfg.Password,
@@ -62,6 +76,8 @@ func New(cfg Config) redis.UniversalClient {
 		}
 		applyStandaloneTimeouts(opts, timeouts)
 		return redis.NewClient(opts)
+	default:
+		panic(fmt.Sprintf("unknown REDIS_MODE=%q: supported modes are %q, %q, %q", cfg.Mode, ModeStandalone, ModeSentinel, ModeCluster))
 	}
 }
 
@@ -87,6 +103,16 @@ func applyFailoverTimeouts(opts *redis.FailoverOptions, t ClientTimeouts) {
 	opts.MaxRetryBackoff = -1
 }
 
+func applyClusterTimeouts(opts *redis.ClusterOptions, t ClientTimeouts) {
+	opts.DialTimeout = t.DialTimeout
+	opts.ReadTimeout = t.ReadTimeout
+	opts.WriteTimeout = t.WriteTimeout
+	opts.PoolTimeout = t.PoolTimeout
+	opts.MaxRetries = goRedisMaxRetries(t.MaxRetries)
+	opts.MinRetryBackoff = -1
+	opts.MaxRetryBackoff = -1
+}
+
 func Ping(client redis.UniversalClient) error {
 	return client.Ping(Ctx).Err()
 }
@@ -96,6 +122,12 @@ func Describe(cfg Config) string {
 	switch cfg.Mode {
 	case ModeSentinel:
 		return fmt.Sprintf("sentinel master=%s sentinels=[%s]", cfg.MasterName, strings.Join(cfg.SentinelAddrs, ","))
+	case ModeCluster:
+		addrs := cfg.ClusterAddrs
+		if len(addrs) == 0 {
+			addrs = []string{cfg.Addr}
+		}
+		return fmt.Sprintf("cluster addrs=[%s]", strings.Join(addrs, ","))
 	default:
 		return fmt.Sprintf("standalone addr=%s", cfg.Addr)
 	}

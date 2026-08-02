@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+
+	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 )
 
 func TestConfig_StrictSecurityMissingInternalKey(t *testing.T) {
@@ -72,5 +74,20 @@ func TestConfig_StrictConfigMalformedParam(t *testing.T) {
 		}
 	} else {
 		t.Fatalf("expected ExitError, got %v", err)
+	}
+}
+
+func TestHierarchicalAllowedOn_RejectsCluster(t *testing.T) {
+	err := hierarchicalAllowedOn(redisclient.ModeCluster)
+	if err == nil {
+		t.Fatal("expected error for hierarchical limiting on ModeCluster, got nil")
+	}
+}
+
+func TestHierarchicalAllowedOn_AllowsStandaloneAndSentinel(t *testing.T) {
+	for _, mode := range []redisclient.Mode{redisclient.ModeStandalone, redisclient.ModeSentinel, ""} {
+		if err := hierarchicalAllowedOn(mode); err != nil {
+			t.Errorf("expected nil error for mode %q, got: %v", mode, err)
+		}
 	}
 }

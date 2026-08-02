@@ -872,6 +872,9 @@ func main() {
 }
 
 func connectSidecarRedis(otelCfg telemetry.Config, cfg redisclient.Config) redis.UniversalClient {
+	if err := cfg.Validate(); err != nil {
+		logging.Fatal("Invalid Redis configuration", "error", err)
+	}
 	if cfg.Mode == redisclient.ModeStandalone && cfg.Addr == "" {
 		logging.Fatal("REDIS_ADDR is required when ENABLE_IDEMPOTENCY or ENABLE_ROUTING is true")
 	}

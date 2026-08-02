@@ -127,18 +127,20 @@ See `internal/routing/config.go` for full routing tunables.
 
 ## Shared Redis (`internal/redis/config.go`)
 
-| Variable | Default |
-|----------|---------|
-| `REDIS_MODE` | `standalone` |
-| `REDIS_SENTINEL_ADDRS` | comma-separated |
-| `REDIS_MASTER_NAME` | `mymaster` |
-| `REDIS_DB` | `0` |
-| `REDIS_DIAL_TIMEOUT_MS` | `500` |
-| `REDIS_READ_TIMEOUT_MS` | `500` |
-| `REDIS_WRITE_TIMEOUT_MS` | `500` |
-| `REDIS_POOL_TIMEOUT_MS` | `1000` |
-| `REDIS_DIALER_RETRIES` | `1` |
-| `REDIS_MAX_RETRIES` | `0` (disabled) |
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `REDIS_MODE` | `standalone` | `standalone`, `sentinel`, or `cluster` (fails fast on invalid modes) |
+| `REDIS_ADDR` | `localhost:6379` | Standalone host:port or cluster seed address |
+| `REDIS_SENTINEL_ADDRS` | — | Comma-separated Sentinel endpoints (`s1:26379,s2:26379`) |
+| `REDIS_CLUSTER_ADDRS` | — | Comma-separated Cluster endpoints (`c1:6379,c2:6379`). Note: Cluster requires `ENABLE_HIERARCHICAL=false` |
+| `REDIS_MASTER_NAME` | `mymaster` | Sentinel master group name |
+| `REDIS_DB` | `0` | Database index (ignored in Cluster mode; always DB 0) |
+| `REDIS_DIAL_TIMEOUT_MS` | `500` | |
+| `REDIS_READ_TIMEOUT_MS` | `500` | |
+| `REDIS_WRITE_TIMEOUT_MS` | `500` | |
+| `REDIS_POOL_TIMEOUT_MS` | `1000` | |
+| `REDIS_DIALER_RETRIES` | `1` | |
+| `REDIS_MAX_RETRIES` | `0` (disabled) | |
 
 ---
 

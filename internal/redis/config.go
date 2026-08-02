@@ -1,18 +1,20 @@
 package redis
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Mode selects standalone Redis or Sentinel-managed failover.
+// Mode selects standalone Redis, Sentinel-managed failover, or Redis Cluster.
 type Mode string
 
 const (
 	ModeStandalone Mode = "standalone"
 	ModeSentinel   Mode = "sentinel"
+	ModeCluster    Mode = "cluster"
 )
 
 // Config drives client factory and health reporting.
@@ -23,6 +25,7 @@ type Config struct {
 	MasterName       string
 	SentinelAddrs    []string
 	SentinelPassword string
+	ClusterAddrs     []string
 	DB               int
 	PoolSize         int
 	MinIdleConns     int
@@ -32,6 +35,17 @@ type Config struct {
 	PoolTimeout      time.Duration
 	MaxRetries       int
 	DialerRetries    int
+}
+
+// Validate checks that the configured Redis mode is known and supported.
+// An empty mode string is treated as valid (defaults to standalone).
+func (c Config) Validate() error {
+	switch c.Mode {
+	case ModeStandalone, ModeSentinel, ModeCluster, "":
+		return nil
+	default:
+		return fmt.Errorf("unknown REDIS_MODE=%q: supported modes are %q, %q, %q", c.Mode, ModeStandalone, ModeSentinel, ModeCluster)
+	}
 }
 
 func DefaultConfig() Config {
@@ -66,6 +80,14 @@ func LoadConfigFromEnv() Config {
 			part = strings.TrimSpace(part)
 			if part != "" {
 				cfg.SentinelAddrs = append(cfg.SentinelAddrs, part)
+			}
+		}
+	}
+	if raw := getEnv("REDIS_CLUSTER_ADDRS", ""); raw != "" {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				cfg.ClusterAddrs = append(cfg.ClusterAddrs, part)
 			}
 		}
 	}

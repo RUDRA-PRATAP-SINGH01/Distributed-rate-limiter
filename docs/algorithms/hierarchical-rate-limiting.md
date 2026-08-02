@@ -65,7 +65,7 @@ endpointKey := fmt.Sprintf("rate:endpoint:%s:%s", tenantID, endpoint)
 KEYS[1..4]   = global, tenant, user, endpoint
 ARGV[1..4]   = capacities
 ARGV[5..8]   = refill_rates
-ARGV[9]      = now (ms)
+ARGV[9]      = client now (ms) — unused; Lua uses redis.call('TIME')
 ARGV[10]     = requested (1)
 ```
 
@@ -148,3 +148,12 @@ Hierarchical limiting is a **distributed transaction** with trivial rollback: "d
 I initially wanted different algorithms per level. Uniform token math reduced SRE cognitive load — one knob pair (`capacity`, `refill_rate`) at each tier.
 
 **Never deduct outside Lua.** The comment on `HierarchicalLimiter` — "partial commits are impossible" — is the invariant I defend in every review.
+
+## Topology constraints & Redis Cluster (H-01)
+
+Because `hierarchical.lua` atomically checks and deducts four distinct keys (`rate:global`, `rate:tenant:...`, `rate:user:...`, `rate:endpoint:...`), Redis Cluster produces a `CROSSSLOT` error unless all four keys share an identical hash slot. 
+
+Therefore:
+- **Hierarchical limiting requires Standalone Redis or Sentinel-managed failover** (`REDIS_MODE=standalone` or `REDIS_MODE=sentinel`).
+- **Cluster fail-fast:** `cmd/limiter` validates this at startup. If `REDIS_MODE=cluster` and `ENABLE_HIERARCHICAL=true`, the process terminates immediately at boot with a fatal error.
+- **Cluster flat mode:** To run against a Redis Cluster, set `ENABLE_HIERARCHICAL=false`; single-key `/check` operates safely across cluster shards.

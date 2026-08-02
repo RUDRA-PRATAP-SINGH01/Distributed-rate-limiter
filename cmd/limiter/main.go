@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -29,6 +30,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
+// hierarchicalAllowedOn returns an error if the configured Redis mode cannot support multi-key atomic EVAL.
+func hierarchicalAllowedOn(mode redisclient.Mode) error {
+	if mode == redisclient.ModeCluster {
+		return errors.New("redis cluster mode is unsupported for hierarchical rate limiting; multi-key EVAL across global/tenant/user/endpoint keys requires a single primary or Sentinel failover; disable hierarchical limiting (ENABLE_HIERARCHICAL=false) or use standalone/Sentinel Redis")
+	}
+	return nil
+}
+
 var limiterInstance RateLimiter
 var hierarchicalLimiter *limiter.HierarchicalLimiter
 var overrideStore *override.Store
@@ -46,9 +55,19 @@ func main() {
 		logging.Fatal("OpenTelemetry init failed", "error", err)
 	}
 
+	redisCfg = redisclient.LoadConfigFromEnv()
+	if err := redisCfg.Validate(); err != nil {
+		logging.Fatal("Invalid Redis configuration", "error", err)
+	}
+
+	if cfg.EnableHierarchical {
+		if err := hierarchicalAllowedOn(redisCfg.Mode); err != nil {
+			logging.Fatal("Hierarchical rate limiter topology error", "error", err, "mode", redisCfg.Mode)
+		}
+	}
+
 	// Fail fast if Redis is down. A limiter that starts without verified connectivity
 	// would either panic on first request or silently mis-report health.
-	redisCfg = redisclient.LoadConfigFromEnv()
 	rdb := redisclient.New(redisCfg)
 	if err := redisclient.Ping(rdb); err != nil {
 		logging.Fatal("Redis unreachable", "redis", redisclient.Describe(redisCfg), "error", err)
