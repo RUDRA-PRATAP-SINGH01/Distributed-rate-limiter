@@ -240,6 +240,46 @@ func TestFailState(t *testing.T) {
 	}
 }
 
+func TestFailedStatusReclaimableAfterLockTTL(t *testing.T) {
+	srv := redistest.Start(t)
+	cfg := DefaultConfig()
+	cfg.LockTTL = 100 // 100ms short lock TTL
+	cfg.CompletedTTL = 60_000
+	store := NewRedisStore(srv.Client(t), cfg)
+	ctx := context.Background()
+
+	claim, err := store.Claim(ctx, "scope1", "key-fail-reclaim", "hash-reclaim")
+	if err != nil || claim.Result != ResultClaimed {
+		t.Fatalf("initial claim failed: %v", err)
+	}
+
+	err = store.Fail(ctx, FailRequest{
+		Scope:      "scope1",
+		Key:        "key-fail-reclaim",
+		FenceToken: claim.FenceToken,
+		HTTPStatus: 503,
+		Body:       []byte(`{"error":"temporary outage"}`),
+	})
+	if err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+
+	// Wait for LockTTL to expire
+	time.Sleep(150 * time.Millisecond)
+
+	// Now a retry with the same key should be reclaimable (ResultClaimed), not blocked for 24h
+	retryClaim, err := store.Claim(ctx, "scope1", "key-fail-reclaim", "hash-reclaim")
+	if err != nil {
+		t.Fatalf("reclaim claim err: %v", err)
+	}
+	if retryClaim.Result != ResultClaimed {
+		t.Fatalf("expected ResultClaimed after transient failure expiry, got %v", retryClaim.Result)
+	}
+	if retryClaim.FenceToken == claim.FenceToken {
+		t.Fatal("expected new fence token on reclaim")
+	}
+}
+
 func TestFingerprintDeterministic(t *testing.T) {
 	a := Fingerprint("POST", "/api/orders", "", []byte(`{"a":1}`))
 	b := Fingerprint("POST", "/api/orders", "", []byte(`{"a":1}`))

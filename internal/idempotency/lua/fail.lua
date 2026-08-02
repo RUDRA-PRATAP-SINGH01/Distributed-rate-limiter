@@ -3,7 +3,7 @@
 -- ARGV[1] = http_status
 -- ARGV[2] = resp_headers (JSON)
 -- ARGV[3] = error body
--- ARGV[4] = completed_ttl_ms
+-- ARGV[4] = failed_ttl_ms (LockTTL; transient, not CompletedTTL)
 -- ARGV[5] = now_ms
 -- ARGV[6] = fence_token (must match current owner)
 --
@@ -13,7 +13,7 @@ local meta_key = KEYS[1]
 local http_status = ARGV[1]
 local headers_json = ARGV[2]
 local body = ARGV[3]
-local completed_ttl_ms = tonumber(ARGV[4])
+local failed_ttl_ms = tonumber(ARGV[4])
 local now_ms = tonumber(ARGV[5])
 local fence_token = ARGV[6]
 
@@ -33,8 +33,9 @@ redis.call('HSET', meta_key,
   'resp_headers', headers_json,
   'resp_body', body,
   'body_ref', 'inline',
+  'lock_until', now_ms + failed_ttl_ms,
   'failed_at', now_ms
 )
 
-redis.call('PEXPIRE', meta_key, completed_ttl_ms)
+redis.call('PEXPIRE', meta_key, failed_ttl_ms)
 return {1}

@@ -39,7 +39,7 @@ if existing_hash ~= req_hash then
   return {0}
 end
 
-if status == 'completed' or status == 'failed' then
+if status == 'completed' then
   local http_status = redis.call('HGET', meta_key, 'http_status') or '200'
   local headers = redis.call('HGET', meta_key, 'resp_headers') or ''
   local body_ref = redis.call('HGET', meta_key, 'body_ref') or 'inline'
@@ -52,9 +52,15 @@ if status == 'completed' or status == 'failed' then
   return {2, http_status, headers, body}
 end
 
-if status == 'processing' then
+if status == 'processing' or status == 'failed' then
   local lock_until = tonumber(redis.call('HGET', meta_key, 'lock_until') or '0')
   if now_ms < lock_until then
+    if status == 'failed' then
+      local http_status = redis.call('HGET', meta_key, 'http_status') or '500'
+      local headers = redis.call('HGET', meta_key, 'resp_headers') or ''
+      local body = redis.call('HGET', meta_key, 'resp_body') or ''
+      return {2, http_status, headers, body}
+    end
     return {3, lock_until - now_ms}
   end
   redis.call('HSET', meta_key,

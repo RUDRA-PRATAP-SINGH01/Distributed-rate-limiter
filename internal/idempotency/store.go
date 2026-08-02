@@ -179,7 +179,7 @@ func (s *RedisStore) Fail(ctx context.Context, req FailRequest) error {
 		req.HTTPStatus,
 		encodeHeaders(req.Headers),
 		string(req.Body),
-		s.cfg.CompletedTTL,
+		s.cfg.LockTTL,
 		NowMillis(),
 		req.FenceToken,
 	).Result()
