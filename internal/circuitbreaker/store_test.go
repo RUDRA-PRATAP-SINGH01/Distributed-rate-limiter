@@ -120,8 +120,8 @@ func TestTimeoutTripsCircuit(t *testing.T) {
 	}
 }
 
-func TestHalfOpenProbeExhaustionTransitionsToOpen(t *testing.T) {
-	b, _ := setupCB(t)
+func TestHalfOpenProbeExhaustionPreservesHalfOpenUntilOutcomeOrTimeout(t *testing.T) {
+	b, srv := setupCB(t)
 	ctx := context.Background()
 	target := "gw-exhaust"
 
@@ -137,16 +137,53 @@ func TestHalfOpenProbeExhaustionTransitionsToOpen(t *testing.T) {
 		if err != nil || !allow.Allowed {
 			t.Fatalf("probe %d: expected allowed in half-open, got %+v %v", i, allow, err)
 		}
-		// Do not record — probes consumed without outcomes.
+		// In-flight probes: not yet recorded
 	}
 
+	// Next call should be rejected because probe quota is currently in-flight,
+	// but state remains HalfOpen (H-08) so in-flight probe results are not discarded.
 	allow, _ := b.Allow(ctx, target)
 	if allow.Allowed {
-		t.Fatal("expected rejection after probe budget exhausted")
+		t.Fatal("expected rejection when in-flight probe budget is reached")
 	}
 	st, _ := b.GetState(ctx, target)
-	if st.State != StateOpen {
-		t.Fatalf("expected transition back to open, got %s", st.State)
+	if st.State != StateHalfOpen {
+		t.Fatalf("expected state to remain half_open while probes in flight, got %s", st.State)
+	}
+
+	// Now wait for cooldown deadline to expire without recorded success (simulating timed-out / hung probes)
+	time.Sleep(time.Duration(cfg.OpenCooldownMs+50) * time.Millisecond)
+	allowAfterTimeout, _ := b.Allow(ctx, target)
+	if allowAfterTimeout.Allowed {
+		t.Fatal("expected rejection after half-open probe deadline expired without recovery")
+	}
+	stAfter, _ := b.GetState(ctx, target)
+	if stAfter.State != StateOpen {
+		t.Fatalf("expected state to transition to open after half-open deadline expiration, got %s", stAfter.State)
+	}
+
+	_ = srv
+}
+
+func TestCircuitBreaker_RedisKeyExpiresAfter24h(t *testing.T) {
+	b, srv := setupCB(t)
+	ctx := context.Background()
+	target := "gw-ttl-check"
+
+	_, err := b.Allow(ctx, target)
+	if err != nil {
+		t.Fatalf("allow: %v", err)
+	}
+	_ = b.Record(ctx, target, RecordInput{Kind: OutcomeSuccess, Latency: 5 * time.Millisecond})
+
+	rdb := srv.Client(t)
+	key := "cb:" + target
+	ttl, err := rdb.TTL(ctx, key).Result()
+	if err != nil {
+		t.Fatalf("TTL(%s): %v", key, err)
+	}
+	if ttl <= 0 {
+		t.Fatalf("expected positive TTL on %s, got %v", key, ttl)
 	}
 }
 

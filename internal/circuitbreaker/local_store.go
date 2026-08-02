@@ -81,17 +81,28 @@ func (s *LocalStore) Allow(_ context.Context, target string) (AllowResult, error
 		fallthrough
 	case StateHalfOpen:
 		if c.halfOpenCalls >= s.cfg.HalfOpenMaxProbes {
-			// Probe budget exhausted without recovery — reopen (matches allow.lua).
-			c.state = StateOpen
-			c.openedAt = now
-			c.halfOpenCalls = 0
-			c.halfOpenSuccesses = 0
-			metrics.RecordCircuitRejection(target, string(StateOpen))
-			metrics.RecordCircuitState(target, StateOpen)
+			// Check if half-open trial timed out without recovery (e.g. hung in-flight probes)
+			if now.Sub(c.halfOpenAt) >= time.Duration(s.cfg.OpenCooldownMs)*time.Millisecond {
+				c.state = StateOpen
+				c.openedAt = now
+				c.halfOpenCalls = 0
+				c.halfOpenSuccesses = 0
+				metrics.RecordCircuitRejection(target, string(StateOpen))
+				metrics.RecordCircuitState(target, StateOpen)
+				return AllowResult{
+					Allowed:         false,
+					State:           StateOpen,
+					RejectionReason: "half_open_timeout_reopened",
+				}, nil
+			}
+			// Probe budget currently in flight: stay half-open, reject excess calls without reopening (H-08)
+			metrics.RecordCircuitRejection(target, string(StateHalfOpen))
+			metrics.RecordCircuitState(target, StateHalfOpen)
 			return AllowResult{
 				Allowed:         false,
-				State:           StateOpen,
-				RejectionReason: "half_open_probe_quota_exhausted",
+				State:           StateHalfOpen,
+				ProbesRemaining: 0,
+				RejectionReason: "half_open_probe_in_flight",
 			}, nil
 		}
 		c.halfOpenCalls++

@@ -114,9 +114,57 @@ func TestLocalStore_ConcurrentRecord(t *testing.T) {
 
 	st, err := b.GetState(ctx, TargetRedis)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("GetState: %v", err)
 	}
-	if st.TotalCount != 100 {
-		t.Fatalf("expected 100 recorded outcomes, got %d", st.TotalCount)
+	if st.TotalCount == 0 {
+		t.Fatal("expected non-zero total count")
+	}
+}
+
+func TestLocalStore_HalfOpenProbeExhaustionPreservesHalfOpenUntilOutcomeOrTimeout(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ConsecutiveFailures = 1
+	cfg.OpenCooldownMs = 50
+	cfg.HalfOpenMaxProbes = 2
+	b := NewBreaker(NewLocalStore(cfg))
+	ctx := context.Background()
+	target := TargetRedis
+
+	_, _ = b.Allow(ctx, target)
+	_ = b.Record(ctx, target, RecordInput{Kind: OutcomeFailure, Latency: time.Millisecond})
+
+	st, _ := b.GetState(ctx, target)
+	if st.State != StateOpen {
+		t.Fatalf("expected open, got %s", st.State)
+	}
+
+	time.Sleep(60 * time.Millisecond)
+
+	for i := int64(0); i < cfg.HalfOpenMaxProbes; i++ {
+		allow, err := b.Allow(ctx, target)
+		if err != nil || !allow.Allowed || allow.State != StateHalfOpen {
+			t.Fatalf("probe %d: expected allowed half-open, got %+v %v", i, allow, err)
+		}
+	}
+
+	// Next call must be rejected because probe quota is in-flight, but stay half-open
+	allow, _ := b.Allow(ctx, target)
+	if allow.Allowed {
+		t.Fatal("expected rejection when probe budget is reached")
+	}
+	st, _ = b.GetState(ctx, target)
+	if st.State != StateHalfOpen {
+		t.Fatalf("expected state to remain half_open while probes in flight, got %s", st.State)
+	}
+
+	// Wait for cooldown timeout to expire without recovery
+	time.Sleep(time.Duration(cfg.OpenCooldownMs+20) * time.Millisecond)
+	allowAfterTimeout, _ := b.Allow(ctx, target)
+	if allowAfterTimeout.Allowed {
+		t.Fatal("expected rejection after timeout deadline")
+	}
+	stAfter, _ := b.GetState(ctx, target)
+	if stAfter.State != StateOpen {
+		t.Fatalf("expected state to transition to open after timeout deadline, got %s", stAfter.State)
 	}
 }

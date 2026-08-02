@@ -112,6 +112,7 @@ elseif state == 'closed' then
 end
 
 redis.call('HSET', key, 'updated_at', now)
+redis.call('EXPIRE', key, 86400)
 
 local state_code = 0
 if state == 'open' then state_code = 1
