@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -42,19 +43,26 @@ func TestAdmin_Authentication(t *testing.T) {
 		{http.MethodGet, "/admin/audit/123/replay", ""},
 	}
 
-	invalidKeys := []string{
-		"",                     // Missing
-		"wrong-key",            // Wrong key
-		"test-admin-key-extra", // Prefix-correct
-		"extra-test-admin-key", // Suffix-correct
-		"test-admn-key",        // Same length (almost correct)
-		"test-admin key",       // Internal whitespace mutation
-		"test-admin-Key",       // Case mutation
+	invalidKeys := []struct {
+		name string
+		key  string
+	}{
+		{name: "missing", key: ""},
+		{name: "1-char", key: "t"},
+		{name: "2-char", key: "te"},
+		{name: "wrong-key", key: "wrong-key"},
+		{name: "prefix-longer", key: "test-admin-key-extra"},
+		{name: "suffix-longer", key: "extra-test-admin-key"},
+		{name: "same-length", key: "test-admn-key"},
+		{name: "internal-whitespace", key: "test-admin key"},
+		{name: "case-mutation", key: "test-admin-Key"},
+		{name: "128-char", key: strings.Repeat("x", 128)},
+		{name: "512-char", key: strings.Repeat("y", 512)},
 	}
 
 	for _, route := range routes {
-		for _, key := range invalidKeys {
-			t.Run(route.method+"_"+route.path+"_key_"+key, func(t *testing.T) {
+		for _, tc := range invalidKeys {
+			t.Run(route.method+"_"+route.path+"_"+tc.name, func(t *testing.T) {
 				// Record Redis snapshot before request
 				snapBefore := captureRedisSnapshot(t, fixture.rdb)
 
@@ -62,8 +70,8 @@ func TestAdmin_Authentication(t *testing.T) {
 				if err != nil {
 					t.Fatalf("failed to create request: %v", err)
 				}
-				if key != "" {
-					req.Header.Set("X-API-Key", key)
+				if tc.key != "" {
+					req.Header.Set("X-API-Key", tc.key)
 				}
 
 				resp, err := http.DefaultClient.Do(req)
@@ -73,7 +81,7 @@ func TestAdmin_Authentication(t *testing.T) {
 				defer resp.Body.Close()
 
 				if resp.StatusCode != http.StatusUnauthorized {
-					t.Errorf("expected 401 Unauthorized for route %s %s with key %q, got %d", route.method, route.path, key, resp.StatusCode)
+					t.Errorf("expected 401 Unauthorized for route %s %s with key %q, got %d", route.method, route.path, tc.name, resp.StatusCode)
 				}
 
 				// Record Redis snapshot after request

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/circuitbreaker"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 	"github.com/redis/go-redis/v9"
@@ -22,7 +23,7 @@ func registerCircuitRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalCl
 	prefix := "/admin/circuit/"
 
 	mux.HandleFunc("/admin/circuit", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-API-Key") != cfg.AdminAPIKey {
+		if !auth.SecureCompare(r.Header.Get(auth.APIKeyHeader), cfg.AdminAPIKey) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -59,7 +60,7 @@ func registerCircuitRoutes(mux *http.ServeMux, cfg Config, rdb redis.UniversalCl
 	})
 
 	mux.HandleFunc(prefix, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-API-Key") != cfg.AdminAPIKey {
+		if !auth.SecureCompare(r.Header.Get(auth.APIKeyHeader), cfg.AdminAPIKey) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

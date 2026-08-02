@@ -17,7 +17,7 @@ Shared-secret **API key** in HTTP headers. No OAuth/JWT inside limiter or sideca
 | `X-API-Key` | Primary API key header |
 | `X-Internal-API-Key` | Alternate (sidecar → limiter) |
 
-`RequireAPIKey` accepts either header. Comparison uses `crypto/subtle.ConstantTimeCompare`.
+`RequireAPIKey` accepts either header. Comparison uses `auth.SecureCompare` (SHA-256 digest pre-hashing followed by `crypto/subtle.ConstantTimeCompare`) to prevent both byte-value timing and length oracle side-channels (M-05).
 
 Empty expected key → **auth disabled** (dev Prometheus scrape, open `/check`).
 

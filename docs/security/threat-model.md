@@ -38,7 +38,7 @@
 | Anonymous quota consumption | `auth.RequireAPIKey` on `/check` (`INTERNAL_API_KEY`) |
 | Admin API abuse | `ADMIN_API_KEY` on admin routes; separate port `:8082` |
 | User ID spoofing via query | `ALLOW_QUERY_USER_ID=false` in prod; header-only identity |
-| Timing attack on API keys | `subtle.ConstantTimeCompare` in `internal/auth/middleware.go` |
+| Timing & length attack on API keys | `auth.SecureCompare` (SHA-256 pre-hashed constant-time compare) in `internal/auth/middleware.go` |
 | Metrics scraping / recon | Optional `METRICS_REQUIRE_AUTH` |
 | Path traversal to internal routes | Sidecar `ALLOWED_PATHS` prefix allowlist |
 | Redis outage → traffic flood | Fail-closed default (`FAIL_OPEN=false`) |

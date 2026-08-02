@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/audit"
+	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/auth"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/logging"
 )
 
@@ -106,7 +107,7 @@ func registerAuditRoutes(mux *http.ServeMux, cfg Config, store *audit.Store) {
 }
 
 func auditAuth(w http.ResponseWriter, r *http.Request, cfg Config) bool {
-	if r.Header.Get("X-API-Key") != cfg.AdminAPIKey {
+	if !auth.SecureCompare(r.Header.Get(auth.APIKeyHeader), cfg.AdminAPIKey) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return false
 	}
