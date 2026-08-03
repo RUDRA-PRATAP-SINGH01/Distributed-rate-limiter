@@ -1,4 +1,4 @@
-﻿# Idempotency Architecture
+# Idempotency Architecture
 
 For mutating requests (`POST`, `PUT`, `PATCH`, `DELETE` + `Idempotency-Key`), the sidecar layer implements a **distributed claim → execute → complete** flow. Guarantee: **duplicate suppression + cached replay + fencing** — **NOT exactly-once** upstream execution.
 
@@ -8,17 +8,17 @@ For mutating requests (`POST`, `PUT`, `PATCH`, `DELETE` + `Idempotency-Key`), th
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Absent: first request
-  Absent --> Processing: claim.lua (new)
-  Processing --> Completed: complete.lua + valid fence
-  Processing --> Failed: fail.lua + valid fence
-  Processing --> Processing: duplicate in-flight (409)
-  Processing --> Processing: lock expired → reclaim + new fence
-  Completed --> Completed: replay cached response (200)
-  Failed --> Failed: replay cached error response
-  Absent --> HashMismatch: same key, different body hash (422)
-  Completed --> [*]: TTL expiry
-  Failed --> [*]: TTL expiry
+  [*] --> Absent : First request
+  Absent --> Processing : claim.lua new claim
+  Processing --> Completed : complete.lua with valid fence
+  Processing --> Failed : fail.lua with valid fence
+  Processing --> Processing : Duplicate in-flight 409
+  Processing --> Processing : Lock expired / reclaim with new fence
+  Completed --> Completed : Replay cached response
+  Failed --> Failed : Replay cached error response
+  Absent --> HashMismatch : Same key with different payload 422
+  Completed --> [*] : TTL expiry
+  Failed --> [*] : TTL expiry
 ```
 
 ### Redis record (`idem:{scope}:{key}`)
@@ -45,18 +45,18 @@ sequenceDiagram
   participant U as Upstream
 
   C->>S: POST + Idempotency-Key
-  S->>R: claim.lua
-  alt claimed (new)
-    R-->>S: {1, fence_token}
-    S->>U: forward request
-    U-->>S: response
-    S->>R: complete.lua (fence must match)
+  S->>R: EVAL claim.lua
+  alt claimed new
+    R-->>S: 1, fence_token
+    S->>U: Forward request
+    U-->>S: Response payload
+    S->>R: EVAL complete.lua
     S-->>C: 200 + X-Idempotency-Status: created
   else replay
-    R-->>S: {2, status, headers, body}
-    S-->>C: cached response (replayed)
+    R-->>S: 2, status, headers, body
+    S-->>C: Cached response (replayed)
   else in progress
-    R-->>S: {3, retry_after_ms}
+    R-->>S: 3, retry_after_ms
     S-->>C: 409 Conflict
   end
 ```

@@ -96,34 +96,34 @@ Read the engineering documentation index: [docs/README.md](docs/README.md)
 
 ```mermaid
 flowchart TB
-    subgraph clients [Clients]
-        C[HTTP Client]
+    subgraph clients["Clients"]
+        C["HTTP Client"]
     end
 
-    subgraph sidecar_layer [Sidecar Layer]
+    subgraph sidecar_layer["Sidecar Layer"]
         SC["Sidecar Proxy 9090"]
-        CACHE[Denial Cache]
-        SF[Singleflight]
+        CACHE["Denial Cache"]
+        SF["Singleflight"]
     end
 
-    subgraph limiter_layer [Limiter Layer]
+    subgraph limiter_layer["Limiter Layer"]
         LM["Central Limiter 8080"]
         ADM["Admin API 8082"]
     end
 
-    subgraph state [State Layer]
-        RD[(Redis 6379)]
-        LUA[Lua Scripts]
+    subgraph state["State Layer"]
+        RD[("Redis 6379")]
+        LUA["Lua Scripts"]
     end
 
-    subgraph upstream [Upstream]
+    subgraph upstream["Upstream"]
         BE["Demo Backend 8081"]
     end
 
     C --> SC
     SC --> CACHE
     SC --> SF
-    SF -->|"/check or /check_hierarchical"| LM
+    SF -->|check or check_hierarchical| LM
     LM --> LUA
     LUA --> RD
     ADM -->|overrides| RD
@@ -136,14 +136,14 @@ When you run `docker compose up`, four services start on a shared bridge network
 
 ```mermaid
 flowchart LR
-    subgraph rate-net [rate-net bridge network]
-        REDIS[rate-redis<br/>6379]
-        LIMITER[rate-limiter<br/>8080 / 8082]
-        DEMO[demo-backend<br/>8081]
-        SIDECAR[rate-sidecar<br/>9090]
+    subgraph rate_net["rate-net bridge network"]
+        REDIS["rate-redis (6379)"]
+        LIMITER["rate-limiter (8080 / 8082)"]
+        DEMO["demo-backend (8081)"]
+        SIDECAR["rate-sidecar (9090)"]
     end
 
-    HOST[Host Machine]
+    HOST["Host Machine"]
     HOST -->|localhost:9090| SIDECAR
     HOST -->|localhost:8080| LIMITER
     HOST -->|localhost:8082| LIMITER
@@ -247,11 +247,11 @@ sequenceDiagram
     S->>S: Check denial cache (miss)
     S->>L: GET /check (X-User-ID: alice)
     L->>R: EVAL sliding_window.lua
-    R-->>L: {allowed: 1, remaining: 9}
+    R-->>L: allowed=1, remaining=9
     L-->>S: 200 OK + rate limit headers
-    S->>S: Store in cache (allowed — not served from cache later)
+    S->>S: Store in cache
     S->>B: Reverse proxy request
-    B-->>S: 200 {"message": "Hello from backend"}
+    B-->>S: 200 OK
     S-->>C: 200 + X-RateLimit-Limit/Remaining
 ```
 
@@ -268,12 +268,12 @@ sequenceDiagram
     S->>S: Check denial cache (miss)
     S->>L: GET /check
     L->>R: EVAL sliding_window.lua
-    R-->>L: {allowed: 0, remaining: 0}
+    R-->>L: allowed=0, remaining=0
     L-->>S: 429 + Retry-After
-    S->>S: Cache DENIAL (TTL CACHE_TTL_MS, default 30ms)
+    S->>S: Cache DENIAL (30ms TTL)
     S-->>C: 429 Too Many Requests
 
-    Note over C,S: Next request within TTL served from cache — no limiter call
+    Note over C,S: Next request within TTL served from cache
 ```
 
 ### Limiter Unavailable (503)
@@ -286,13 +286,13 @@ sequenceDiagram
 
     C->>S: GET /check?user_id=alice
     S->>L: GET /check
-    L-->>S: Connection refused / timeout
+    L-->>S: Connection refused or timeout
 
-    alt FAIL_OPEN=false (default)
+    alt FAIL_OPEN is false (default)
         S-->>C: 503 Service Unavailable
-    else FAIL_OPEN=true
+    else FAIL_OPEN is true
         S->>S: Forward to backend anyway
-        Note over S: Degraded mode — no rate limiting
+        Note over S: Degraded mode - no rate limiting
     end
 ```
 
@@ -308,16 +308,16 @@ I implemented five algorithms. Two are in-memory reference implementations; thre
 
 ```mermaid
 flowchart TD
-    START[Incoming /check request] --> ALG{ALGORITHM env var}
-    ALG -->|sliding| SW[Redis Sliding Window]
-    ALG -->|token| TB[Redis Atomic Token Bucket]
-    SW --> LUA1[sliding_window.lua]
-    TB --> LUA2[token_bucket.lua]
-    LUA1 --> REDIS[(Redis)]
+    START["Incoming /check request"] --> ALG{"ALGORITHM env var"}
+    ALG -->|sliding| SW["Redis Sliding Window"]
+    ALG -->|token| TB["Redis Atomic Token Bucket"]
+    SW --> LUA1["sliding_window.lua"]
+    TB --> LUA2["token_bucket.lua"]
+    LUA1 --> REDIS[("Redis")]
     LUA2 --> REDIS
-    REDIS --> RESULT{allowed?}
-    RESULT -->|yes| OK[200 + remaining]
-    RESULT -->|no| DENY[429 + Retry-After]
+    REDIS --> RESULT{"allowed?"}
+    RESULT -->|yes| OK["200 + remaining"]
+    RESULT -->|no| DENY["429 + Retry-After"]
 ```
 
 ### 1. In-Memory Token Bucket (Reference)
@@ -351,13 +351,13 @@ Uses Redis sorted sets. Each request adds a timestamp member. Before counting, e
 
 ```mermaid
 flowchart TD
-    A[Request arrives] --> B[ZREMRANGEBYSCORE: remove entries older than window]
-    B --> C[ZCARD: count remaining entries]
-    C --> D{count < limit?}
-    D -->|yes| E[ZADD: insert new timestamp]
-    E --> F[EXPIRE: set TTL]
-    F --> G[Return allowed=1, remaining]
-    D -->|no| H[Return allowed=0, remaining=0]
+    A["Request arrives"] --> B["ZREMRANGEBYSCORE: remove entries older than window"]
+    B --> C["ZCARD: count remaining entries"]
+    C --> D{"count < limit?"}
+    D -->|yes| E["ZADD: insert new timestamp"]
+    E --> F["EXPIRE: set TTL"]
+    F --> G["Return allowed=1, remaining"]
+    D -->|no| H["Return allowed=0, remaining=0"]
 ```
 
 **When I use this:** When I want a hard cap — "max 10 requests per 60 seconds." No smoothing, no burst beyond the window.
@@ -372,12 +372,12 @@ Same token bucket logic as the in-memory version, but the entire read-refill-che
 
 ```mermaid
 flowchart TD
-    A[Request arrives] --> B[HMGET tokens, last_refill]
-    B --> C[Calculate refill: tokens + elapsed * rate]
-    C --> D{tokens >= 1?}
-    D -->|yes| E[Decrement token, HMSET new state]
-    E --> F[Return allowed=1]
-    D -->|no| G[Return allowed=0]
+    A["Request arrives"] --> B["HMGET tokens, last_refill"]
+    B --> C["Calculate refill: tokens + elapsed * rate"]
+    C --> D{"tokens >= 1?"}
+    D -->|yes| E["Decrement token, HMSET new state"]
+    E --> F["Return allowed=1"]
+    D -->|no| G["Return allowed=0"]
 ```
 
 **When I use this:** When I want smooth refill — "10 tokens, refill 1 per second." Allows bursts up to capacity, then steady rate.
@@ -398,12 +398,12 @@ Flat per-user limits are not enough for multi-tenant systems. I built a four-lev
 
 ```mermaid
 flowchart TD
-    REQ[Incoming Request] --> G[Global Bucket<br/>rate:global]
-    G -->|pass| T[Tenant Bucket<br/>rate:tenant:acme]
-    T -->|pass| U[User Bucket<br/>rate:user:alice]
-    U -->|pass| E[Endpoint Bucket<br/>rate:endpoint:acme:/api/export]
-    E -->|pass| OK[ALLOWED]
-    G -->|fail| DENY[DENIED 429]
+    REQ["Incoming Request"] --> G["Global Bucket (rate:global)"]
+    G -->|pass| T["Tenant Bucket (rate:tenant:acme)"]
+    T -->|pass| U["User Bucket (rate:user:alice)"]
+    U -->|pass| E["Endpoint Bucket (rate:endpoint:acme:/api/export)"]
+    E -->|pass| OK["ALLOWED"]
+    G -->|fail| DENY["DENIED 429"]
     T -->|fail| DENY
     U -->|fail| DENY
     E -->|fail| DENY
@@ -452,12 +452,12 @@ The sidecar is the most opinionated part of the design. Here is what I built and
 
 ```mermaid
 flowchart TD
-    REQ[Request] --> CACHE{Cache lookup}
-    CACHE -->|hit, denied| SERVE429[Serve 429 from cache]
-    CACHE -->|hit, allowed| IGNORE[Ignore cache — re-check limiter]
-    CACHE -->|miss| LIMITER[Call central limiter]
-    LIMITER -->|429| STORE_DENY[Store denial in cache]
-    LIMITER -->|200| PROXY[Forward to backend]
+    REQ["Request"] --> CACHE{"Cache lookup"}
+    CACHE -->|hit, denied| SERVE429["Serve 429 from cache"]
+    CACHE -->|hit, allowed| IGNORE["Ignore cache - re-check limiter"]
+    CACHE -->|miss| LIMITER["Call central limiter"]
+    LIMITER -->|429| STORE_DENY["Store denial in cache"]
+    LIMITER -->|200| PROXY["Forward to backend"]
     STORE_DENY --> SERVE429
 ```
 
@@ -497,23 +497,23 @@ Stripe-style idempotency on the sidecar: **duplicate suppression**, **cached rep
 
 ```mermaid
 flowchart LR
-    subgraph clients [Clients]
-        C[POST + Idempotency-Key]
+    subgraph clients["Clients"]
+        C["POST + Idempotency-Key"]
     end
 
-    subgraph sidecar [Sidecar]
-        IDEM[Idempotency Middleware]
-        RL[Rate Limit Check]
-        PX[Reverse Proxy]
+    subgraph sidecar["Sidecar"]
+        IDEM["Idempotency Middleware"]
+        RL["Rate Limit Check"]
+        PX["Reverse Proxy"]
     end
 
-    subgraph state [Redis]
-        IDK["idem:{scope}:{key}"]
-        RATE["rate:{user}"]
+    subgraph state["Redis"]
+        IDK["idem:scope:key"]
+        RATE["rate:user"]
     end
 
-    subgraph upstream [Upstream]
-        API[Demo / Your API]
+    subgraph upstream["Upstream"]
+        API["Demo / Your API"]
     end
 
     C --> IDEM
@@ -531,15 +531,15 @@ The backend stays unchanged. Any sidecar in the fleet shares the same Redis idem
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Missing: Key not in Redis
-    Missing --> Processing: SET claim (Lua)
-    Processing --> Completed: Upstream OK + store response
-    Processing --> Failed: Upstream/routing error (retryable)
-    Processing --> InProgress409: Concurrent duplicate
-    Processing --> Expired: Lock TTL elapsed
-    Expired --> Processing: Reclaim lease
-    Completed --> Completed: Replay cached response
-    InProgress409 --> Completed: First request finishes
+    [*] --> Missing
+    Missing --> Processing : Key not in Redis / SET claim
+    Processing --> Completed : Upstream OK + store response
+    Processing --> Failed : Upstream or routing error
+    Processing --> InProgress409 : Concurrent duplicate
+    Processing --> Expired : Lock TTL elapsed
+    Expired --> Processing : Reclaim lease
+    Completed --> Completed : Replay cached response
+    InProgress409 --> Completed : First request finishes
 ```
 
 ### Client Contract
@@ -608,21 +608,19 @@ sequenceDiagram
     participant R as Redis Lua
     participant U as Upstream
 
-    par Same Idempotency-Key
-        C1->>SC: POST
-        C99->>SC: POST
-    end
+    C1->>SC: POST /api/orders (Idempotency-Key)
+    C99->>SC: POST /api/orders (Same Key)
     SC->>R: claim.lua (atomic)
-    R-->>SC: C1 wins → claimed
-    R-->>SC: C99 → in_progress
+    R-->>SC: C1 wins (claimed)
+    R-->>SC: C99 (in_progress)
     SC-->>C99: 409 + Retry-After
-    SC->>U: forward (C1 only)
+    SC->>U: Forward (C1 only)
     U-->>SC: 201 + body
     SC->>R: complete.lua
-    Note over C99: Retry after completion
+    Note over C99,SC: Retry after completion
     C99->>SC: POST (retry)
     SC->>R: claim.lua
-    R-->>SC: replay cached 201
+    R-->>SC: Replay cached 201
     SC-->>C99: 201 cached (no upstream)
 ```
 
@@ -669,11 +667,11 @@ Production-grade three-state circuit breaker protecting Redis, the central limit
 ```mermaid
 stateDiagram-v2
     [*] --> Closed
-    Closed --> Open: failure_rate / consecutive_failures / latency_spike / timeout_rate
-    Open --> HalfOpen: cooldown elapsed (probe)
-    HalfOpen --> Closed: enough probe successes
-    HalfOpen --> Open: any probe failure
-    Open --> Closed: manual admin reset
+    Closed --> Open : Failure threshold or latency spike
+    Open --> HalfOpen : Cooldown elapsed / probe
+    HalfOpen --> Closed : Enough probe successes
+    HalfOpen --> Open : Any probe failure
+    Open --> Closed : Manual admin reset
 ```
 
 ### State Machine
@@ -785,26 +783,34 @@ Automatic failover for Redis using Sentinel quorum, master election, replica pro
 
 ```mermaid
 flowchart TB
-    subgraph apps [Application Tier]
-        L[Limiter]
-        SC[Sidecar]
+    subgraph apps["Application Tier"]
+        L["Limiter"]
+        SC["Sidecar"]
     end
 
-    subgraph sentinel [Sentinel Quorum]
-        S1[Sentinel 1]
-        S2[Sentinel 2]
-        S3[Sentinel 3]
+    subgraph sentinel["Sentinel Quorum"]
+        S1["Sentinel 1"]
+        S2["Sentinel 2"]
+        S3["Sentinel 3"]
     end
 
-    subgraph redis [Redis Tier]
-        M[(Master)]
-        R1[(Replica 1)]
-        R2[(Replica 2)]
+    subgraph redis["Redis Tier"]
+        M[("Master")]
+        R1[("Replica 1")]
+        R2[("Replica 2")]
     end
 
-    L & SC -->|discover master| S1 & S2 & S3
-    S1 & S2 & S3 -->|monitor| M
-    M -->|replicate| R1 & R2
+    L --> S1
+    L --> S2
+    L --> S3
+    SC --> S1
+    SC --> S2
+    SC --> S3
+    S1 --> M
+    S2 --> M
+    S3 --> M
+    M --> R1
+    M --> R2
     S1 -.->|failover promote| R1
 ```
 
@@ -947,30 +953,34 @@ Juspay-style payment gateway routing: the sidecar continuously scores Gateway A/
 
 ```mermaid
 flowchart TB
-    subgraph sidecar [Sidecar]
-        RQ[Incoming Payment]
-        SEL[Score + Weighted Pick]
-        FO[Failover Chain]
+    subgraph sidecar["Sidecar"]
+        RQ["Incoming Payment"]
+        SEL["Score + Weighted Pick"]
+        FO["Failover Chain"]
     end
 
-    subgraph redis [Redis]
+    subgraph redis["Redis"]
         GA["route:gw:gateway-a"]
         GB["route:gw:gateway-b"]
         GC["route:gw:gateway-c"]
     end
 
-    subgraph gateways [Payment Gateways]
-        A[Gateway A — fast, 1% errors]
-        B[Gateway B — medium, 5% errors]
-        C[Gateway C — slow, 35% errors]
+    subgraph gateways["Payment Gateways"]
+        A["Gateway A (fast, 1% errors)"]
+        B["Gateway B (medium, 5% errors)"]
+        C["Gateway C (slow, 35% errors)"]
     end
 
     RQ --> SEL
-    SEL --> GA & GB & GC
+    SEL --> GA
+    SEL --> GB
+    SEL --> GC
     SEL -->|primary| A
     FO -->|on 5xx| B
     FO -->|on 5xx| C
-    A & B & C -->|outcome| redis
+    A --> redis
+    B --> redis
+    C --> redis
 ```
 
 ### Routing Algorithm
@@ -1055,19 +1065,19 @@ I separated the admin API onto port 8082 so it can be network-isolated from the 
 ```mermaid
 sequenceDiagram
     participant OP as Operator
-    participant ADM as "Admin API 8082"
+    participant ADM as Admin API 8082
     participant R as Redis
-    participant L as "Limiter 8080"
+    participant L as Limiter 8080
     participant S as Override Cache
 
     OP->>ADM: POST /admin/limits/user/alice {"capacity": 20}
     ADM->>R: HSET config:user:alice
     ADM-->>OP: 201 Created
 
-    Note over L: Next /check_hierarchical for alice
+    Note over L: Next hierarchical check for alice
     L->>S: Check local cache (miss or expired)
     S->>R: HGETALL config:user:alice
-    R-->>S: {capacity: 20, refill_rate: 2}
+    R-->>S: capacity=20, refill_rate=2
     S->>L: Effective limits merged with defaults
 ```
 
@@ -1107,12 +1117,12 @@ Read-only inspection and manual purge of stuck keys. Uses the same `X-API-Key` a
 ```mermaid
 sequenceDiagram
     participant OP as Operator
-    participant ADM as "Admin API 8082"
+    participant ADM as Admin API 8082
     participant R as Redis
 
     OP->>ADM: GET /admin/idempotency?user=alice&key=pay-001
     ADM->>ADM: scope = SHA256(tenant|user)
-    ADM->>R: HGETALL idem:{scope}:{key}
+    ADM->>R: HGETALL idem:scope:key
     R-->>ADM: status, hash, ttl, body preview
     ADM-->>OP: JSON record + lock_remaining_ms
 ```
@@ -1143,20 +1153,20 @@ curl -X DELETE http://localhost:8082/admin/idempotency/{scope}/pay-001 \
 
 ```mermaid
 flowchart LR
-    subgraph public [Public Facing]
-        CLIENT[Client]
+    subgraph public["Public Facing"]
+        CLIENT["Client"]
         SIDECAR["Sidecar 9090"]
     end
 
-    subgraph internal [Internal Network]
+    subgraph internal["Internal Network"]
         LIMITER["Limiter 8080"]
         ADMIN["Admin 8082"]
-        REDIS[(Redis)]
+        REDIS[("Redis")]
     end
 
     CLIENT -->|HTTP| SIDECAR
     SIDECAR -->|X-Internal-API-Key| LIMITER
-    OP[Operator] -->|X-API-Key| ADMIN
+    OP["Operator"] -->|X-API-Key| ADMIN
     LIMITER --> REDIS
     ADMIN --> REDIS
 ```
@@ -1231,29 +1241,29 @@ Distributed traces flow across the full request path and export to Jaeger via OT
 
 ```mermaid
 flowchart TB
-    subgraph client [Client]
-        C[HTTP Request]
+    subgraph client["Client"]
+        C["HTTP Request"]
     end
 
-    subgraph sidecar [rate-sidecar]
+    subgraph sidecar["rate-sidecar"]
         S1["GET / (http.request)"]
-        S2[sidecar.rate_limit_check]
-        S3[sidecar.upstream_proxy]
-        S4[idempotency.claim]
+        S2["sidecar.rate_limit_check"]
+        S3["sidecar.upstream_proxy"]
+        S4["idempotency.claim"]
     end
 
-    subgraph limiter [rate-limiter]
+    subgraph limiter["rate-limiter"]
         L1["GET /check (http.request)"]
-        L2[limiter.check]
+        L2["limiter.check"]
     end
 
-    subgraph redis [Redis]
+    subgraph redis["Redis"]
         R1["EVAL token_bucket.lua"]
         R2["EVAL claim.lua"]
     end
 
-    subgraph jaeger ["Jaeger 16686"]
-        UI[Trace UI]
+    subgraph jaeger["Jaeger 16686"]
+        UI["Trace UI"]
     end
 
     C --> S1
@@ -1264,7 +1274,9 @@ flowchart TB
     S1 --> S4
     S4 --> R2
     S1 --> S3
-    S1 & L1 & R1 -->|OTLP 4318| UI
+    S1 -->|OTLP 4318| UI
+    L1 -->|OTLP 4318| UI
+    R1 -->|OTLP 4318| UI
 ```
 
 #### Trace Hierarchy (latency breakdown)
@@ -1380,16 +1392,16 @@ I wrote chaos tests to verify the system behaves correctly when things break —
 
 ```mermaid
 flowchart TD
-    subgraph scenarios [Failure Scenarios]
-        R[Redis container killed]
-        N[Sidecar network disconnected]
-        L[High latency injected]
+    subgraph scenarios["Failure Scenarios"]
+        R["Redis container killed"]
+        N["Sidecar network disconnected"]
+        L["High latency injected"]
     end
 
-    subgraph expected [Expected Behavior]
-        E1[503 to clients — fail closed]
-        E2[Recovery after restart]
-        E3[No quota corruption]
+    subgraph expected["Expected Behavior"]
+        E1["503 to clients - fail closed"]
+        E2["Recovery after restart"]
+        E3["No quota corruption"]
     end
 
     R --> E1
