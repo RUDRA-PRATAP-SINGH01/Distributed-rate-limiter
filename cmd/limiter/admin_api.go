@@ -45,7 +45,13 @@ func startAdminServer(cfg Config, store *override.Store, rdb redis.UniversalClie
 	go func() {
 		ctx := context.Background()
 		logging.Info(ctx, "Admin API listening", "component", "admin", "addr", cfg.AdminAddr())
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logging.Error(ctx, "Admin server error", "component", "admin", "error", err)
 		}
 	}()

@@ -91,3 +91,21 @@ func TestHierarchicalAllowedOn_AllowsStandaloneAndSentinel(t *testing.T) {
 		}
 	}
 }
+
+func TestConfig_AdminHostDefaultLoopback(t *testing.T) {
+	t.Setenv("ADMIN_HOST", "")
+	t.Setenv("ADMIN_PORT", "8082")
+	cfg := LoadConfig()
+	if cfg.AdminHost != "127.0.0.1" {
+		t.Fatalf("expected default AdminHost 127.0.0.1, got %q", cfg.AdminHost)
+	}
+	if addr := cfg.AdminAddr(); addr != "127.0.0.1:8082" {
+		t.Fatalf("expected AdminAddr 127.0.0.1:8082, got %q", addr)
+	}
+
+	t.Setenv("ADMIN_HOST", "0.0.0.0")
+	cfg2 := LoadConfig()
+	if addr := cfg2.AdminAddr(); addr != "0.0.0.0:8082" {
+		t.Fatalf("expected AdminAddr 0.0.0.0:8082, got %q", addr)
+	}
+}

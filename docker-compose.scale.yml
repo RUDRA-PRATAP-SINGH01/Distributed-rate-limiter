@@ -29,6 +29,7 @@ services:
       - ENDPOINT_CAPACITY=10
       - ENDPOINT_REFILL_RATE=0.5
       - ENABLE_ADMIN_API=true
+      - ADMIN_HOST=0.0.0.0
       - ADMIN_PORT=8082
       - ADMIN_API_KEY=dev-key-change-in-prod
       - INTERNAL_API_KEY=dev-internal-key-change-in-prod

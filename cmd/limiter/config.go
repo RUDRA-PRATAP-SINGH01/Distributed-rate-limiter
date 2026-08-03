@@ -22,6 +22,7 @@ type Config struct {
 
 	EnableHierarchical bool
 	EnableAdminAPI     bool
+	AdminHost          string
 	AdminPort          int
 	AdminAPIKey        string
 	OverrideCacheTTLMs int
@@ -48,7 +49,11 @@ type Config struct {
 }
 
 func (c Config) AdminAddr() string {
-	return fmt.Sprintf(":%d", c.AdminPort)
+	host := c.AdminHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("%s:%d", host, c.AdminPort)
 }
 
 func (c Config) MetricsAuthKey() string {
@@ -72,6 +77,7 @@ func LoadConfig() Config {
 		WindowSec:          mustParseIntEnv("WINDOW_SEC", "60", strict),
 		EnableHierarchical: getEnv("ENABLE_HIERARCHICAL", "true") == "true",
 		EnableAdminAPI:     getEnv("ENABLE_ADMIN_API", "true") == "true",
+		AdminHost:          getEnv("ADMIN_HOST", "127.0.0.1"),
 		AdminPort:          mustParseIntEnv("ADMIN_PORT", "8082", strict),
 		// Default is a dev placeholder only — override in any shared or production environment.
 		AdminAPIKey:        getEnv("ADMIN_API_KEY", "dev-key-change-in-prod"),
@@ -116,6 +122,15 @@ func LoadConfig() Config {
 	if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 			logging.Fatal("TLS_CERT_FILE and TLS_KEY_FILE must both be set to enable TLS")
+		}
+	}
+	if cfg.EnableAdminAPI && cfg.TLSCertFile == "" {
+		switch cfg.AdminHost {
+		case "0.0.0.0", "::", "[::]":
+			logging.Warn(context.Background(), "Admin API is bound on all interfaces without TLS — set TLS_CERT_FILE/TLS_KEY_FILE or keep ADMIN_HOST=127.0.0.1",
+				"component", "limiter",
+				"admin_host", cfg.AdminHost,
+			)
 		}
 	}
 
