@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -308,8 +309,109 @@ func TestSidecar_ContextCancellation(t *testing.T) {
 	resp := rr.Result()
 	defer resp.Body.Close()
 
-	// Request should be aborted/denied due to cancelled context
-	if resp.StatusCode != http.StatusServiceUnavailable && resp.StatusCode != http.StatusOK {
-		t.Errorf("expected HTTP 503 or abort, got %d", resp.StatusCode)
+	// Request should be aborted/denied due to cancelled context (503 from limiter or 502 from proxy)
+	if resp.StatusCode != http.StatusServiceUnavailable && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("expected HTTP 503/502 or abort, got %d", resp.StatusCode)
+	}
+}
+
+func TestSidecar_PathAllowed_StrictBoundaries(t *testing.T) {
+	s := &Sidecar{
+		allowedPaths: parseAllowedPaths("/api, /v1/auth/"),
+	}
+
+	// Exact matches and child paths should be allowed
+	allowed := []string{"/api", "/api/", "/api/users", "/api/users/123", "/v1/auth", "/v1/auth/", "/v1/auth/login"}
+	for _, p := range allowed {
+		if !s.pathAllowed(p) {
+			t.Errorf("expected path %q to be allowed", p)
+		}
+	}
+
+	// Sibling / prefix collision paths must NOT be allowed (H-06)
+	rejected := []string{"/apiEvil", "/api-admin", "/apitoken", "/v1/authorize", "/other", "/api/../secret", "/api/../../etc/passwd"}
+	for _, p := range rejected {
+		if s.pathAllowed(p) {
+			t.Errorf("expected path %q to be REJECTED (H-06 boundary bypass prevented)", p)
+		}
+	}
+
+	if !s.pathAllowed("/api/./users") {
+		t.Error("expected cleaned /api/./users to be allowed")
+	}
+
+	root := &Sidecar{allowedPaths: parseAllowedPaths("/")}
+	if !root.pathAllowed("/anything") {
+		t.Error("ALLOWED_PATHS=/ must still match all HTTP paths")
+	}
+}
+
+func TestSidecar_Singleflight_LeaderCancellationDoesNotAbortWaiters(t *testing.T) {
+	fixture, cleanup := newTestFixture(t, false, 50*time.Millisecond, false)
+	defer cleanup()
+
+	// Block limiter until both requests are waiting
+	blocker := make(chan struct{})
+	fixture.limiterHandler.mu.Lock()
+	fixture.limiterHandler.blockChan = blocker
+	fixture.limiterHandler.allowed = true
+	fixture.limiterHandler.limit = 10
+	fixture.limiterHandler.remaining = 9
+	fixture.limiterHandler.mu.Unlock()
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	waiterCtx := context.Background()
+
+	leaderDone := make(chan int, 1)
+	waiterDone := make(chan int, 1)
+
+	// Launch leader with cancellable context
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, "/api/data", nil).WithContext(leaderCtx)
+		req.Header.Set(identity.UserIDHeader, "user-sf-leader")
+		rr := httptest.NewRecorder()
+		fixture.sidecar.ServeHTTP(rr, req)
+		leaderDone <- rr.Result().StatusCode
+	}()
+
+	// Small pause so leader enters singleflight first
+	time.Sleep(10 * time.Millisecond)
+
+	// Launch parallel waiter with independent context
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, "/api/data", nil).WithContext(waiterCtx)
+		req.Header.Set(identity.UserIDHeader, "user-sf-leader") // same user -> shares singleflight
+		rr := httptest.NewRecorder()
+		fixture.sidecar.ServeHTTP(rr, req)
+		waiterDone <- rr.Result().StatusCode
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Cancel the leader request while in-flight!
+	cancelLeader()
+
+	// Unblock limiter to complete the shared call
+	close(blocker)
+
+	waiterStatus := <-waiterDone
+
+	// Waiter MUST succeed with HTTP 200 (not fail with 503 due to leader cancellation) (H-12)
+	if waiterStatus != http.StatusOK {
+		t.Fatalf("expected waiter to receive HTTP 200 despite leader cancellation, got %d", waiterStatus)
+	}
+}
+
+func TestReadRequestBody_TooLarge(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), 64)
+	req := httptest.NewRequest(http.MethodPost, "/api/data", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	got, err := readRequestBody(rr, req, 16)
+	if err == nil {
+		t.Fatalf("expected max-bytes error, read %d bytes", len(got))
+	}
+	var maxErr *http.MaxBytesError
+	if !errors.As(err, &maxErr) {
+		t.Fatalf("expected *http.MaxBytesError, got %T %v", err, err)
 	}
 }

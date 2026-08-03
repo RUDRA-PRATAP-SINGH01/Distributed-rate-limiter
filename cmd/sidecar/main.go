@@ -20,9 +20,11 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	urlpath "path"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -56,6 +58,8 @@ type limitResult struct {
 	retryAfter string
 }
 
+const defaultDenialCacheCap int64 = 10000
+
 type Sidecar struct {
 	upstreamURL      string
 	limiterURL       string
@@ -64,6 +68,8 @@ type Sidecar struct {
 	allowQueryUserID bool
 	allowedPaths     []string
 	cache            sync.Map
+	cacheSize        atomic.Int64
+	maxCacheSize     int64 // 0 → defaultDenialCacheCap; tests may lower it
 	limitFlight      singleflight.Group
 	ttl              time.Duration
 	failOpen         bool
@@ -109,22 +115,62 @@ func NewSidecar(
 	}
 }
 
+func (s *Sidecar) denialCacheCap() int64 {
+	if s.maxCacheSize > 0 {
+		return s.maxCacheSize
+	}
+	return defaultDenialCacheCap
+}
+
+func (s *Sidecar) storeDenial(key string, entry CacheEntry) {
+	if _, exists := s.cache.Load(key); exists {
+		s.cache.Store(key, entry)
+		return
+	}
+	if s.cacheSize.Load() >= s.denialCacheCap() {
+		return
+	}
+	s.cache.Store(key, entry)
+	s.cacheSize.Add(1)
+}
+
+func (s *Sidecar) deleteCacheEntry(key any) {
+	if _, loaded := s.cache.LoadAndDelete(key); loaded {
+		if n := s.cacheSize.Add(-1); n < 0 {
+			s.cacheSize.Store(0)
+		}
+	}
+}
+
 func (s *Sidecar) StartCacheSweeper(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 500 * time.Millisecond
+	}
 	ticker := time.NewTicker(interval)
 	go func() {
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				now := time.Now()
+				count := int64(0)
+				var excessKeys []any
 				s.cache.Range(func(key, value interface{}) bool {
 					entry, ok := value.(CacheEntry)
-					if ok && now.After(entry.ExpiresAt) {
-						s.cache.Delete(key)
+					if !ok || now.After(entry.ExpiresAt) {
+						s.deleteCacheEntry(key)
+						return true
+					}
+					count++
+					if count > s.denialCacheCap() {
+						excessKeys = append(excessKeys, key)
 					}
 					return true
 				})
+				for _, k := range excessKeys {
+					s.deleteCacheEntry(k)
+				}
 			case <-ctx.Done():
-				ticker.Stop()
 				return
 			}
 		}
@@ -170,12 +216,31 @@ func (s *Sidecar) cacheKey(r *http.Request, userID string) string {
 	return tenantID + "|" + userID + "|" + r.URL.Path
 }
 
-func (s *Sidecar) pathAllowed(path string) bool {
+func normalizeHTTPPath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	cleaned := urlpath.Clean(p)
+	if cleaned == "." {
+		return "/"
+	}
+	if !strings.HasPrefix(cleaned, "/") {
+		cleaned = "/" + cleaned
+	}
+	return cleaned
+}
+
+func (s *Sidecar) pathAllowed(requestPath string) bool {
 	if len(s.allowedPaths) == 0 {
 		return true
 	}
+	path := normalizeHTTPPath(requestPath)
 	for _, prefix := range s.allowedPaths {
-		if path == prefix || strings.HasPrefix(path, prefix+"/") || strings.HasPrefix(path, prefix) {
+		p := normalizeHTTPPath(prefix)
+		if p == "/" {
+			return true
+		}
+		if path == p || strings.HasPrefix(path, p+"/") {
 			return true
 		}
 	}
@@ -286,7 +351,7 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 			"error", err,
 		)
 		if s.failOpen {
-			s.forwardIdempotent(w, r, scope, idemKey, claim.FenceToken)
+			s.forwardIdempotent(w, r, scope, idemKey, claim.FenceToken, body)
 			return
 		}
 		_ = s.failIdempotent(r.Context(), scope, idemKey, claim.FenceToken, http.StatusServiceUnavailable,
@@ -297,19 +362,19 @@ func (s *Sidecar) serveIdempotent(w http.ResponseWriter, r *http.Request, userID
 	}
 
 	if !result.allowed {
-		body := []byte(`{"error":"Too many requests"}`)
-		_ = s.completeIdempotent(r.Context(), scope, idemKey, claim.FenceToken, http.StatusTooManyRequests, map[string]string{"Content-Type": "application/json"}, body)
-		w.Header().Set("X-Idempotency-Status", "created")
+		_ = s.failIdempotent(r.Context(), scope, idemKey, claim.FenceToken, http.StatusTooManyRequests,
+			map[string]string{"Content-Type": "application/json"},
+			[]byte(`{"error":"Too many requests"}`))
 		s.writeDenial(w, result.limit, result.remaining, result.retryAfter)
 		return
 	}
 
 	idempotency.SetCreatedHeader(w)
 	s.writeRateLimitHeaders(w, result.limit, result.remaining)
-	s.forwardIdempotent(w, r, scope, idemKey, claim.FenceToken)
+	s.forwardIdempotent(w, r, scope, idemKey, claim.FenceToken, body)
 }
 
-func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scope, idemKey, fenceToken string) {
+func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scope, idemKey, fenceToken string, body []byte) {
 	ctx, span := telemetry.StartSpan(r.Context(), "sidecar.upstream_proxy",
 		attribute.String("http.path", r.URL.Path),
 	)
@@ -318,7 +383,6 @@ func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scop
 
 	capturer := idempotency.NewResponseCapturer(w)
 	if s.router != nil {
-		body, _ := readRequestBody(r)
 		if err := s.router.Forward(r.Context(), capturer, r, body); err != nil {
 			logging.Error(r.Context(), "routing forward failed",
 				"component", "sidecar",
@@ -409,8 +473,16 @@ func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID str
 	metrics.RecordCacheMiss()
 
 	// singleflight: 100 concurrent requests for the same user share one limiter round-trip.
+	// Detach context cancellation from leader so client disconnects do not fail concurrent waiters (H-12).
+	flightTimeout := s.httpClient.Timeout
+	if flightTimeout <= 0 {
+		flightTimeout = 1500 * time.Millisecond
+	}
+	flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flightTimeout)
+	defer cancel()
+
 	resultAny, err, _ := s.limitFlight.Do(cacheKey, func() (interface{}, error) {
-		return s.checkRateLimit(ctx, r, userID, false)
+		return s.checkRateLimit(flightCtx, r, userID, false)
 	})
 	if err != nil {
 		elapsed := time.Since(start).Seconds()
@@ -434,15 +506,14 @@ func (s *Sidecar) serveNormal(w http.ResponseWriter, r *http.Request, userID str
 	}
 
 	result := resultAny.(limitResult)
-	s.cache.Store(cacheKey, CacheEntry{
-		Allowed:    result.allowed,
-		Remaining:  result.remaining,
-		Limit:      result.limit,
-		RetryAfter: result.retryAfter,
-		ExpiresAt:  time.Now().Add(s.ttl),
-	})
-
 	if !result.allowed {
+		s.storeDenial(cacheKey, CacheEntry{
+			Allowed:    false,
+			Remaining:  result.remaining,
+			Limit:      result.limit,
+			RetryAfter: result.retryAfter,
+			ExpiresAt:  time.Now().Add(s.ttl),
+		})
 		s.writeDenial(w, result.limit, result.remaining, result.retryAfter)
 		return
 	}
@@ -585,6 +656,8 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 		Allowed bool `json:"allowed"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		callErr = err
+		telemetry.RecordError(span, err)
 		return limitResult{}, err
 	}
 	span.SetAttributes(attribute.Bool("rate_limit.allowed", body.Allowed))
@@ -599,7 +672,21 @@ func (s *Sidecar) forwardRequest(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 
 	if s.router != nil {
-		body, _ := readRequestBody(r)
+		maxBytes := s.idempotencyCfg.MaxBodyBytes
+		if maxBytes <= 0 {
+			maxBytes = 1048576 // 1MB default
+		}
+		body, err := readRequestBody(w, r, maxBytes)
+		if err != nil {
+			logging.Error(ctx, "failed to read request body for routing", "error", err)
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				http.Error(w, "request entity too large", http.StatusRequestEntityTooLarge)
+			} else {
+				http.Error(w, "failed to read request body", http.StatusBadRequest)
+			}
+			return
+		}
 		if err := s.router.Forward(ctx, w, r, body); err != nil {
 			logging.Error(ctx, "routing forward failed",
 				"component", "sidecar",
@@ -617,10 +704,14 @@ func (s *Sidecar) forwardRequest(w http.ResponseWriter, r *http.Request) {
 	s.proxy.ServeHTTP(w, r)
 }
 
-func readRequestBody(r *http.Request) ([]byte, error) {
+func readRequestBody(w http.ResponseWriter, r *http.Request, maxBytes int64) ([]byte, error) {
 	if r.Body == nil {
 		return nil, nil
 	}
+	if maxBytes <= 0 {
+		maxBytes = 1048576 // 1MB default
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
@@ -820,7 +911,7 @@ func main() {
 	)
 
 	sweeperCtx, sweeperCancel := context.WithCancel(context.Background())
-	sidecar.StartCacheSweeper(sweeperCtx, 10*time.Second)
+	sidecar.StartCacheSweeper(sweeperCtx, 500*time.Millisecond)
 
 	srv := &http.Server{
 		Addr:         ":" + port,

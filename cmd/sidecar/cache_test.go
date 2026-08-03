@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -156,4 +157,63 @@ func TestSidecar_CacheSweeper(t *testing.T) {
 	// Cancel context to stop sweeper cleanly
 	cancel()
 	time.Sleep(10 * time.Millisecond)
+}
+
+func TestSidecar_AllowsNeverStoredInCache(t *testing.T) {
+	fixture, cleanup := newTestFixture(t, false, 50*time.Millisecond, false)
+	defer cleanup()
+
+	fixture.limiterHandler.allowed = true
+	fixture.limiterHandler.limit = 10
+	fixture.limiterHandler.remaining = 9
+
+	// Send 50 allowed requests for distinct users
+	for i := 0; i < 50; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+		req.Header.Set(identity.UserIDHeader, fmt.Sprintf("user-allowed-%d", i))
+		rr := httptest.NewRecorder()
+		fixture.sidecar.ServeHTTP(rr, req)
+		if rr.Result().StatusCode != http.StatusOK {
+			t.Fatalf("expected HTTP 200, got %d", rr.Result().StatusCode)
+		}
+	}
+
+	// Verify that 0 allowed entries entered the cache map (H-02)
+	cacheSize := 0
+	fixture.sidecar.cache.Range(func(key, value interface{}) bool {
+		cacheSize++
+		return true
+	})
+	if cacheSize != 0 {
+		t.Fatalf("expected 0 entries in cache for allowed requests, got %d", cacheSize)
+	}
+}
+
+func TestSidecar_DenialCacheInsertCap(t *testing.T) {
+	fixture, cleanup := newTestFixture(t, false, time.Hour, false)
+	defer cleanup()
+
+	fixture.sidecar.maxCacheSize = 8
+	fixture.limiterHandler.allowed = false
+	fixture.limiterHandler.limit = 5
+	fixture.limiterHandler.remaining = 0
+
+	for i := 0; i < 20; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+		req.Header.Set(identity.UserIDHeader, fmt.Sprintf("user-cap-%d", i))
+		rr := httptest.NewRecorder()
+		fixture.sidecar.ServeHTTP(rr, req)
+		if rr.Result().StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("expected HTTP 429, got %d", rr.Result().StatusCode)
+		}
+	}
+
+	cacheSize := 0
+	fixture.sidecar.cache.Range(func(key, value interface{}) bool {
+		cacheSize++
+		return true
+	})
+	if cacheSize > 8 {
+		t.Fatalf("expected denial cache cap of 8, got %d entries", cacheSize)
+	}
 }

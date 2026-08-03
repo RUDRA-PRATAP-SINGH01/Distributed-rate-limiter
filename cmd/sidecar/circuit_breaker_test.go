@@ -131,3 +131,35 @@ func TestSidecar_CB_IgnoreRateLimitDenials(t *testing.T) {
 		t.Fatalf("expected breaker to remain closed on rate-limit denials, got %s", state.State)
 	}
 }
+
+// 5. Malformed JSON on 200 OK must set callErr and trip the circuit breaker (H-11)
+func TestSidecar_CB_JSONDecodeErrorTripsCircuit(t *testing.T) {
+	fixture, cleanup := newTestFixture(t, false, 100*time.Millisecond, false)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Return 200 OK with malformed JSON body
+	fixture.limiterHandler.statusCode = http.StatusOK
+	fixture.limiterHandler.bodyJSON = "{malformed-json-payload"
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+		req.Header.Set(identity.UserIDHeader, "user-cb-decode-err")
+		rr := httptest.NewRecorder()
+		fixture.sidecar.ServeHTTP(rr, req)
+
+		if rr.Result().StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("iter %d: expected HTTP 503 on decode failure, got %d", i, rr.Result().StatusCode)
+		}
+	}
+
+	// Verify breaker tripped to StateOpen (H-11)
+	state, err := fixture.sidecar.limiterCircuit.GetState(ctx, circuitbreaker.TargetCentralLimiter)
+	if err != nil {
+		t.Fatalf("GetState: %v", err)
+	}
+	if state.State != circuitbreaker.StateOpen {
+		t.Fatalf("expected breaker to trip to open on decode failures, got %s", state.State)
+	}
+}
