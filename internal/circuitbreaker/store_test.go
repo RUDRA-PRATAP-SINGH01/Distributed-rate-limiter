@@ -182,8 +182,8 @@ func TestCircuitBreaker_RedisKeyExpiresAfter24h(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TTL(%s): %v", key, err)
 	}
-	if ttl <= 0 {
-		t.Fatalf("expected positive TTL on %s, got %v", key, ttl)
+	if ttl < 23*time.Hour || ttl > 24*time.Hour {
+		t.Fatalf("expected ~24h TTL on %s, got %v", key, ttl)
 	}
 }
 

@@ -81,6 +81,10 @@ func (s *LocalStore) Allow(_ context.Context, target string) (AllowResult, error
 		fallthrough
 	case StateHalfOpen:
 		if c.halfOpenCalls >= s.cfg.HalfOpenMaxProbes {
+			// Missing halfOpenAt (legacy in-memory state) is treated as "just started".
+			if c.halfOpenAt.IsZero() {
+				c.halfOpenAt = now
+			}
 			// Check if half-open trial timed out without recovery (e.g. hung in-flight probes)
 			if now.Sub(c.halfOpenAt) >= time.Duration(s.cfg.OpenCooldownMs)*time.Millisecond {
 				c.state = StateOpen

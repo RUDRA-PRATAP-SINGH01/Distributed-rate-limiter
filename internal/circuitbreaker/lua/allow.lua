@@ -35,8 +35,14 @@ end
 if state == 'half_open' then
   local probes = tonumber(redis.call('HGET', key, 'half_open_calls') or '0')
   if probes >= max_probes then
-    -- Check if half-open trial timed out without recovery (e.g. hung probes)
+    -- Check if half-open trial timed out without recovery (e.g. hung probes).
+    -- Missing half_open_at (pre-upgrade keys) is treated as "just started" so
+    -- we stay half-open instead of immediately reopening.
     local half_open_at = tonumber(redis.call('HGET', key, 'half_open_at') or '0')
+    if half_open_at == 0 then
+      redis.call('HSET', key, 'half_open_at', now)
+      half_open_at = now
+    end
     if now - half_open_at >= cooldown then
       -- Cooldown deadline expired without recovery — reopen circuit
       redis.call('HSET', key, 'state', 'open', 'opened_at', now,

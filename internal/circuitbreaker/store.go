@@ -72,7 +72,7 @@ func (s *RedisStore) Allow(ctx context.Context, target string) (AllowResult, err
 		case StateOpen:
 			out.RejectionReason = "circuit_open"
 		case StateHalfOpen:
-			out.RejectionReason = "half_open_probe_quota_exhausted"
+			out.RejectionReason = "half_open_probe_in_flight"
 		}
 		metrics.RecordCircuitRejection(target, string(state))
 	}
