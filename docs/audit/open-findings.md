@@ -41,7 +41,16 @@ Two binaries share Redis: `cmd/limiter` (HTTP `/check` and `/check_hierarchical`
 | M-05 | Constant-time API key verification with SHA-256 pre-hashing to prevent timing and length oracles | `internal/auth/middleware.go`, `cmd/limiter/admin_*.go` |
 | M-06 | Audit index ZSETs auto-expire matching retention TTL; empty indexes DEL'd in Lua; user index capped at 1000; event hashes use ttl+60s so trim can still HGET; cap loop always ZREMs ghost members | `internal/audit/lua/append.lua`, `internal/audit/store_test.go` |
 | H-01 | Pre-boot topology check refuses `ENABLE_HIERARCHICAL=true` with `REDIS_MODE=cluster`; cluster client factory provided for flat check | `cmd/limiter/main.go`, `internal/redis/client.go` |
+| H-02 | Denial cache stores strictly denials (allows never enter the map), insert-time + sweeper cap (default 10k), sweeper 500ms | `cmd/sidecar/main.go`, `cmd/sidecar/cache_test.go` |
 | H-03 | Deleted un-synchronized `RedisTokenBucket` prototype; production strictly uses `RedisAtomicTokenBucket` | `internal/limiter/redis_atomic_token_bucket.go` |
+| H-05 | Rate-limit 429 denials and transient 503s expire with transient `LockTTL` instead of poisoning idempotency keys with 24h `CompletedTTL`; `claim.lua` reclaims expired failures | `internal/idempotency/lua/claim.lua`, `internal/idempotency/store.go`, `cmd/sidecar/main.go` |
+| H-06 | Strict path allowlist: `path.Clean` then exact match or `prefix+"/"`; `ALLOWED_PATHS=/` remains match-all | `cmd/sidecar/main.go`, `cmd/sidecar/sidecar_test.go` |
+| H-07 | Redis circuit breaker keys (`cb:{target}`) expire after 24h idle TTL (`86400s`) on both initial creation and update | `internal/circuitbreaker/lua/allow.lua`, `record.lua`, `store_test.go` |
+| H-08 | Half-open probe in-flight preservation: probe budget exhaustion preserves `StateHalfOpen` and rejects excess calls until in-flight probes record outcomes or cooldown deadline expires | `internal/circuitbreaker/lua/allow.lua`, `internal/circuitbreaker/local_store.go`, `store_test.go` |
+| H-09 | Admin API defaults to loopback `127.0.0.1`, optional `ListenAndServeTLS`, Compose maps `ADMIN_HOST=0.0.0.0`, Terraform binds loopback and does not open SG :8082 | `cmd/limiter/config.go`, `cmd/limiter/admin_api.go`, `docker-compose*.yml`, `deploy/terraform/` |
+| H-10 | Routing request body bounded with `http.MaxBytesReader` (default 1MB); returns 413 on overflow without forwarding empty body; idempotent routing reuses buffered body | `cmd/sidecar/main.go` |
+| H-11 | Malformed JSON on 200 OK from limiter sets `callErr = err` and records telemetry error, properly tripping central limiter circuit breaker | `cmd/sidecar/main.go`, `cmd/sidecar/circuit_breaker_test.go` |
+| H-12 | Singleflight callback decouples from leader's context cancellation via `context.WithoutCancel(ctx)` with 1.5s timeout budget to prevent cascading 503s on client disconnects | `cmd/sidecar/main.go`, `cmd/sidecar/sidecar_test.go` |
 
 Toolchain pin `go 1.25.0` + `toolchain go1.26.6` in `go.mod` is load-bearing for the vuln job (stdlib CVEs). Bump the toolchain when `govulncheck` reports a new stdlib advisory. Do not drop it.
 
@@ -49,7 +58,7 @@ Toolchain pin `go 1.25.0` + `toolchain go1.26.6` in `go.mod` is load-bearing for
 
 ## Open findings
 
-Counts: **6 Critical, 9 High, 0 Medium** still open. Two correction rows (`X-01`, `X-02`) are not defects. Note: H-09 (Admin API security) remains OPEN for TLS/bind/default-key hardening even though key comparison is now constant-time via M-05.
+Counts: **6 Critical, 0 High, 0 Medium** still open. Two correction rows (`X-01`, `X-02`) are not defects. (All High findings H-01 through H-12 are fully resolved).
 
 ---
 

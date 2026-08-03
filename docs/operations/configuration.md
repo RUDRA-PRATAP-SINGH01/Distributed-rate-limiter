@@ -32,12 +32,13 @@ All binaries are env-driven — same image for local, Docker, and production.
 
 ### Admin API (`:8082`)
 
-| Variable | Default |
-|----------|---------|
-| `ENABLE_ADMIN_API` | `true` |
-| `ADMIN_PORT` | `8082` |
-| `ADMIN_API_KEY` | `dev-key-change-in-prod` |
-| `OVERRIDE_CACHE_TTL_MS` | `5000` |
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `ENABLE_ADMIN_API` | `true` | |
+| `ADMIN_HOST` | `127.0.0.1` | Loopback default. Compose sets `0.0.0.0` for port-map. Terraform keeps loopback and does not expose `:8082` on the instance SG. Binding `0.0.0.0` without TLS logs a warning. |
+| `ADMIN_PORT` | `8082` | |
+| `ADMIN_API_KEY` | `dev-key-change-in-prod` | |
+| `OVERRIDE_CACHE_TTL_MS` | `5000` | |
 
 ### Security
 
