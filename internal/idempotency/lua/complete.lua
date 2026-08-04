@@ -1,6 +1,6 @@
 -- Atomically store a completed idempotency response.
--- KEYS[1] = idem:{scope}:{key}
--- KEYS[2] = idem:body:{scope}:{key}
+-- KEYS[1] = idem:{scope}:meta:{key}
+-- KEYS[2] = idem:{scope}:body:{key}
 -- ARGV[1] = http_status
 -- ARGV[2] = resp_headers (JSON)
 -- ARGV[3] = response body

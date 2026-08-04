@@ -1,5 +1,5 @@
 -- Atomically mark an idempotency record as failed (retryable).
--- KEYS[1] = idem:{scope}:{key}
+-- KEYS[1] = idem:{scope}:meta:{key}
 -- ARGV[1] = http_status
 -- ARGV[2] = resp_headers (JSON)
 -- ARGV[3] = error body

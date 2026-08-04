@@ -11,6 +11,7 @@ import (
 
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/luautil"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/metrics"
+	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/telemetry"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -46,11 +47,17 @@ func NewRedisStore(rdb redis.UniversalClient, cfg Config) *RedisStore {
 }
 
 func metaKey(scope, key string) string {
-	return fmt.Sprintf("idem:%s:%s", scope, key)
+	tag := redisclient.SanitizeHashTag(scope)
+	return fmt.Sprintf("idem:{%s}:meta:%s", tag, key)
 }
 
 func bodyKey(scope, key string) string {
-	return fmt.Sprintf("idem:body:%s:%s", scope, key)
+	tag := redisclient.SanitizeHashTag(scope)
+	return fmt.Sprintf("idem:{%s}:body:%s", tag, key)
+}
+
+func evalKeys(scope, key string) []string {
+	return []string{metaKey(scope, key), bodyKey(scope, key)}
 }
 
 func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) (*ClaimResponse, error) {
@@ -64,7 +71,7 @@ func (s *RedisStore) Claim(ctx context.Context, scope, key, requestHash string) 
 	start := time.Now()
 	fenceToken := uuid.New().String()
 	result, err := s.claimScript.Run(ctx, s.rdb,
-		[]string{metaKey(scope, key), bodyKey(scope, key)},
+		evalKeys(scope, key),
 		requestHash,
 		NowMillis(),
 		s.cfg.LockTTL,
@@ -137,7 +144,7 @@ func (s *RedisStore) Complete(ctx context.Context, req CompleteRequest) error {
 
 	start := time.Now()
 	result, err := s.completeScript.Run(ctx, s.rdb,
-		[]string{metaKey(req.Scope, req.Key), bodyKey(req.Scope, req.Key)},
+		evalKeys(req.Scope, req.Key),
 		req.HTTPStatus,
 		encodeHeaders(req.Headers),
 		string(req.Body),

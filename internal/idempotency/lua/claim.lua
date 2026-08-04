@@ -1,6 +1,6 @@
 -- Atomic idempotency claim: new, replay, in-progress, hash mismatch, or reclaim expired lock.
--- KEYS[1] = idem:{scope}:{key}  (HASH metadata)
--- KEYS[2] = idem:body:{scope}:{key}  (STRING large response body)
+-- KEYS[1] = idem:{scope}:meta:{key}  (HASH metadata; {scope} hash tag for Cluster)
+-- KEYS[2] = idem:{scope}:body:{key}  (STRING large response body; same slot as KEYS[1])
 -- ARGV[1] = request_hash
 -- ARGV[2] = now_ms
 -- ARGV[3] = lock_ttl_ms
