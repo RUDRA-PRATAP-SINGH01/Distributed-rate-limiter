@@ -47,6 +47,9 @@ func indexKey() string {
 
 // RegisterGateway upserts a gateway definition.
 func (s *RedisStore) RegisterGateway(ctx context.Context, gw Gateway) error {
+	if err := ValidateGatewayURL(gw.URL, s.cfg.AllowPrivate); err != nil {
+		return fmt.Errorf("gateway %s: %w", gw.ID, err)
+	}
 	key := gwKey(gw.ID)
 	exists, err := s.rdb.Exists(ctx, key).Result()
 	if err != nil {

@@ -36,6 +36,7 @@ func NewRouter(store *RedisStore, client *http.Client, cfg Config, breaker *circ
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
+	client = GuardHTTPClient(client, cfg.AllowPrivate)
 	return &Router{
 		store:    store,
 		selector: NewSelector(cfg),
@@ -85,6 +86,15 @@ func (r *Router) probeAll(ctx context.Context) {
 		return
 	}
 	for _, st := range states {
+		if err := ValidateGatewayURL(st.URL, r.cfg.AllowPrivate); err != nil {
+			logging.Error(ctx, "routing gateway probe skipped unsafe url",
+				"component", "routing",
+				"operation", "health_probe",
+				"gateway_id", st.ID,
+				"error", err,
+			)
+			continue
+		}
 		start := time.Now()
 		probeURL := strings.TrimRight(st.URL, "/") + "/health"
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
@@ -200,6 +210,9 @@ func (r *Router) Forward(ctx context.Context, w http.ResponseWriter, req *http.R
 }
 
 func (r *Router) execute(ctx context.Context, original *http.Request, body []byte, gw GatewayState) (*http.Response, error) {
+	if err := ValidateGatewayURL(gw.URL, r.cfg.AllowPrivate); err != nil {
+		return nil, err
+	}
 	target, err := url.Parse(gw.URL)
 	if err != nil {
 		return nil, err

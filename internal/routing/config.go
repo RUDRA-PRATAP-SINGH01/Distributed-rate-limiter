@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ type Config struct {
 	CircuitCooldownMs int64
 	MaxFailoverTries  int
 	ProbeIntervalSec  int
+	AllowPrivate      bool
 }
 
 func DefaultConfig() Config {
@@ -59,11 +61,12 @@ func LoadConfigFromEnv() Config {
 	if v := parseIntEnv("ROUTING_PROBE_INTERVAL_SEC", cfg.ProbeIntervalSec); v > 0 {
 		cfg.ProbeIntervalSec = v
 	}
+	cfg.AllowPrivate = parseBoolEnv("ROUTING_ALLOW_PRIVATE")
 	return cfg
 }
 
 // ParseGatewaysEnv parses GATEWAYS=id|url|weight,id|url|weight
-func ParseGatewaysEnv(raw string) ([]Gateway, error) {
+func ParseGatewaysEnv(raw string, allowPrivate bool) ([]Gateway, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
@@ -75,27 +78,30 @@ func ParseGatewaysEnv(raw string) ([]Gateway, error) {
 		}
 		fields := strings.Split(part, "|")
 		if len(fields) != 3 {
-			continue
+			return nil, fmt.Errorf("invalid GATEWAYS entry %q: want id|url|weight", part)
 		}
 		weight, _ := strconv.Atoi(strings.TrimSpace(fields[2]))
 		if weight <= 0 {
 			weight = 100
 		}
-		out = append(out, Gateway{
+		gw := Gateway{
 			ID:     strings.TrimSpace(fields[0]),
 			URL:    strings.TrimSpace(fields[1]),
 			Weight: weight,
-		})
+		}
+		if gw.ID == "" {
+			return nil, fmt.Errorf("invalid GATEWAYS entry %q: empty id", part)
+		}
+		if err := ValidateGatewayURL(gw.URL, allowPrivate); err != nil {
+			return nil, fmt.Errorf("gateway %s: %w", gw.ID, err)
+		}
+		out = append(out, gw)
 	}
 	return out, nil
 }
 
-func GatewaysFromEnv() []Gateway {
-	gws, err := ParseGatewaysEnv(os.Getenv("GATEWAYS"))
-	if err != nil || len(gws) == 0 {
-		return nil
-	}
-	return gws
+func GatewaysFromEnv() ([]Gateway, error) {
+	return ParseGatewaysEnv(os.Getenv("GATEWAYS"), parseBoolEnv("ROUTING_ALLOW_PRIVATE"))
 }
 
 func parseFloatEnv(key string, def float64) float64 {
@@ -114,4 +120,13 @@ func parseIntEnv(key string, def int) int {
 		}
 	}
 	return def
+}
+
+func parseBoolEnv(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
