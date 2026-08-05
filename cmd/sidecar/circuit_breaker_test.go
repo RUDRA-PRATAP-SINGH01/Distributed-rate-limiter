@@ -163,3 +163,96 @@ func TestSidecar_CB_JSONDecodeErrorTripsCircuit(t *testing.T) {
 		t.Fatalf("expected breaker to trip to open on decode failures, got %s", state.State)
 	}
 }
+
+// Local Allow rejects must not Record OutcomeSuccess (N-03). Otherwise half-open
+// excess probes can close the circuit without a real limiter call succeeding.
+func TestSidecar_CB_LocalRejectDoesNotRecordSuccess(t *testing.T) {
+	fixture, cleanup := newTestFixture(t, false, 100*time.Millisecond, false)
+	defer cleanup()
+
+	cbCfg := circuitbreaker.DefaultConfig()
+	cbCfg.OpenCooldownMs = 50
+	cbCfg.MinSamples = 2
+	cbCfg.ConsecutiveFailures = 2
+	cbCfg.HalfOpenMaxProbes = 1
+	cbCfg.HalfOpenSuccessRequired = 2
+	store := circuitbreaker.NewRedisStore(fixture.rdb, cbCfg)
+	fixture.sidecar.SetLimiterCircuit(circuitbreaker.NewBreaker(store))
+
+	ctx := context.Background()
+	fixture.limiterHandler.statusCode = http.StatusInternalServerError
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+		req.Header.Set(identity.UserIDHeader, "user-cb-n03")
+		rr := httptest.NewRecorder()
+		fixture.sidecar.ServeHTTP(rr, req)
+	}
+	state, err := fixture.sidecar.limiterCircuit.GetState(ctx, circuitbreaker.TargetCentralLimiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != circuitbreaker.StateOpen {
+		t.Fatalf("expected open, got %s", state.State)
+	}
+
+	time.Sleep(65 * time.Millisecond)
+
+	block := make(chan struct{})
+	fixture.limiterHandler.mu.Lock()
+	fixture.limiterHandler.callCount = 0
+	fixture.limiterHandler.blockChan = block
+	fixture.limiterHandler.statusCode = http.StatusOK
+	fixture.limiterHandler.allowed = true
+	fixture.limiterHandler.mu.Unlock()
+
+	done := make(chan int, 1)
+	go func() {
+		req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+		req.Header.Set(identity.UserIDHeader, "user-cb-n03-probe")
+		rr := httptest.NewRecorder()
+		fixture.sidecar.ServeHTTP(rr, req)
+		done <- rr.Result().StatusCode
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fixture.limiterHandler.mu.Lock()
+		n := fixture.limiterHandler.callCount
+		fixture.limiterHandler.mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("probe never reached limiter")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+		req.Header.Set(identity.UserIDHeader, "user-cb-n03-excess")
+		rr := httptest.NewRecorder()
+		fixture.sidecar.ServeHTTP(rr, req)
+		if rr.Result().StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("excess %d: expected 503, got %d", i, rr.Result().StatusCode)
+		}
+	}
+
+	state2, err := fixture.sidecar.limiterCircuit.GetState(ctx, circuitbreaker.TargetCentralLimiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state2.State != circuitbreaker.StateHalfOpen {
+		t.Fatalf("excess rejects must not close the circuit, got %s", state2.State)
+	}
+
+	close(block)
+	select {
+	case code := <-done:
+		if code != http.StatusOK {
+			t.Fatalf("probe status %d", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocked probe hung")
+	}
+}

@@ -191,13 +191,11 @@ func (s *Sidecar) SetLimiterCircuit(b *circuitbreaker.Breaker) {
 }
 
 func (s *Sidecar) tenantID(r *http.Request) string {
-	if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
-		return tenantID
+	id, err := identity.ResolveTenantID(r, s.allowQueryUserID)
+	if err != nil {
+		return identity.DefaultTenant
 	}
-	if tenantID := r.URL.Query().Get("tenant_id"); tenantID != "" {
-		return tenantID
-	}
-	return "default"
+	return id
 }
 
 // cacheKey scopes entries by tenant + user + path in hierarchical mode so
@@ -206,14 +204,7 @@ func (s *Sidecar) cacheKey(r *http.Request, userID string) string {
 	if !s.useHierarchical {
 		return userID
 	}
-	tenantID := r.Header.Get("X-Tenant-ID")
-	if tenantID == "" {
-		tenantID = r.URL.Query().Get("tenant_id")
-	}
-	if tenantID == "" {
-		tenantID = "default"
-	}
-	return tenantID + "|" + userID + "|" + r.URL.Path
+	return s.tenantID(r) + "|" + userID + "|" + r.URL.Path
 }
 
 func normalizeHTTPPath(p string) string {
@@ -260,6 +251,10 @@ func (s *Sidecar) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	userID, err := identity.ResolveUserID(r, s.allowQueryUserID)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := identity.ResolveTenantID(r, s.allowQueryUserID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -401,7 +396,11 @@ func (s *Sidecar) forwardIdempotent(w http.ResponseWriter, r *http.Request, scop
 		s.proxy.ServeHTTP(capturer, r)
 	}
 	captured := capturer.Commit()
-	_ = s.completeIdempotent(r.Context(), scope, idemKey, fenceToken, captured.StatusCode, captured.Headers, captured.Body)
+	if idempotency.PersistAsComplete(captured.StatusCode) {
+		_ = s.completeIdempotent(r.Context(), scope, idemKey, fenceToken, captured.StatusCode, captured.Headers, captured.Body)
+		return
+	}
+	_ = s.failIdempotent(r.Context(), scope, idemKey, fenceToken, captured.StatusCode, captured.Headers, captured.Body)
 }
 
 func (s *Sidecar) completeIdempotent(ctx context.Context, scope, key, fenceToken string, status int, headers map[string]string, body []byte) error {
@@ -545,9 +544,10 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 	var (
 		callErr    error
 		statusCode int
+		skipRecord bool
 	)
 	defer func() {
-		if s.limiterCircuit == nil {
+		if s.limiterCircuit == nil || skipRecord {
 			return
 		}
 		input := circuitbreaker.ClassifyHTTP(callErr, statusCode, time.Since(start), s.limiterCircuit.Config().LatencyThresholdMs)
@@ -563,6 +563,7 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 				return limitResult{}, fmt.Errorf("circuit breaker unavailable: %w", err)
 			}
 		} else if !allow.Allowed {
+			skipRecord = true
 			err := fmt.Errorf("central limiter circuit %s", allow.State)
 			telemetry.RecordError(span, err)
 			return limitResult{}, err
@@ -606,10 +607,8 @@ func (s *Sidecar) checkRateLimit(ctx context.Context, r *http.Request, userID st
 	if s.internalAPIKey != "" {
 		req.Header.Set(auth.InternalAPIKeyHeader, s.internalAPIKey)
 	}
-	if tenantID := r.Header.Get("X-Tenant-ID"); tenantID != "" {
-		req.Header.Set("X-Tenant-ID", tenantID)
-	} else if tenantID := r.URL.Query().Get("tenant_id"); tenantID != "" {
-		req.Header.Set("X-Tenant-ID", tenantID)
+	if tenantID, err := identity.ResolveTenantID(r, s.allowQueryUserID); err == nil {
+		req.Header.Set(identity.TenantIDHeader, tenantID)
 	}
 
 	resp, err := s.httpClient.Do(req)
@@ -864,7 +863,10 @@ func main() {
 		store.SetBreaker(breaker)
 		router := routing.NewRouter(store, sidecar.httpClient, routeCfg, breaker)
 		sidecar.SetLimiterCircuit(breaker)
-		gateways := routing.GatewaysFromEnv()
+		gateways, err := routing.ParseGatewaysEnv(os.Getenv("GATEWAYS"), routeCfg.AllowPrivate)
+		if err != nil {
+			logging.Fatal("invalid GATEWAYS", "error", err)
+		}
 		if len(gateways) == 0 {
 			logging.Fatal("ENABLE_ROUTING=true requires GATEWAYS env")
 		}
