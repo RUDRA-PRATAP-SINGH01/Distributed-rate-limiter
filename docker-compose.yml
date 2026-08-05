@@ -44,7 +44,7 @@ services:
       - ADMIN_PORT=8082
       - ADMIN_API_KEY=dev-key-change-in-prod
       - INTERNAL_API_KEY=dev-internal-key-change-in-prod
-      - ALLOW_QUERY_USER_ID=true
+      - ALLOW_QUERY_USER_ID=false
       - OVERRIDE_CACHE_TTL_MS=5000
       - ENABLE_AUDIT_TRAIL=true
       - AUDIT_RETENTION_HOURS=168
@@ -128,6 +128,7 @@ services:
       - RATE_LIMITER_URL=http://limiter:8080
       - ENABLE_ROUTING=true
       - GATEWAYS=gateway-a|http://gateway-a:8081|100,gateway-b|http://gateway-b:8081|80,gateway-c|http://gateway-c:8081|60
+      - ROUTING_ALLOW_PRIVATE=true
       - ROUTING_TARGET_LATENCY_MS=100
       - ROUTING_CIRCUIT_ERROR_RATE=0.5
       - ROUTING_CIRCUIT_MIN_SAMPLES=10
@@ -136,7 +137,7 @@ services:
       - USE_HIERARCHICAL=false
       - FAIL_OPEN=false
       - INTERNAL_API_KEY=dev-internal-key-change-in-prod
-      - ALLOW_QUERY_USER_ID=true
+      - ALLOW_QUERY_USER_ID=false
       - ALLOWED_PATHS=/
       - DEBUG=false
       - ENABLE_IDEMPOTENCY=true

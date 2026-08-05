@@ -67,7 +67,7 @@ fallback_traffic() {
     while true; do
       for i in 1 2 3 4 5 6 7 8 9 10; do
         uid="bg_user_$(( (RANDOM % 5) + 1 ))"
-        curl -s -o /dev/null "http://localhost:9090/?user_id=${uid}" || true
+        curl -s -o /dev/null -H "X-User-ID: ${uid}" "http://localhost:9090/" || true
       done
       k="$(uuidgen 2>/dev/null || echo "demo-$RANDOM")"
       curl -s -o /dev/null -X POST "http://localhost:9090/api/orders" \
@@ -102,7 +102,7 @@ wait_for "http://localhost:9091/-/healthy" "Prometheus" || ok=1
 wait_for "http://localhost:16686/" "Jaeger" || ok=1
 
 echo -n "Probe sidecar proxy..."
-code="$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:9090/?user_id=startup_probe" || true)"
+code="$(curl -s -o /dev/null -w "%{http_code}" -H "X-User-ID: startup_probe" "http://localhost:9090/" || true)"
 if [ "$code" = "200" ] || [ "$code" = "429" ]; then echo " OK ($code)"; else echo " WARN ($code)"; fi
 
 if [ "$NO_TRAFFIC" -eq 0 ]; then
@@ -114,7 +114,7 @@ if [ "$NO_TRAFFIC" -eq 0 ]; then
     fallback_traffic
   fi
   for i in 1 2 3 4 5; do
-    curl -s -o /dev/null "http://localhost:9090/?user_id=demo_$i" || true
+    curl -s -o /dev/null -H "X-User-ID: demo_$i" "http://localhost:9090/" || true
   done
   k="$(uuidgen 2>/dev/null || echo "seed-$RANDOM")"
   curl -s -o /dev/null -X POST "http://localhost:9090/api/orders" \

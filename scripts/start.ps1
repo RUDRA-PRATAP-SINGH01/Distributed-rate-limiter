@@ -50,7 +50,7 @@ function Start-FallbackTraffic {
             1..10 | ForEach-Object {
                 $uid = "bg_user_$([Math]::Floor((Get-Random) % 5) + 1)"
                 try {
-                    Invoke-WebRequest "http://localhost:9090/?user_id=$uid" -UseBasicParsing -TimeoutSec 2 | Out-Null
+                    Invoke-WebRequest "http://localhost:9090/" -Headers @{ "X-User-ID" = $uid } -UseBasicParsing -TimeoutSec 2 | Out-Null
                 } catch {}
             }
             # occasional idempotent + deny-friendly burst for richer Grafana/Jaeger
@@ -105,7 +105,7 @@ $ok = (Wait-ForEndpoint "http://localhost:16686/" "Jaeger") -and $ok
 
 Write-Host -NoNewline "Probe sidecar proxy..."
 try {
-    Invoke-WebRequest "http://localhost:9090/?user_id=startup_probe" -UseBasicParsing -TimeoutSec 5 | Out-Null
+    Invoke-WebRequest "http://localhost:9090/" -Headers @{ "X-User-ID" = "startup_probe" } -UseBasicParsing -TimeoutSec 5 | Out-Null
     Write-Host " OK" -ForegroundColor Green
 } catch {
     $code = $null
@@ -126,7 +126,7 @@ if (-not $NoTraffic) {
     }
     # Seed a few rich traces for Jaeger immediately
     1..5 | ForEach-Object {
-        try { Invoke-WebRequest "http://localhost:9090/?user_id=demo_$_" -UseBasicParsing -TimeoutSec 2 | Out-Null } catch {}
+        try { Invoke-WebRequest "http://localhost:9090/" -Headers @{ "X-User-ID" = "demo_$_" } -UseBasicParsing -TimeoutSec 2 | Out-Null } catch {}
     }
     $k = [guid]::NewGuid().ToString()
     try {
