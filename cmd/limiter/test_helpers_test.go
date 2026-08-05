@@ -185,12 +185,12 @@ func newTestFixture(t *testing.T, overrideCfg func(*Config)) (*testFixture, func
 				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 				return
 			}
-			tenantID := r.Header.Get("X-Tenant-ID")
-			if tenantID == "" {
-				tenantID = r.URL.Query().Get("tenant_id")
-			}
-			if tenantID == "" {
-				tenantID = "default"
+			tenantID, err := identity.ResolveTenantID(r, cfg.AllowQueryUserID)
+			if err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+				return
 			}
 			endpoint := r.URL.Query().Get("endpoint")
 			if endpoint == "" {

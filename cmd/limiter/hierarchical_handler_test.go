@@ -120,3 +120,53 @@ func TestHierarchicalHandler_DefaultFallbacks(t *testing.T) {
 		t.Error("expected endpoint key 'rate:endpoint:default:default' to exist in Redis")
 	}
 }
+
+func TestHierarchicalHandler_QueryTenantIgnoredWhenDisallowed(t *testing.T) {
+	fixture, cleanup := newTestFixture(t, func(c *Config) {
+		c.EnableHierarchical = true
+		c.AllowQueryUserID = false
+		c.GlobalCapacity = 1000
+		c.TenantCapacity = 2
+		c.UserCapacity = 100
+		c.EndpointCapacity = 100
+	})
+	defer cleanup()
+
+	do := func(user, tenantHeader, rawQuery string) int {
+		u := fixture.mainURL + "/check_hierarchical?endpoint=/api/x"
+		if rawQuery != "" {
+			u += "&" + rawQuery
+		}
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-API-Key", fixture.cfg.InternalAPIKey)
+		req.Header.Set("X-User-ID", user)
+		if tenantHeader != "" {
+			req.Header.Set("X-Tenant-ID", tenantHeader)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := do("alice", "victim", ""); got != http.StatusOK {
+		t.Fatalf("seed 1: got %d", got)
+	}
+	if got := do("alice", "victim", ""); got != http.StatusOK {
+		t.Fatalf("seed 2: got %d", got)
+	}
+	if got := do("alice", "victim", ""); got != http.StatusTooManyRequests {
+		t.Fatalf("victim tenant should be exhausted, got %d", got)
+	}
+	if got := do("bob", "", "tenant_id=victim"); got != http.StatusOK {
+		t.Fatalf("?tenant_id= must be ignored when ALLOW_QUERY_USER_ID=false, got %d", got)
+	}
+	if got := do("carol", "bad tenant", ""); got != http.StatusBadRequest {
+		t.Fatalf("invalid tenant header must 400, got %d", got)
+	}
+}
