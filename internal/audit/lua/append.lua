@@ -1,9 +1,9 @@
 -- Atomically append an audit event with indexes and retention trim.
--- KEYS[1] audit:event:{id}
--- KEYS[2] audit:idx:ts
--- KEYS[3] audit:idx:tenant:{tenant}
--- KEYS[4] audit:idx:user:{user}
--- KEYS[5] audit:idx:req:{request_id}
+-- KEYS[1] audit:{audit}:event:{id}
+-- KEYS[2] audit:{audit}:idx:ts
+-- KEYS[3] audit:{audit}:idx:tenant:{tenant}
+-- KEYS[4] audit:{audit}:idx:user:{user}
+-- KEYS[5] audit:{audit}:idx:req:{request_id}
 -- ARGV[1..8] id, request_id, tenant_id, user_id, decision, reason, handler, remaining
 -- ARGV[9] timestamp_ms
 -- ARGV[10] retention_ms
@@ -43,26 +43,26 @@ if user_max_events > user_index_cap then
 end
 
 local function purge_event(eid)
-  local evkey = 'audit:event:' .. eid
+  local evkey = 'audit:{audit}:event:' .. eid
   local t = redis.call('HGET', evkey, 'tenant_id')
   local u = redis.call('HGET', evkey, 'user_id')
   local rid = redis.call('HGET', evkey, 'request_id')
   if t and t ~= '' then
-    local tkey = 'audit:idx:tenant:' .. t
+    local tkey = 'audit:{audit}:idx:tenant:' .. t
     redis.call('ZREM', tkey, eid)
     if redis.call('ZCARD', tkey) == 0 then
       redis.call('DEL', tkey)
     end
   end
   if u and u ~= '' then
-    local ukey = 'audit:idx:user:' .. u
+    local ukey = 'audit:{audit}:idx:user:' .. u
     redis.call('ZREM', ukey, eid)
     if redis.call('ZCARD', ukey) == 0 then
       redis.call('DEL', ukey)
     end
   end
   if rid and rid ~= '' then
-    redis.call('DEL', 'audit:idx:req:' .. rid)
+    redis.call('DEL', 'audit:{audit}:idx:req:' .. rid)
   end
   redis.call('DEL', evkey)
 end

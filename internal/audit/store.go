@@ -45,11 +45,24 @@ func NewStore(rdb redis.UniversalClient, cfg Config) *Store {
 	}
 }
 
-func eventKey(id string) string           { return fmt.Sprintf("audit:event:%s", id) }
-func tsIndexKey() string                  { return "audit:idx:ts" }
-func tenantIndexKey(tenant string) string { return fmt.Sprintf("audit:idx:tenant:%s", tenant) }
-func userIndexKey(user string) string     { return fmt.Sprintf("audit:idx:user:%s", user) }
-func requestIndexKey(req string) string   { return fmt.Sprintf("audit:idx:req:%s", req) }
+// All audit keys share the {audit} hash tag so a 5-key EVAL is Cluster-safe (N-01).
+const auditKeyPrefix = "audit:{audit}:"
+
+func eventKey(id string) string           { return auditKeyPrefix + "event:" + id }
+func tsIndexKey() string                  { return auditKeyPrefix + "idx:ts" }
+func tenantIndexKey(tenant string) string { return auditKeyPrefix + "idx:tenant:" + tenant }
+func userIndexKey(user string) string     { return auditKeyPrefix + "idx:user:" + user }
+func requestIndexKey(req string) string   { return auditKeyPrefix + "idx:req:" + req }
+
+func auditEvalKeys(id, tenant, user, requestID string) []string {
+	return []string{
+		eventKey(id),
+		tsIndexKey(),
+		tenantIndexKey(tenant),
+		userIndexKey(user),
+		requestIndexKey(requestID),
+	}
+}
 
 // Record appends one audit event (optionally via bounded worker pool).
 func (s *Store) Record(ctx context.Context, in RecordInput) (Event, error) {
@@ -90,13 +103,7 @@ func (s *Store) record(ctx context.Context, in RecordInput) (Event, error) {
 	}
 
 	result, err := s.script.Run(ctx, s.rdb,
-		[]string{
-			eventKey(id),
-			tsIndexKey(),
-			tenantIndexKey(tenant),
-			userIndexKey(in.UserID),
-			requestIndexKey(in.RequestID),
-		},
+		auditEvalKeys(id, tenant, in.UserID, in.RequestID),
 		id,
 		in.RequestID,
 		tenant,

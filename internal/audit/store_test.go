@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	redisclient "github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redis"
 	"github.com/RUDRA-PRATAP-SINGH01/Distributed-Rate-Limiter/internal/redistest"
 	"github.com/redis/go-redis/v9"
 )
@@ -260,5 +261,20 @@ func TestAuditIndex_PerUserCapDropsMembersWithoutEventHash(t *testing.T) {
 	}
 	if n > userCap {
 		t.Fatalf("expected user index capped at <= %d after dangling-hash purge, got %d", userCap, n)
+	}
+}
+
+func TestAuditEvalKeysShareClusterSlot(t *testing.T) {
+	keys := auditEvalKeys("evt-1", "tenant-a", "user-1", "req-1")
+	if len(keys) != 5 {
+		t.Fatalf("expected 5 EVAL keys, got %d", len(keys))
+	}
+	if !redisclient.SameClusterSlot(keys...) {
+		t.Fatalf("audit EVAL keys must share a hash tag, got %v", keys)
+	}
+	for _, k := range keys {
+		if redisclient.ClusterSlotTag(k) != "audit" {
+			t.Fatalf("key %q tag = %q, want audit", k, redisclient.ClusterSlotTag(k))
+		}
 	}
 }
