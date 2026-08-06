@@ -83,6 +83,28 @@ jobs:
       - name: Scan for known vulnerabilities
         run: govulncheck ./...
 
+  # Fast smoke of the critical HTTP path (httptest + miniredis). Live compose
+  # smoke/sanity stay local: scripts/qa.ps1 smoke|sanity. See docs/testing/.
+  process-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Process smoke (health + check + sidecar health)
+        run: |
+          go test -count=1 -timeout 60s ./cmd/limiter/ \
+            -run 'TestHealthEndpoint_Healthy$|TestCheckHandler_TokenBucket$'
+          go test -count=1 -timeout 60s ./cmd/sidecar/ \
+            -run 'TestSidecarHealth_LimiterAndRedisHealthy$'
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10

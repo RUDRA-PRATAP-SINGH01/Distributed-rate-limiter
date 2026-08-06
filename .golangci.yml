@@ -4,6 +4,8 @@ run:
   timeout: 5m
   build-tags:
     - chaos
+    - smoke
+    - sanity
 
 linters:
   # standard = errcheck, govet, ineffassign, staticcheck, unused.
