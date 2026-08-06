@@ -16,5 +16,5 @@ export const options = {
 };
 
 export default function () {
-  http.get(`${BASE}/?user_id=${USER}`, { tags: { name: 'singleflight' } });
+  http.get(`${BASE}/`, { headers: { 'X-User-ID': USER }, tags: { name: 'singleflight' } });
 }

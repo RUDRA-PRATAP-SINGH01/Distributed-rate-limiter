@@ -17,5 +17,5 @@ const users = ['alice','bob','charlie','dave','eve','frank','grace','heidi','iva
 
 export default function () {
     const userId = users[Math.floor(Math.random() * users.length)];
-    http.get(`http://localhost:9090/check?user_id=${userId}`);
+    http.get('http://localhost:9090/check', { headers: { 'X-User-ID': userId } });
 }

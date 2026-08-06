@@ -21,5 +21,5 @@ export const options = {
 export default function () {
   const base = __ITER % 2 === 0 ? A : B;
   const userId = `mr_${__VU % 10}`; // 10 shared users → quota contention
-  http.get(`${base}/?user_id=${userId}`, { tags: { name: 'multi_replica' } });
+  http.get(`${base}/`, { headers: { 'X-User-ID': userId }, tags: { name: 'multi_replica' } });
 }

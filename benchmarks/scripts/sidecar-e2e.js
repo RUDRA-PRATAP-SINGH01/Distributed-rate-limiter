@@ -33,7 +33,8 @@ export const options = {
 
 export function hit() {
   const userId = `sc_${__VU}_${__ITER}`;
-  http.get(`${BASE}/?user_id=${userId}`, {
+  http.get(`${BASE}/`, {
+    headers: { 'X-User-ID': userId },
     tags: { name: 'sidecar_e2e' },
   });
 }

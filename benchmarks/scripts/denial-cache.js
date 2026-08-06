@@ -26,11 +26,11 @@ export const options = {
 };
 
 export function prime() {
-  http.get(`${BASE}/?user_id=${USER}`, { tags: { phase: 'prime' } });
+  http.get(`${BASE}/`, { headers: { 'X-User-ID': USER }, tags: { phase: 'prime' } });
 }
 
 export function hammer() {
-  const res = http.get(`${BASE}/?user_id=${USER}`, { tags: { phase: 'hammer' } });
+  const res = http.get(`${BASE}/`, { headers: { 'X-User-ID': USER }, tags: { phase: 'hammer' } });
   check(res, {
     'denied or allowed': (r) => r.status === 200 || r.status === 429,
   });

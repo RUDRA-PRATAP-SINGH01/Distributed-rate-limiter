@@ -15,5 +15,5 @@ export const options = {
 
 export default function () {
     const userId = 'single_user';
-    http.get(`http://localhost:9090/check?user_id=${userId}`);
+    http.get('http://localhost:9090/check', { headers: { 'X-User-ID': userId } });
 }

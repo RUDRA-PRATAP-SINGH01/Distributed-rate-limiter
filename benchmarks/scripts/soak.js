@@ -19,5 +19,5 @@ export const options = {
 
 export default function () {
   const userId = `soak_${__VU}_${__ITER}`;
-  http.get(`${BASE}/?user_id=${userId}`, { tags: { name: 'soak' } });
+  http.get(`${BASE}/`, { headers: { 'X-User-ID': userId }, tags: { name: 'soak' } });
 }
