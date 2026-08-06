@@ -102,7 +102,7 @@ Quota enforcement is **Redis-authoritative** and **Lua-atomic**. Sidecar denial 
 | Failures | [failure-modes/](failure-modes/) |
 | Operations | [operations/](operations/) |
 | Security | [security/](security/) |
-| Testing | [testing/](testing/) |
+| Testing | [testing/test-strategy.md](testing/test-strategy.md) · [quality-management.md](testing/quality-management.md) · [blackbox-whitebox.md](testing/blackbox-whitebox.md) · [exploratory-charters.md](testing/exploratory-charters.md) |
 | Benchmarks | [benchmarks/](benchmarks/) |
 | CI | [ci/continuous-integration.md](ci/continuous-integration.md) |
 | Open audit findings (agent brief) | [audit/open-findings.md](audit/open-findings.md) — remaining: 6 Critical, 9 High, 0 Medium |

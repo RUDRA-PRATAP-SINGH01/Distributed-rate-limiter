@@ -68,7 +68,7 @@ Authoritative list of what this system **does not** guarantee.
 | Limitation | Detail | Evidence |
 |------------|--------|----------|
 | Dev secrets in Compose | `dev-key-change-in-prod` etc. | SOURCE-PROVEN |
-| `ALLOW_QUERY_USER_ID=true` in Compose | Convenient for dev; prod should trust headers only | SOURCE-PROVEN |
+| Query identity is off in Compose/Terraform | Set `ALLOW_QUERY_USER_ID=true` only for a local demo; default templates stay `false` (N-06) | SOURCE-PROVEN |
 | HA is opt-in | `docker-compose.ha.yml` profile `ha` — default is standalone Redis | SOURCE-PROVEN |
 
 ---

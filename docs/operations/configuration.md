@@ -109,6 +109,7 @@ Limiter always enables Redis circuit breaker at startup. Key vars: `CB_FAILURE_R
 |----------|---------|
 | `ENABLE_ROUTING` | `false` |
 | `GATEWAYS` | `id\|url\|weight,...` — required when routing on |
+| `ROUTING_ALLOW_PRIVATE` | `false` — set `true` only for Docker/lab RFC1918 gateway URLs (N-05) |
 | `ROUTING_TARGET_LATENCY_MS` | `100` |
 | `ROUTING_CIRCUIT_ERROR_RATE` | `0.5` |
 | `ROUTING_PROBE_INTERVAL_SEC` | `15` |

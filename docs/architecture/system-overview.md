@@ -204,5 +204,5 @@ Sidecar: all proxied paths on `/`; `/health` and `/metrics` are separate mux rou
 - Sidecar denial cache / singleflight **not cross-replica** — separate per sidecar instance (SOURCE + TEST).
 - Hierarchical Lua 4 keys — not Redis Cluster hash-tag safe without redesign (SOURCE-PROVEN).
 - Admin `:8082` binds `0.0.0.0` in dev — production requires network isolation.
-- Dev secrets and `ALLOW_QUERY_USER_ID=true` in default compose (SOURCE-PROVEN).
+- Dev secrets remain in default compose; `ALLOW_QUERY_USER_ID` is `false` in Compose and Terraform (N-06).
 - Benchmark numbers are **not** cited in this document — only in `docs/benchmarks/` and `docs/limitations.md` as BENCHMARK-PROVEN.

@@ -27,6 +27,7 @@ on:
 | `static-build` | `ubuntu-latest` | 10 min | checkout, setup-go, mod download/verify, vet, build |
 | `lint` | `ubuntu-latest` | 15 min | checkout, setup-go, `golangci-lint` v2 |
 | `vuln` | `ubuntu-latest` | 10 min | checkout, setup-go, `govulncheck ./...` |
+| `process-smoke` | `ubuntu-latest` | 5 min | health + `/check` + sidecar health `-run` subset |
 | `test` | `ubuntu-latest` | 10 min | checkout, setup-go, `go test -count=1 ./...` |
 | `race` | `ubuntu-latest` | 15 min | checkout, setup-go, `go test -count=1 -race ./...` |
 | `redis-integration` | `ubuntu-latest` | 15 min | checkout, setup-go, Redis service, all Lua-bearing packages |
@@ -64,6 +65,21 @@ reports a new standard-library advisory.
 4. `go build ./...`
 
 Ensures all packages (`cmd/limiter`, `cmd/sidecar`, `internal/...`) compile.
+
+---
+
+## process-smoke
+
+```bash
+go test -count=1 -timeout 60s ./cmd/limiter/ \
+  -run 'TestHealthEndpoint_Healthy$|TestCheckHandler_TokenBucket$'
+go test -count=1 -timeout 60s ./cmd/sidecar/ \
+  -run 'TestSidecarHealth_LimiterAndRedisHealthy$'
+```
+
+Fast critical-path smoke without Docker. Live compose smoke/sanity are not
+CI jobs — run `scripts/qa.ps1 smoke` / `sanity` after `docker compose up`.
+See [quality-management.md](../testing/quality-management.md).
 
 ---
 
@@ -179,6 +195,8 @@ Resilience contracts against a minimal compose stack. See `chaos/README.md`.
 
 | Check | Run locally / release |
 |-------|----------------------|
+| Live smoke / sanity | `.\scripts\qa.ps1 smoke` / `sanity` |
+| Exploratory sessions | `docs/testing/exploratory-charters.md` |
 | k6 benchmarks | `benchmarks/run-all.ps1` |
 | Manual chaos demos | `chaos/chaos_test.ps1`, `chaos/network_partition.py` |
 | Docker compose e2e | `docker compose up` |
@@ -188,5 +206,5 @@ Resilience contracts against a minimal compose stack. See `chaos/README.md`.
 
 ## Branch protection recommendation
 
-Require passing: `static-build`, `lint`, `vuln`, `test`, `race`,
+Require passing: `static-build`, `lint`, `vuln`, `process-smoke`, `test`, `race`,
 `redis-integration`, `chaos` before merge. Coverage artifact optional for review.

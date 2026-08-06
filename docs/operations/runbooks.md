@@ -137,12 +137,16 @@ I keep scenario runbooks in-repo, linked to chaos and benchmark scripts.
 
 ```powershell
 docker compose up --build -d
+.\scripts\qa.ps1 smoke
+.\scripts\qa.ps1 sanity
 .\benchmarks\run-all.ps1
 .\chaos\chaos_test.ps1
 k6 run benchmarks/idempotency/idempotency-race.js
 ```
 
-**Pass criteria:** summary.md sustainable row, chaos 503 to recovery, idempotency count=1
+Timebox one exploratory charter from `docs/testing/exploratory-charters.md` (ET-1 or ET-3).
+
+**Pass criteria:** live smoke + sanity green, summary.md sustainable row, chaos 503 to recovery, idempotency count=1
 
 ## Tradeoffs
 

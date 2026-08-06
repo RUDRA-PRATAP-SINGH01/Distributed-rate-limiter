@@ -2,11 +2,11 @@
 
 **Audience:** a subsequent AI agent (or engineer) that must fix these without rediscovering the audit.
 
-**Source of truth for status:** this file for *open* work. The live visual register is a Cursor canvas (`production-readiness-audit.canvas.tsx` in the workspace `canvases/` directory, not committed). IDs (`C-01`, `H-08`, …) are stable across both.
+**Source of truth for status:** this file for *open* work. The live visual register is a Cursor canvas (`production-readiness-audit.canvas.tsx` in the workspace `canvases/` directory, not committed). IDs (`C-01`, `H-08`, `N-01`, …) are stable across both.
 
 **Date of this dump:** 2026-08-19. Line numbers match the working tree at that date. Re-read the cited files before editing; do not trust a line number if the surrounding code no longer matches the snippet described here.
 
-**Verdict of the audit:** do not ship to other teams as a production dependency until the six Critical items (`C-01`–`C-06`) are closed. High items are the next wave. Medium items are real defects, not nits.
+**Verdict of the audit:** do not ship to other teams as a production dependency until the six Critical items (`C-01`–`C-06`) are closed. `N-01`–`N-07` are closed. `N-08`–`N-17` remain open Medium items. Previously closed High/Medium items must not be re-implemented.
 
 ---
 
@@ -50,7 +50,13 @@ Two binaries share Redis: `cmd/limiter` (HTTP `/check` and `/check_hierarchical`
 | H-09 | Admin API defaults to loopback `127.0.0.1`, optional `ListenAndServeTLS`, Compose maps `ADMIN_HOST=0.0.0.0`, Terraform binds loopback and does not open SG :8082 | `cmd/limiter/config.go`, `cmd/limiter/admin_api.go`, `docker-compose*.yml`, `deploy/terraform/` |
 | H-10 | Routing request body bounded with `http.MaxBytesReader` (default 1MB); returns 413 on overflow without forwarding empty body; idempotent routing reuses buffered body | `cmd/sidecar/main.go` |
 | H-11 | Malformed JSON on 200 OK from limiter sets `callErr = err` and records telemetry error, properly tripping central limiter circuit breaker | `cmd/sidecar/main.go`, `cmd/sidecar/circuit_breaker_test.go` |
-| H-12 | Singleflight callback decouples from leader's context cancellation via `context.WithoutCancel(ctx)` with 1.5s timeout budget to prevent cascading 503s on client disconnects | `cmd/sidecar/main.go`, `cmd/sidecar/sidecar_test.go` |
+| N-01 | Audit 5-key EVAL hash-tagged `audit:{audit}:…`; Lua purge uses the same prefix; `TestAuditEvalKeysShareClusterSlot` | `internal/audit/store.go`, `lua/append.lua`, `store_test.go` |
+| N-02 | Idempotency meta+body keys `idem:{scope}:meta:` / `idem:{scope}:body:`; `SanitizeHashTag`; slot test | `internal/idempotency/store.go`, Lua comments, `persist_test.go` |
+| N-03 | `skipRecord` when `Allow` rejects; half-open excess cannot Record success | `cmd/sidecar/main.go`, `circuit_breaker_test.go` |
+| N-04 | `PersistAsComplete`: 5xx/0/408/425 → Fail+LockTTL; 429 stays Complete | `internal/idempotency/persist.go`, sidecar `forwardIdempotent` |
+| N-05 | Gateway URL guard + guarded dial/redirect; IMDS always blocked; `ROUTING_ALLOW_PRIVATE` for Compose | `internal/routing/urlguard.go`, compose GATEWAYS |
+| N-06 | Terraform/Compose `ALLOW_QUERY_USER_ID=false`; template regression test; demo traffic uses `X-User-ID` | `ecs.tf`, `docker-compose*.yml`, `internal/identity/prod_templates_test.go` |
+| N-07 | `ResolveTenantID` gated by `ALLOW_QUERY_USER_ID`; charset/length; limiter + sidecar wired | `internal/identity/user.go`, hierarchical handler, sidecar `tenantID` |
 
 Toolchain pin `go 1.25.0` + `toolchain go1.26.6` in `go.mod` is load-bearing for the vuln job (stdlib CVEs). Bump the toolchain when `govulncheck` reports a new stdlib advisory. Do not drop it.
 
@@ -58,7 +64,7 @@ Toolchain pin `go 1.25.0` + `toolchain go1.26.6` in `go.mod` is load-bearing for
 
 ## Open findings
 
-Counts: **6 Critical, 0 High, 0 Medium** still open. Two correction rows (`X-01`, `X-02`) are not defects. (All High findings H-01 through H-12 are fully resolved).
+Counts: **6 Critical, 0 High, 10 Medium** still open. `N-01`–`N-07` are closed. H-01–H-12 and M-01–M-08 remain closed (no regression). Remaining new IDs are `N-08`–`N-17`. Two correction rows (`X-01`, `X-02`) are not defects.
 
 ---
 
@@ -287,6 +293,315 @@ Payments, POSTs, anything with `Idempotency-Key`: client got 200, retry with the
 **Related:** `H-05` (what gets persisted). `docs/limitations.md` “Not exactly-once” stays true for process crash; this finding is about **not even attempting** Complete.
 
 ---
+
+## New from re-audit (2026-08-19)
+
+These IDs were not in the original C/H/M register. **`N-01`–`N-07` are closed** (see [Already fixed](#already-fixed--do-not-redo)). **`N-08`–`N-17` are still open** — full briefs below. Do not confuse them with the historical H-02+ writeups after this section, which stay as closed-issue context.
+
+| ID | Sev | Status | Title |
+|----|-----|--------|--------|
+| N-01 | High | **Fixed** | Audit 5-key EVAL hash-tagged `{audit}` |
+| N-02 | High | **Fixed** | Idempotency meta+body EVAL hash-tagged `{scope}` |
+| N-03 | High | **Fixed** | Sidecar does not Record on local Allow reject |
+| N-04 | High | **Fixed** | Complete only authoritative &lt;500 (not 408/425); 5xx Fail+LockTTL |
+| N-05 | High | **Fixed** | Gateway URL SSRF guard + guarded dial/redirect |
+| N-06 | High | **Fixed** | Terraform/Compose `ALLOW_QUERY_USER_ID=false` + template test |
+| N-07 | High | **Fixed** | `ResolveTenantID` query-gated + charset/length (header still spoofable: C-01) |
+| N-08 | Medium | Open | `/metrics` unauthenticated unless `METRICS_REQUIRE_AUTH=true` |
+| N-09 | Medium | Open | `METRICS_REQUIRE_AUTH=true` + empty key still opens metrics (`RequireAPIKey` empty bypass) |
+| N-10 | Medium | Open | Public `/health` returns Redis `mode` / `master_addr` |
+| N-11 | Medium | Open | Terraform plaintext env secrets + `allowed_cidr=0.0.0.0/0` |
+| N-12 | Medium | Open | Default reverse-proxy path has no `MaxBytesReader` (H-10 only covered routing/idempotent) |
+| N-13 | Medium | Open | Idempotent Fail/Complete still use `r.Context()` (H-12 only detached `serveNormal`) |
+| N-14 | Medium | Open | Audit tenant ZSET has no ZCARD cap (user index capped at 1000) |
+| N-15 | Medium | Open | User/endpoint strings unsanitized before Redis keys (tenant charset landed in N-07) |
+| N-16 | Medium | Open | Hierarchical `Retry-After` is `1/min(refill)` not a measured wait |
+| N-17 | Medium | Open | CI `redis-integration` skips `cmd/limiter` and `cmd/sidecar` |
+
+Live visual: `production-readiness-reaudit.canvas.tsx` in the workspace `canvases/` directory.
+
+---
+
+### N-08 — `/metrics` is unauthenticated by default (Medium, Security)
+
+**Files:** `cmd/limiter/config.go` `MetricsRequireAuth` default `"false"` (~88); `cmd/limiter/main.go` ~140–148; `cmd/sidecar/main.go` ~780–785, ~887.
+
+**What the code does today**
+
+```go
+metricsKey := ""
+if cfg.MetricsRequireAuth {
+    metricsKey = cfg.MetricsAuthKey()
+}
+mux.Handle("/metrics", auth.RequireAPIKey(metricsKey, promhttp.Handler().ServeHTTP))
+```
+
+Comment in `main.go`: “Metrics stay open by default so Prometheus can scrape without bearer tokens.” Sidecar copies the same pattern: `METRICS_REQUIRE_AUTH` must be the string `"true"` or `metricsKey` stays `""` and `RequireAPIKey` is a no-op (`N-09`).
+
+**Why it breaks production**
+
+Prometheus text is reconnaissance: request rates by handler, Redis errors, circuit-breaker state, audit drops. Compose publishes limiter `:8080` and sidecar `:9090`. Terraform `allowed_cidr` defaults to `0.0.0.0/0` (`N-11`), so a “production” ECS task can expose scrape to the internet.
+
+**Constraints for a real fix**
+
+- Default `METRICS_REQUIRE_AUTH=true` for Terraform and any profile that is not explicitly local-dev. Keep Compose scrape working by giving Prometheus the same key (or bind metrics to loopback / an internal network).
+- Do not “document that scrape must be on a private net” and leave the default open.
+- Tests: with the production-shaped default, `/metrics` without a key is 401; with the key it is 200. Chaos/Grafana jobs must send the header if you flip the default.
+- Fix together with `N-09` (empty-key bypass) or operators will set `METRICS_REQUIRE_AUTH=true` and still be open.
+
+**Related:** `C-02` (same `RequireAPIKey` empty bypass), `N-09`, `N-11`.
+
+---
+
+### N-09 — `METRICS_REQUIRE_AUTH=true` with empty key still opens `/metrics` (Medium, Security)
+
+**Files:** `cmd/limiter/main.go` ~140–148; `cmd/limiter/config.go` `MetricsAuthKey()` ~59–64; `internal/auth/middleware.go` `RequireAPIKey` ~31–34; `cmd/sidecar/main.go` `sidecarMetricsAuthKey` ~737–785.
+
+**What the code does today**
+
+```go
+func RequireAPIKey(expectedKey string, next http.HandlerFunc) http.HandlerFunc {
+    if expectedKey == "" {
+        return next // bypass
+    }
+```
+
+`MetricsAuthKey()` returns `METRICS_API_KEY` if set, else `INTERNAL_API_KEY`. If the operator sets `METRICS_REQUIRE_AUTH=true` but both keys are empty (limiter default `INTERNAL_API_KEY=""` — `C-02`), `metricsKey` is `""` and the wrapper disappears. Sidecar: `metricsAPIKey := sidecarMetricsAuthKey(internalKey, METRICS_API_KEY)` then the same `if metricsRequireAuth { metricsKey = metricsAPIKey }`.
+
+**Why it breaks production**
+
+The flag looks like a lock. Misconfig (empty internal key, “I’ll add Prometheus auth later”) leaves scrape world-readable. This is C-02 applied to `/metrics`.
+
+**Constraints for a real fix**
+
+- If `MetricsRequireAuth` is true and the resolved key is empty → `Fatal` at startup (limiter and sidecar).
+- Prefer splitting `RequireAPIKey` (never empty) vs `OptionalAPIKey` (metrics when auth is off). Do not keep the empty bypass on enforcement paths (`C-02`).
+- Tests: `METRICS_REQUIRE_AUTH=true` + empty keys must not boot (or must 401 every scrape — fail-closed is better). Current helpers set a real `MetricsAPIKey` and will not catch this.
+
+**Related:** `C-02`, `N-08`. Same middleware; one pass.
+
+---
+
+### N-10 — public `/health` leaks Redis topology (Medium, Security)
+
+**Files:** `cmd/limiter/main.go` `/health` ~150–167; `internal/redis/health.go` `Health` (`mode`, `role`, `replication`, `master_addr`); sidecar `evaluateSidecarHealth` ~31–57 embeds the same `Health` when Redis is configured. Sidecar also **GETs** limiter `/health` (`cmd/sidecar/health.go` ~64) but only uses the status code for its own limiter check; the limiter’s JSON is still public to anyone who hits `:8080/health`.
+
+**What the code does today**
+
+```go
+json.NewEncoder(w).Encode(map[string]interface{}{
+    "status": "healthy",
+    "redis":  h, // Mode, Role, Replication, MasterAddr
+})
+```
+
+Unauthenticated. `cmd/limiter/route_security_test.go` asserts public `/health` is 200. Terraform README tells operators to `curl :8080/health` and expect `{"status":"healthy","redis":{...}}`.
+
+**Why it breaks production**
+
+`master_addr`, Sentinel role, and replication summary are recon for targeting the Redis control plane. Combined with `N-11` (open CIDR) this is internet-visible topology.
+
+**Constraints for a real fix**
+
+- Public body is `{"status":"healthy"}` / `{"status":"unhealthy"}` only (HTTP 200 vs 503 can stay).
+- Put `mode` / `master_addr` / replication behind admin auth (or a separate `/health/detail`).
+- Sidecar public `/health` must not echo limiter Redis fields; keep limiter probe internal.
+- Update Terraform README and health tests that assert the fat JSON. Load-balancer health checks must keep working on status-only.
+
+**Related:** `N-11`, `H-09` (admin surface already exists for privileged ops).
+
+---
+
+### N-11 — Terraform plaintext env secrets + `allowed_cidr=0.0.0.0/0` (Medium, Security)
+
+**Files:** `deploy/terraform/variables.tf` ~19–43; `deploy/terraform/ecs.tf` task `environment` block (`REDIS_PASSWORD`, `ADMIN_API_KEY`, `INTERNAL_API_KEY` as `value = var.*`); `deploy/terraform/network.tf` SG ingress `cidr_blocks = [var.allowed_cidr]`; `terraform.tfvars.example` sets `allowed_cidr = "0.0.0.0/0"`.
+
+**What the code does today**
+
+Secrets have **defaults** (`change-me-redis-password`, `change-me-internal-key`, `change-me-admin-key`) and are injected as plaintext container environment. They appear in the ECS task definition (console, APIs, anyone with `ecs:DescribeTaskDefinition`). Security group default allows the world to `:8080` (and the task still maps host 8082 even though `ADMIN_HOST=127.0.0.1` — `H-09`).
+
+`ALLOW_QUERY_USER_ID=false` already landed (`N-06`). This finding is secrets + network, not query identity.
+
+**Why it breaks production**
+
+Copy-paste “free-tier AWS” is an internet-facing limiter with guessable keys in the task def. `/check` + `C-01`/`C-02`/`C-05` become remote.
+
+**Constraints for a real fix**
+
+- No secret defaults. `redis_password` / `internal_api_key` / `admin_api_key` are `nullable = false` with no default (required tfvars).
+- ECS `secrets { valueFrom = aws_ssm_parameter... }` (or Secrets Manager), not `environment`.
+- Default `allowed_cidr` must not be `0.0.0.0/0`. Example file should show `x.x.x.x/32` first; `0.0.0.0/0` if kept must be an explicit, warned override.
+- Tests: none today (Terraform is not in CI). At least document in `deploy/terraform/README.md` and fail `terraform validate` if you add a check/precondition. Do not put real secrets in git.
+
+**Related:** `C-02`, `C-03`, `N-08`, `N-10`. `H-09` already bound admin to loopback.
+
+---
+
+### N-12 — default reverse-proxy path has no `MaxBytesReader` (Medium, Resilience)
+
+**Files:** `cmd/sidecar/main.go` `forwardRequest` ~666–703. Routing branch uses `readRequestBody` + `http.MaxBytesReader` (`H-10`). Idempotent path uses `idempotency.ReadBody` with `MaxBodyBytes`. The **default** path is:
+
+```go
+target, _ := url.Parse(s.upstreamURL)
+r.Host = target.Host
+s.proxy.ServeHTTP(w, r) // httputil.ReverseProxy streams r.Body unbounded
+```
+
+Compose `ENABLE_ROUTING=true` hides this on the demo stack. Any deploy with `ENABLE_ROUTING=false` (or routing init failure falling back — there is no fallback; routing is all-or-nothing) hits this. Unit tests that do not `SetRouter` exercise this path (`cmd/sidecar/sidecar_test.go`).
+
+**Why it breaks production**
+
+Public sidecar + slow/malicious client POST → sidecar buffers or streams unbounded body while waiting on upstream. H-10 only closed the intelligent-routing and idempotent readers.
+
+**Constraints for a real fix**
+
+- Wrap `r.Body` with `http.MaxBytesReader` (same cap as `idempotency.MaxBodyBytes`, default 1MB) **before** `proxy.ServeHTTP` on mutating methods. Return 413 on overflow without forwarding.
+- GET/HEAD can stay uncapped if you want; POST/PUT/PATCH must not.
+- Tests: large POST on the non-router fixture is 413 and `upstreamHandler.callCount` stays 0. Do not weaken H-10 routing tests.
+
+**Related:** `H-10` (routing). Same cap constant; do not invent a second limit.
+
+---
+
+### N-13 — idempotent Fail/Complete still use `r.Context()` (Medium, Correctness)
+
+**Files:** `cmd/sidecar/main.go` `serveIdempotent` / `forwardIdempotent`. `serveNormal` limiter flight uses `context.WithoutCancel` + timeout (`H-12`, ~480). Idempotent path still:
+
+```go
+result, err := s.checkRateLimit(ctx, r, userID, false) // ctx is r.Context()
+...
+_ = s.failIdempotent(r.Context(), ...)
+captured := capturer.Commit()
+_ = s.completeIdempotent(r.Context(), ...) // N-04 branches Complete vs Fail; still this ctx
+```
+
+**What the code does today**
+
+`Commit()` already wrote the body. If the client disconnects, `r.Context()` is done. Redis `Complete`/`Fail` then fails or is skipped. Combined with `_ =` (`C-06`), the key stays `processing` until `LockTTL`, then another owner reclaims and hits upstream again.
+
+Limiter `/check` on the idempotent path also dies with the client, so a disconnect mid-check can 503 a mutation that should have waited for Redis.
+
+**Why it breaks production**
+
+Same double-execute as `C-06`, triggered by a cancelled request ctx rather than a Redis error. Payments/POSTs with `Idempotency-Key`.
+
+**Constraints for a real fix**
+
+- `Fail` / `Complete` after the client has an answer: `context.WithoutCancel` + a short timeout budget (Redis client already times out). Keep the fence token.
+- Idempotent `checkRateLimit` should use the same detached budget as `serveNormal` (`H-12`), not the leader/client ctx.
+- Tests: cancel the request context after `Commit` (or inject a cancelled ctx into `completeIdempotent`) and assert Redis still reaches `completed`/`failed`. Do not only test the happy path.
+- Do **not** treat this as closing `C-06`: swallowed errors still need retry + metric.
+
+**Related:** `C-06`, `H-12`, `N-04`.
+
+---
+
+### N-14 — audit tenant ZSET has no ZCARD cap (Medium, Distributed)
+
+**Files:** `internal/audit/lua/append.lua`. User index: `user_index_cap = 1000` and a trim loop (~114–126). Tenant index: `ZADD` + `EXPIRE` only (~84, 92). Global `max_events` trims `idx:ts` (~104–110), which **does** `purge_event` (and thus `ZREM` tenant members for those event IDs), but a **single tenant** can still hold up to `max_events` (default 100_000) members, and **many tenants** each get their own ZSET until TTL.
+
+**What the code does today after N-07:** `ResolveTenantID` rejects oversized/illegal charset, so `{`/` ` injection is gone. Header `X-Tenant-ID` is still client-set (`C-01`). Rotating valid slugs (`t1`, `t2`, …) still creates `audit:{audit}:idx:tenant:{id}` per tenant for `AUDIT_RETENTION_HOURS` (default 168h).
+
+**Why it breaks production**
+
+High-cardinality tenants → Redis memory ≈ distinct_tenants × index overhead until expire. M-06 closed the **user** index bomb; tenant is the remaining axis.
+
+**Constraints for a real fix**
+
+- Mirror the user cap: `tenant_index_cap` (1000 or `max_events` clamped) with the same ZREM/purge loop so ZCARD cannot grow without bound **per tenant**.
+- Do not rely on N-07 charset alone.
+- Tests: seed &gt; cap members on one tenant index (same pattern as `TestRecord...dangling` user cap in `store_test.go`); after `record`, `ZCARD(tenantIndexKey)` ≤ cap.
+
+**Related:** `M-06` (user cap — copy the loop, don’t rewrite TTL), `C-01`/`N-07` (who can mint tenant IDs).
+
+---
+
+### N-15 — user/endpoint strings become Redis keys unsanitized (Medium, Resilience)
+
+**Files:** `internal/identity/user.go` `ResolveUserID` (no `ValidateID`); `cmd/limiter/main.go` hierarchical `userKey` / `endpointKey` ~320–322 (`endpoint := r.URL.Query().Get("endpoint")`); audit `RecordInput.UserID`; sidecar cache key `userID` + path.
+
+**What the code does today after N-07:** tenants go through `ValidateID` (max 128, letters/digits/`-_. :`). **Users do not.** Endpoint is a raw query string (paths can be long, include `..`, spaces, Unicode). Those strings are interpolated into `rate:user:%s`, `rate:endpoint:%s:%s`, `audit:{audit}:idx:user:%s`.
+
+**Why it breaks production**
+
+- C-01 already allows rotating `X-User-ID` → unbounded `rate:user:*` hashes (TTL helps but cardinality during the window is the attack).
+- Oversized / weird keys: Redis memory, slow CLUSTER slot calc, log injection, hash-tag braces in user IDs (`SanitizeHashTag` is only on idempotency scope today).
+- Endpoint query is another unbounded dimension even with a valid tenant.
+
+**Constraints for a real fix**
+
+- Call `ValidateID` (or a slightly wider alphabet if you must allow emails — then cap length hard) in `ResolveUserID`. Fail-closed 400.
+- Cap and normalize `endpoint` the same way as sidecar `normalizeHTTPPath` (and reject `..`).
+- Tests: 129-char user ID → 400; `{inject}` user ID → 400; huge `endpoint` → 400. Existing IDs like `alice-hier` must still pass.
+- This does **not** close C-01: a valid 16-char random ID still mints a fresh bucket.
+
+**Related:** `C-01`, `N-07`, `N-14`.
+
+---
+
+### N-16 — hierarchical `Retry-After` is a config estimate, not the blocking wait (Medium, Correctness)
+
+**Files:** `cmd/limiter/main.go` denial path ~364 `retryAfterForHierarchical(cfg)`; `cmd/limiter/ratelimit_http.go` ~41–58; `internal/limiter/lua/hierarchical.lua` returns `{allowed, remaining}` only (~96). Flat token/sliding paths use measured `retry_after` (`M-04`, `retryAfterHeader`).
+
+**What the code does today**
+
+```go
+func retryAfterForHierarchical(cfg Config) string {
+    minRate := min(Endpoint, User, Tenant, Global refill)
+    seconds := ceil(1.0 / minRate)
+}
+```
+
+That is “time to refill one token at the slowest **configured** rate”, not “when the bucket that actually blocked this request will allow again” (overrides, remaining=0 on tenant vs endpoint, Lua TIME).
+
+**Why it breaks production**
+
+Clients retry too soon (thundering herd) or wait too long (under-utilization). Hierarchical is the advertised multi-tenant path; Retry-After is part of the HTTP contract.
+
+**Constraints for a real fix**
+
+- Return the blocking level’s wait from Lua (or `max` of per-level waits computed from remaining + refill + Redis TIME). Same units as sliding-window `retry_after_ms`.
+- HTTP layer: `retryAfterHeader(cfg, measured)` like the flat path. Do not leave a second formula in `test_helpers_test.go`.
+- Tests: exhaust endpoint capacity with a fast endpoint refill and a slow tenant refill — `Retry-After` must match the bucket that denied, not blindly `1/min(all rates)`.
+- Do not change Lua allow/deny semantics; only the hint.
+
+**Related:** `M-04` (the pattern to copy).
+
+---
+
+### N-17 — CI `redis-integration` skips `cmd/limiter` and `cmd/sidecar` (Medium, Testing)
+
+**Files:** `.github/workflows/ci.yml` job `redis-integration` ~121–158.
+
+**What the code does today**
+
+```yaml
+go test -count=1 -p 1 -v \
+  ./internal/limiter/... \
+  ./internal/circuitbreaker/... \
+  ./internal/idempotency/... \
+  ./internal/audit/... \
+  ./internal/routing/...
+```
+
+`REDIS_TEST_ADDR` is set. `cmd/limiter` and `cmd/sidecar` are **not** in the list. Those packages still run in the default `go test ./...` job against **miniredis**. C-05 (`idempotent_replay`), hierarchical HTTP, sidecar CB/idempotency wiring never hit real Redis in CI.
+
+**Why it breaks production**
+
+M-07 exists because gopher-lua ≠ Redis Lua. Handler bugs (replay bypass, header identity, N-04 persist branch) can pass unit tests and fail only on a real server — or never fail CI at all.
+
+**Constraints for a real fix**
+
+- Add `./cmd/limiter` and `./cmd/sidecar` to the redis-integration command **or** a follow-on step with the same `REDIS_TEST_ADDR` and `-p 1`.
+- Tests that need miniredis-only features (`Close` mid-request) should skip when `REDIS_TEST_ADDR` is set (pattern already used in store tests).
+- Do not drop the internal Lua packages from the job.
+- Keep runtime reasonable; `-p 1` + flush-on-setup is load-bearing.
+
+**Related:** `M-07`, `C-05`. Closing N-17 does not close C-05; it makes C-05 harder to miss.
+
+---
+
+The H-02–H-12 sections below are **closed-issue context** (already in [Already fixed](#already-fixed--do-not-redo)). Do not re-implement them.
 
 ### H-02 — denial cache `sync.Map` unbounded vs 10s sweeper (High, Resilience)
 
@@ -546,15 +861,14 @@ Work in **passes that share files**, not strictly by ID.
 
 | Pass | IDs | Why together |
 |------|-----|----------------|
-| **P0 identity + auth** | C-01, C-02, C-03, H-09 | Same trust boundary. Empty key, default admin key, spoofable user, admin TLS/bind. Compare is M-05. |
+| **P0 identity + auth** | C-01, C-02, C-03 | Same trust boundary. Empty key, default admin key, spoofable `X-User-ID` (N-06/N-07 query gates landed; header spoof remains C-01). H-09 bind/TLS already landed. |
 | **P0 limiter API** | C-05 | Delete `idempotent_replay` while touching `cmd/limiter/main.go`. |
-| **P1 sidecar admission** | C-04, H-12, H-02, H-11 | One `checkRateLimit` / `serveNormal` rewrite: per-request consume, detached ctx, denial-only cache, decode `callErr`. |
-| **P1 idempotency** | C-06, H-05 | Complete/Fail policy + error handling. |
-| **P1 proxy hygiene** | H-06, H-10 | Allowlist + body limits. |
-| **P2 Redis topology** | H-07 | CB key TTLs. |
-| **P2 CB recovery** | H-08 | Half-open grace in Lua **and** LocalStore. |
+| **P1 sidecar admission** | C-04, N-12 | Per-request consume; body cap on the default proxy. N-03 Record-on-reject closed. H-02/H-11/H-12 already landed. |
+| **P1 idempotency** | C-06, N-13 | Complete/Fail retry + detached ctx. N-02 hash tags and N-04 5xx Fail landed. H-05 LockTTL Fail already landed. |
+| **P2 routing / deploy** | N-11 | Terraform secrets/CIDR. N-05 gateway URL guard landed. |
+| **P3 hygiene** | N-08–N-10, N-14–N-17 | Metrics/health, tenant index cap, remaining ID sanitization, hierarchical Retry-After, CI `cmd/` matrix. |
 
-Do not start with remaining High items while C-01–C-06 are open. A Cluster refuse on hierarchical is not a ship gate.
+Do not start with remaining Medium items while C-01–C-06 are open. N-07 did **not** close C-01: `X-Tenant-ID` / `X-User-ID` headers are still client-set.
 
 ---
 
@@ -570,9 +884,12 @@ Do not start with remaining High items while C-01–C-06 are open. A Cluster ref
 | Hierarchical keys | `cmd/limiter/main.go`, `internal/limiter/lua/hierarchical.lua` |
 | Circuit breaker | `lua/allow.lua`, `lua/record.lua`, `local_store.go`, tests |
 | Override | `internal/override/override.go` |
-| Audit | `internal/audit/lua/append.lua` |
+| Audit | `internal/audit/lua/append.lua` (N-14 tenant ZCARD still open) |
 | Token bucket clock | `lua/token_bucket.lua`, `redis_atomic_token_bucket.go` |
-| Routing body | `cmd/sidecar/main.go` `readRequestBody` |
+| Routing / default proxy body | `cmd/sidecar/main.go` `forwardRequest` (N-12 non-router path) |
+| Metrics / health | `cmd/limiter/main.go`, `internal/auth/middleware.go`, `internal/redis/health.go` |
+| Terraform | `deploy/terraform/variables.tf`, `ecs.tf`, `network.tf` |
+| CI | `.github/workflows/ci.yml` `redis-integration` |
 
 ---
 

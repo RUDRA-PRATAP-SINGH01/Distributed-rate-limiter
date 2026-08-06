@@ -1491,7 +1491,10 @@ Every design decision in this project has a cost. Here is an honest accounting.
 │   ├── redis/               Redis client (standalone + Sentinel)
 │   └── telemetry/           OpenTelemetry → Jaeger (OTLP)
 │
-├── scripts/                 start.ps1 / start.sh, benchmark helpers, demos
+├── scripts/                 start.ps1 / start.sh, qa.ps1 / qa.sh, demos
+├── tests/qa/                Shared black-box HTTP client
+├── tests/smoke/             Live-stack smoke (`go test -tags=smoke`)
+├── tests/sanity/            Live-stack sanity (`go test -tags=sanity`)
 ├── tests/legacy/            Race condition demo
 │
 ├── docker-compose.yml       Default stack
@@ -1621,6 +1624,16 @@ Note: Add the --full option to execute the full multi-hour system saturation swe
 
 ## Running Tests
 
+The test automation entry point is `scripts/qa.ps1` / `scripts/qa.sh`. Quality gates, smoke vs sanity, and black-box / white-box mapping live in [docs/testing/](docs/testing/test-strategy.md).
+
+```powershell
+.\scripts\qa.ps1 quality-gate     # local merge bar: vet + process-smoke + unit
+.\scripts\qa.ps1 process-smoke    # critical handlers, no Docker
+.\scripts\qa.ps1 smoke            # live stack is-up (needs docker compose)
+.\scripts\qa.ps1 sanity -Changed  # happy path + packages you touched
+.\scripts\qa.ps1 exploratory      # print session charters
+```
+
 ### Unit Tests
 
 ```bash
@@ -1642,6 +1655,7 @@ go test -race ./...
 | `static-build` | `go mod verify`, `go vet ./...`, `go build ./...` | Compiles every binary |
 | `lint` | `golangci-lint run ./...` | Config and per-linter rationale in `.golangci.yml` |
 | `vuln` | `govulncheck ./...` | Fails on CVEs reachable from our call graph, stdlib included |
+| `process-smoke` | `-run` health + `/check` + sidecar health | Fast critical-path smoke |
 | `test` | `go test -count=1 ./...` | Full unit test suite |
 | `race` | `go test -count=1 -race ./...` | Race detector |
 | `redis-integration` | `go test -count=1 -p 1 -v` on every Lua-bearing package | Service container `redis:7-alpine`, `REDIS_TEST_ADDR=127.0.0.1:6379` |
